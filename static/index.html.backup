@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multilingual Scientific Q&A</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #2a2c9c;
+            --primary-dark: #4f46e5;
+            --secondary: #8b5cf6;
+            --success: #10b981;
+            --background: #0f172a;
+            --surface: #1e293b;
+            --surface-light: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--background);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem 0;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        .main-card {
+            background: var(--surface);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            margin-bottom: 2rem;
+        }
+
+        .input-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 1rem;
+            background: var(--background);
+            border: 2px solid var(--border);
+            border-radius: 0.5rem;
+            color: var(--text);
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 100px;
+            transition: all 0.3s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select {
+            padding: 0.75rem 1rem;
+            background: var(--background);
+            border: 2px solid var(--border);
+            border-radius: 0.5rem;
+            color: var(--text);
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        button {
+            padding: 0.75rem 2rem;
+            background: var(--gradient);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            margin: 0 auto 1rem;
+            border: 4px solid var(--surface-light);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .result {
+            display: none;
+            background: var(--surface);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .result.active {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .language-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: var(--primary);
+            border-radius: 2rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .answer {
+            font-size: 1.1rem;
+            line-height: 1.8;
+            margin-bottom: 2rem;
+            color: var(--text);
+        }
+
+        .citations {
+            background: var(--background);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+        }
+
+        .citations h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            color: var(--text-muted);
+        }
+
+        .citation {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--surface-light);
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .citation-number {
+            font-weight: 700;
+            color: var(--primary);
+            margin-right: 0.5rem;
+        }
+
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 2px solid var(--border);
+        }
+
+        .stat {
+            flex: 1;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .error {
+            display: none;
+            background: #dc2626;
+            color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .error.active {
+            display: block;
+            animation: shake 0.5s;
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            25% {
+                transform: translateX(-10px);
+            }
+
+            75% {
+                transform: translateX(10px);
+            }
+        }
+
+        .examples {
+            margin-top: 3rem;
+        }
+
+        .examples h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .example-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+
+        .example-card {
+            background: var(--surface);
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+
+        .example-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+
+        .example-lang {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .example-text {
+            font-size: 1rem;
+            color: var(--text);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 4rem;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            button,
+            select {
+                width: 100%;
+            }
+
+            .stats {
+                flex-direction: column;
+                gap: 1rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🌐 Multilingual Scientific Q&A</h1>
+            <p class="subtitle">Ask questions in any language. Get researched answers with citations.</p>
+        </header>
+
+        <div class="main-card">
+            <div class="error" id="error"></div>
+
+            <div class="input-group">
+                <label for="question">Your Question</label>
+                <textarea id="question"
+                    placeholder="मधुमेह का इलाज क्या है? | What is the treatment for diabetes? | நீரிழிவு நோய்க்கான சிகிச்சை என்ன?"></textarea>
+            </div>
+
+            <div class="controls">
+                <select id="strategy">
+            </div>
+
+            <script>
+                const API_URL = window.location.origin;
+
+                function setExample(text) {
+                    document.getElementById('question').value = text;
+                    document.getElementById('question').focus();
+                }
+
+                async function askQuestion() {
+                    const question = document.getElementById('question').value.trim();
+                    const strategy = document.getElementById('strategy').value;
+
+                    if (!question) {
+                        showError('Please enter a question');
+                        return;
+                    }
+
+                    // Hide previous results and errors
+                    document.getElementById('error').classList.remove('active');
+                    document.getElementById('result').classList.remove('active');
+                    document.getElementById('loading').classList.add('active');
+                    document.getElementById('askBtn').disabled = true;
+
+                    try {
+                        const response = await fetch(`${API_URL}/query`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                question: question,
+                                strategy: strategy,
+                                top_k: 5
+                            })
+                        });
+
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || 'Failed to get answer');
+                        }
+
+                        const data = await response.json();
+                        displayResult(data);
+
+                    } catch (error) {
+                        showError(error.message);
+                    } finally {
+                        document.getElementById('loading').classList.remove('active');
+                        document.getElementById('askBtn').disabled = false;
+                    }
+                }
+
+                function displayResult(data) {
+                    // Language badge
+                    document.getElementById('languageBadge').textContent = data.language_name;
+
+                    // Answer
+                    document.getElementById('answer').textContent = data.answer;
+
+                    // Citations
+                    if (data.citations && data.citations.length > 0) {
+                        const citationsHtml = data.citations.map(cite => `
+                    <div class="citation">
+                        <span class="citation-number">[${cite.number}]</span>
+                        ${cite.title} - ${cite.section}
+                    </div>
+                `).join('');
+
+                        document.getElementById('citations').innerHTML = citationsHtml;
+                        document.getElementById('citationsSection').style.display = 'block';
+                    } else {
+                        document.getElementById('citationsSection').style.display = 'none';
+                    }
+
+                    // Stats
+                    document.getElementById('processingTime').textContent =
+                        `${data.processing_time.toFixed(2)}s`;
+                    document.getElementById('chunksUsed').textContent = data.chunks_used;
+
+                    // Show result
+                    document.getElementById('result').classList.add('active');
+                    document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+                }
+
+                function showError(message) {
+                    const errorEl = document.getElementById('error');
+                    errorEl.textContent = message;
+                    errorEl.classList.add('active');
+                    setTimeout(() => errorEl.classList.remove('active'), 5000);
+                }
+
+                // Allow Enter key to submit (Ctrl+Enter for newline)
+                document.getElementById('question').addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        askQuestion();
+                    }
+                });
+            </script>
+</body>
+
+</html>
