@@ -1,5 +1,5 @@
 # 🌐 Multilingual RAG API Server
-
+[![INDICRAG.png](https://i.postimg.cc/vTcp9wtY/INDICRAG.png)](https://postimg.cc/GTn7wNfV)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
@@ -313,19 +313,19 @@ ChromaDB retrieval: <100ms for 1000 documents
 
 ---
 
-## � Acknowledgments
+## 🤝 Acknowledgments
 
 This project builds on excellent open-source work:
 
-* [Google Gemini](https://ai.google.dev/) - Powerful multilingual LLM
-* [Sentence Transformers](https://www.sbert.net/) - E5 embeddings
-* [AI4Bharat](https://ai4bharat.org/) - IndicTrans2 translation
-* [ChromaDB](https://www.trychroma.com/) - Vector database
-* [FastAPI](https://fastapi.tiangolo.com/) - API framework
+* [Google Gemini](https://ai.google.dev/) — Multilingual LLM
+* [Sentence Transformers](https://www.sbert.net/) — E5 Embeddings
+* [AI4Bharat](https://ai4bharat.org/) — IndicTrans2 Translation
+* [ChromaDB](https://www.trychroma.com/) — Vector Database
+* [FastAPI](https://fastapi.tiangolo.com/) — API Framework
 
 ---
 
-## � License
+## 🪪 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
