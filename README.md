@@ -1,42 +1,49 @@
-# 🌐 Multilingual RAG API Server
-[![INDICRAG.png](https://i.postimg.cc/vTcp9wtY/INDICRAG.png)](https://postimg.cc/GTn7wNfV)
+# 🌐 Multilingual Scientific RAG System
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)]()
 
-A production-ready Retrieval-Augmented Generation (RAG) service with multilingual support, built for scientific research and knowledge exploration.
+A **production-ready** Retrieval-Augmented Generation (RAG) system with multilingual support for scientific research and knowledge exploration. Built with robust error handling, structured logging, and enterprise-grade features.
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-### 🧠 **Semantic Search over PDFs**
-* Extracts and indexes text using PyMuPDF
-* Cleans noisy content (page numbers, line art, etc.)
-* Splits documents into overlapping chunks for optimal retrieval
-* Persistent vector storage with ChromaDB
+### 🧠 **Advanced Document Processing**
+* PDF extraction with PyMuPDF (context managers for resource safety)
+* Intelligent text cleaning (preserves structure, removes noise)
+* Semantic chunking with configurable overlap
+* Persistent vector storage via ChromaDB
 
-### 🌍 **Multilingual Support**
-* **10+ Indian languages** + English support (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Odia)
-* Language detection for queries
+### 🌍 **True Multilingual Support**
+* **10+ Indian languages** + English (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Odia)
+* Automatic language detection
 * **Two RAG strategies:**
-  * **Strategy A:** Direct multilingual LLM reasoning (recommended)
-  * **Strategy B:** Translate → English reasoning → translate back
-* Optional IndicTrans2 for high-quality Indic language translation
+  * **Strategy A:** Direct multilingual reasoning (recommended)
+  * **Strategy B:** Translation-enhanced reasoning with NLLB-200
+* Cross-lingual semantic search with E5 embeddings
 
 ### 🤖 **LLM Integration**
-* Google Gemini 2.5 Flash integration (fast & accurate)
-* Configurable model selection
-* Citation extraction from retrieved context
-* Streaming support (future enhancement)
+* Google Gemini 2.5 Flash integration
+* Configurable safety settings and generation parameters
+* Smart citation extraction from retrieved context
+* Empty collection handling with graceful degradation
 
-### 🌐 **Production-Ready HTTP API**
-* FastAPI with automatic OpenAPI docs
-* Optional API key authentication
-* CORS support
-* Health checks and metrics
-* Static file serving for web UI
+### 🛡️ **Production-Ready Infrastructure**
+* Structured logging throughout (no `print()` statements)
+* Robust error handling with detailed error shapes
+* API key authentication with secure parsing
+* Health checks and monitoring endpoints
+* Pydantic v2 validation and type safety
+* Safe directory creation with permission checks
+
+### 🧹 **Operational Tools**
+* **`purge.py`** - CLI utility to safely clear PDFs, database, or model cache
+* Comprehensive ingestion pipeline with progress tracking
+* Pre-flight checks before server startup
+* Test suite for pipeline validation
 
 ---
 
@@ -46,7 +53,7 @@ A production-ready Retrieval-Augmented Generation (RAG) service with multilingua
 
 * Python 3.11+
 * Google Gemini API key ([Get one here](https://ai.google.dev/))
-* 8GB+ RAM recommended (for embeddings + translation models)
+* 8GB+ RAM recommended
 
 ### Installation
 
@@ -75,6 +82,9 @@ cp .env.example .env
 
 # Edit .env and add your API key
 # LLM_API_KEY=your_gemini_api_key_here
+
+# Optional: Configure API authentication
+# API_KEYS=key1,key2,key3
 ```
 
 ### Ingest Documents
@@ -82,17 +92,27 @@ cp .env.example .env
 ```bash
 # Place PDFs in papers/ directory
 # Then ingest them:
-python ingest.py --dir papers
+python ingest.py
+
+# Or specify a directory:
+python ingest.py path/to/pdfs
 ```
 
 ### Start Server
 
 ```bash
+# With pre-flight checks
 python start_server.py
+
+# Skip checks (for production)
+python start_server.py --skip-checks
+
+# Development mode with auto-reload
+python start_server.py --dev
 ```
 
 🎉 **That's it!** Access the API at:
-* **Swagger UI:** http://localhost:8080/docs
+* **Interactive docs:** http://localhost:8080/api/docs
 * **Web Interface:** http://localhost:8080
 
 ---
@@ -109,14 +129,14 @@ Open http://localhost:8080 and ask questions in any supported language!
 import requests
 
 response = requests.post('http://localhost:8080/query', json={
-    "question": "मधुमेह का इलाज क्या है?",  # Hindi: diabetes treatment
+    "question": "యాంటెన్నాతో ml ను ఎలా అమలు చేయవచ్చు?",  # Telugu
     "strategy": "A",
     "top_k": 5
 })
 
 result = response.json()
 print(result['answer'])
-print(result['citations'])
+print(f"Citations: {len(result['citations'])}")
 ```
 
 ### Via Python
@@ -125,48 +145,13 @@ print(result['citations'])
 import rag
 
 result = rag.answer_question(
-    "What are the effects of climate change?",
-    strategy="A",
+    "मधुमेह का इलाज क्या है?",  # Hindi: diabetes treatment
+    strategy="B",
     top_k=8
 )
 
 print(f"Answer ({result['language_name']}): {result['answer']}")
-print(f"Sources: {len(result['citations'])} citations")
-```
-
----
-
-## 📁 Project Structure
-
-```
-multilingual-rag/
-├── api_server.py          # FastAPI app & HTTP endpoints
-├── config.py              # Global configuration
-├── embeddings.py          # E5 embedding model
-├── ingest.py              # PDF ingestion pipeline
-├── lang_utils.py          # Language detection
-├── pdf_utils.py           # PDF extraction & chunking
-├── rag.py                 # Core RAG logic
-├── translation.py         # IndicTrans2 translation
-├── vector_store.py        # ChromaDB wrapper
-├── start_server.py        # Server launcher with checks
-│
-├── static/                # Web frontend
-│   └── index.html         # Modern Ocean UI
-│
-├── docs/                  # Documentation
-│   ├── QUICKSTART.md      # 5-minute setup
-│   ├── DEPLOYMENT.md      # Production deployment
-│   ├── ARCHITECTURE.md    # Technical deep dive
-│   └── CONTRIBUTING.md    # Contribution guide
-│
-├── examples/              # Example scripts
-│   ├── example_ingest.py
-│   └── example_query.py
-│
-├── papers/                # Your PDF documents
-├── chroma_db/             # Vector database
-└── models/                # Cached ML models
+print(f"Used {result['chunks_used']} document chunks")
 ```
 
 ---
@@ -192,7 +177,7 @@ Ask a question and get an AI-powered answer with citations.
   "answer": "Quantum computing is...",
   "language": "en",
   "language_name": "English",
-  "chunks_used": 5,
+  "chunks_used": 4,
   "citations": [
     {"number": "1", "title": "Quantum Computing Basics", "section": "Introduction"}
   ],
@@ -202,40 +187,87 @@ Ask a question and get an AI-powered answer with citations.
 
 ### `POST /ingest`
 
-Ingest a new PDF document.
-
-**Request:**
-```json
-{
-  "pdf_path": "my_paper.pdf"
-}
-```
+Ingest a PDF document (returns extracted title).
 
 ### `GET /stats`
 
-Get vector store statistics (document count, metadata, etc.)
+Get vector store statistics.
 
 ### `GET /health`
 
-Health check endpoint for monitoring.
+Health check endpoint.
 
 ---
 
-## 🎯 Supported Languages
+## 🧹 Maintenance Tools
 
-| Language | Code | Example Query |
-|----------|------|---------------|
-| English | en | What is machine learning? |
-| Hindi | hi | मशीन लर्निंग क्या है? |
-| Tamil | ta | இயந்திர கற்றல் என்றால் என்ன? |
-| Telugu | te | మెషిన్ లెర్నింగ్ అంటే ఏమిటి? |
-| Bengali | bn | মেশিন লার্নিং কি? |
-| Marathi | mr | मशीन लर्निंग म्हणजे काय? |
-| Gujarati | gu | મશીન લર્નિંગ શું છે? |
-| Kannada | kn | ಯಂತ್ರ ಕಲಿಕೆ ಎಂದರೇನು? |
-| Malayalam | ml | മെഷീൻ ലേണിംഗ് എന്താണ്? |
-| Punjabi | pa | ਮਸ਼ੀਨ ਲਰਨਿੰਗ ਕੀ ਹੈ? |
-| Odia | or | ମେସିନ୍ ଲର୍ଣ୍ଣିଂ କ'ଣ? |
+### Purge Utility
+
+Safely clear indexed data:
+
+```bash
+# Delete all PDFs
+python purge.py --papers
+
+# Clear vector database
+python purge.py --db
+
+# Remove cached models (will re-download)
+python purge.py --models
+
+# Clear everything (with confirmation)
+python purge.py --all
+
+# Non-interactive mode
+python purge.py --all --yes
+```
+
+### Testing
+
+```bash
+# Run integration tests
+python test_pipeline.py
+
+# Test with example queries
+python examples/example_query.py
+```
+
+---
+
+## 📁 Project Structure
+
+```
+multilingual-rag/
+├── api_server.py          # FastAPI app with authentication
+├── config.py              # Configuration with ensure_directories()
+├── embeddings.py          # E5 multilingual embeddings
+├── ingest.py              # PDF ingestion pipeline
+├── lang_utils.py          # Language detection
+├── pdf_utils.py           # PDF processing
+├── rag.py                 # Core RAG logic
+├── translation.py         # NLLB-200 translation (Strategy B)
+├── vector_store.py        # ChromaDB wrapper
+├── start_server.py        # Server launcher with pre-flight checks
+├── purge.py               # Cleanup utility (NEW!)
+├── test_pipeline.py       # Integration tests
+│
+├── static/                # Web frontend
+│   └── index.html         # Modern Ocean UI
+│
+├── docs/                  # Documentation
+│   ├── QUICKSTART.md
+│   ├── DEPLOYMENT.md
+│   ├── ARCHITECTURE.md
+│   └── CONTRIBUTING.md
+│
+├── examples/              # Example scripts
+│   ├── example_ingest.py
+│   └── example_query.py
+│
+├── papers/                # Your PDF documents
+├── chroma_db/             # Vector database
+└── models/                # Cached ML models
+```
 
 ---
 
@@ -244,116 +276,155 @@ Health check endpoint for monitoring.
 Key settings in `config.py`:
 
 ```python
-# Embedding model
+# Embedding model (multilingual E5)
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-base"
+EMBEDDING_DIMENSION = 768
+
+# Translation models (Strategy B)
+TRANSLATION_MODEL_EN_TO_INDIC = "facebook/nllb-200-distilled-600M"
+TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 
 # Chunking
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 128
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
 
 # RAG
 DEFAULT_TOP_K = 8
-MAX_CONTEXT_CHUNKS = 10
+MAX_CONTEXT_CHUNKS = 5
+MAX_CONTEXT_LENGTH = 4000
 
 # LLM
 LLM_MODEL_NAME = "gemini-2.5-flash"
 LLM_TEMPERATURE = 0.3
+LLM_MAX_TOKENS = 2048
 ```
 
 ---
 
-## 🐳 Docker Deployment (Optional)
+## 🎯 Supported Languages
 
-```bash
-# Build image
-docker build -t indicrag .
-
-# Run container
-docker run -p 8080:8080 \
-  -e LLM_API_KEY=your_key \
-  -v $(pwd)/papers:/app/papers \
-  -v $(pwd)/chroma_db:/app/chroma_db \
-  indicrag
-```
+| Language | Code | Native Name |
+|----------|------|-------------|
+| English | en | English |
+| Hindi | hi | हिंदी |
+| Tamil | ta | தமிழ் |
+| Telugu | te | తెలుగు |
+| Bengali | bn | বাংলা |
+| Marathi | mr | मराठी |
+| Gujarati | gu | ગુજરાતી |
+| Kannada | kn | ಕನ್ನಡ |
+| Malayalam | ml | മലയാളം |
+| Punjabi | pa | ਪੰਜਾਬੀ |
+| Odia | or | ଓଡ଼ିଆ |
 
 ---
 
-## 🧪 Testing
+## 📊 Performance
 
+Typical query latency (on CPU):
+* **Strategy A** (direct multilingual): ~1-2s
+* **Strategy B** (with translation): ~3-6s (includes NLLB translation time)
+
+ChromaDB retrieval: <100ms for 1000s of documents
+
+Memory usage:
+* Base system: ~500MB
+* With E5 embeddings: ~2GB
+* With NLLB translation: ~4.5GB
+
+---
+
+## 🔒 Production Features
+
+### Security
+* API key authentication with secure parsing
+* Input validation with Pydantic v2
+* CORS configuration
+* Environment-based secrets
+
+### Observability
+* Structured logging across all modules
+* Request/response logging in API
+* Processing time tracking
+* Health check endpoint
+
+### Robustness
+* Graceful empty collection handling
+* Resource safety (context managers)
+* Permission-aware directory creation
+* Comprehensive error responses
+
+### Quality
+* Citation extraction from English answers (Strategy B)
+* Context length enforcement
+* Top-k bounds validation
+* Newline preservation in PDF processing
+
+---
+
+## 🐛 Common Issues & Solutions
+
+**"API key not configured"**
 ```bash
-# Run end-to-end test
-python test_pipeline.py
+# Check .env file
+cat .env | grep LLM_API_KEY
+```
 
-# Test specific query
-python examples/example_query.py
+**"No documents indexed"**
+```bash
+# Ingest PDFs
+python ingest.py
+```
+
+**"Translation model gated/authentication required"**
+- The system now uses **NLLB-200** which requires no authentication
+- First use will download ~2.4GB automatically
+- See documentation for manual download if needed
+
+**"Out of memory"**
+```python
+# Edit config.py to reduce memory usage
+CHUNK_SIZE = 512  # Smaller chunks
+MAX_CONTEXT_CHUNKS = 3  # Fewer chunks in context
 ```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
+Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
-**Areas for improvement:**
-* Additional document formats (HTML, EPUB, Word)
-* Advanced reranking with cross-encoders
-* Query expansion techniques
-* Better citation extraction
-* Performance optimizations
-
----
-
-## 📊 Performance
-
-Typical query latency:
-* **Strategy A** (direct multilingual): ~1-2s
-* **Strategy B** (with translation): ~3-5s
-
-ChromaDB retrieval: <100ms for 1000 documents
+**Recent improvements:**
+* ✅ Production logging migration
+* ✅ Robust error handling
+* ✅ Pydantic v2 compatibility
+* ✅ Resource safety improvements
+* ✅ Empty collection handling
+* ✅ Citation extraction fixes
+* ✅ Purge utility addition
 
 ---
 
-## 🤝 Acknowledgments
+## 🙏 Acknowledgments
 
-This project builds on excellent open-source work:
+Built with excellent open-source tools:
 
-* [Google Gemini](https://ai.google.dev/) — Multilingual LLM
-* [Sentence Transformers](https://www.sbert.net/) — E5 Embeddings
-* [AI4Bharat](https://ai4bharat.org/) — IndicTrans2 Translation
-* [ChromaDB](https://www.trychroma.com/) — Vector Database
-* [FastAPI](https://fastapi.tiangolo.com/) — API Framework
+* [Google Gemini](https://ai.google.dev/) - Multilingual LLM
+* [Sentence Transformers](https://www.sbert.net/) - E5 embeddings
+* [Facebook NLLB](https://github.com/facebookresearch/fairseq/tree/nllb) - Translation
+* [ChromaDB](https://www.trychroma.com/) - Vector database
+* [FastAPI](https://fastapi.tiangolo.com/) - API framework
+* [PyMuPDF](https://pymupdf.readthedocs.io/) - PDF processing
 
 ---
 
-## 🪪 License
+## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
 ## 🆘 Support
-
-### Common Issues
-
-**"API key not configured"**
-```bash
-# Check .env file exists and has valid key
-cat .env | grep LLM_API_KEY
-```
-
-**"No documents found"**
-```bash
-# Verify PDFs are ingested
-python ingest.py --dir papers
-```
-
-**"Out of memory"**
-```bash
-# Reduce chunk size or use lighter embedding model
-# Edit config.py: CHUNK_SIZE = 256
-```
-
-### Getting Help
 
 * 📖 [Documentation](docs/)
 * 💬 [GitHub Discussions](https://github.com/DNSdecoded/IndicRAG/discussions)

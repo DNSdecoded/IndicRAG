@@ -6,7 +6,10 @@ import re
 import fitz  # PyMuPDF
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
+import logging
 import config
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -20,24 +23,25 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         Extracted text as a single string
     """
     try:
-        doc = fitz.open(pdf_path)
-        text = ""
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text += page.get_text()
-        
-        doc.close()
-        return text
+        with fitz.open(pdf_path) as doc:
+            text = ""
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text += page.get_text()
+            
+            return text
     
     except Exception as e:
-        print(f"Error extracting text from {pdf_path}: {e}")
+        logger.error(f"Error extracting text from {pdf_path}: {e}")
         return ""
 
 
 def clean_text(text: str) -> str:
     """
     Clean extracted text by removing noise, normalizing whitespace, etc.
+    
+    Important: Preserves newlines for title/section extraction.
     
     Args:
         text: Raw text extracted from PDF
@@ -49,8 +53,11 @@ def clean_text(text: str) -> str:
     for pattern in config.NOISE_PATTERNS:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.MULTILINE)
     
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text)
+    # Normalize Windows line endings to Unix
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Collapse multiple spaces and tabs (but preserve newlines)
+    text = re.sub(r'[ \t]+', ' ', text)
     
     # Remove very long sequences of dots or dashes (often from TOC)
     text = re.sub(r'[.\-_]{4,}', '', text)
@@ -58,7 +65,7 @@ def clean_text(text: str) -> str:
     # Remove standalone numbers at line boundaries (page numbers)
     text = re.sub(r'\n\s*\d+\s*\n', '\n', text)
     
-    # Clean up multiple newlines
+    # Clean up excessive newlines (3+ consecutive → 2)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
     # Strip leading/trailing whitespace
@@ -223,25 +230,31 @@ if __name__ == "__main__":
     # Test with a sample PDF
     import sys
     
+    # Setup logging for standalone execution
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    
     if len(sys.argv) > 1:
         pdf_path = sys.argv[1]
-        print(f"Processing: {pdf_path}")
-        print("-" * 60)
+        logger.info(f"Processing: {pdf_path}")
+        logger.info("-" * 60)
         
         result = process_pdf(pdf_path)
         
         if result:
-            print(f"Title: {result['title']}")
-            print(f"Total text length: {len(result['text'])} characters")
-            print(f"\nSections found: {len(result['sections'])}")
+            logger.info(f"Title: {result['title']}")
+            logger.info(f"Total text length: {len(result['text'])} characters")
+            logger.info(f"\nSections found: {len(result['sections'])}")
             for section_name, section_text in result['sections']:
-                print(f"  - {section_name}: {len(section_text)} chars")
+                logger.info(f"  - {section_name}: {len(section_text)} chars")
             
             # Test chunking
             chunks = simple_chunk(result['text'])
-            print(f"\nChunks created: {len(chunks)}")
-            print(f"Average chunk size: {sum(len(c) for c in chunks) / len(chunks):.0f} chars")
+            logger.info(f"\nChunks created: {len(chunks)}")
+            logger.info(f"Average chunk size: {sum(len(c) for c in chunks) / len(chunks):.0f} chars")
         else:
-            print("Failed to process PDF")
+            logger.error("Failed to process PDF")
     else:
-        print("Usage: python pdf_utils.py <path_to_pdf>")
+        logger.info("Usage: python pdf_utils.py <path_to_pdf>")

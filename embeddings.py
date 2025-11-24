@@ -5,8 +5,11 @@ Multilingual embedding model management.
 from sentence_transformers import SentenceTransformer
 from typing import List, Union
 import numpy as np
+import logging
 import config
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 # Global model cache
@@ -31,8 +34,8 @@ def load_embedding_model(model_name: str = None) -> SentenceTransformer:
     if model_name is None:
         model_name = config.EMBEDDING_MODEL_NAME
     
-    print(f"Loading embedding model: {model_name}")
-    print("This may take a few minutes on first run...")
+    logger.info(f"Loading embedding model: {model_name}")
+    logger.info("This may take a few minutes on first run...")
     
     # Set cache directory
     cache_dir = str(config.MODELS_CACHE_DIR)
@@ -45,8 +48,8 @@ def load_embedding_model(model_name: str = None) -> SentenceTransformer:
         device=device
     )
     
-    print(f"Model loaded on device: {device}")
-    print(f"Embedding dimension: {_embedding_model.get_sentence_embedding_dimension()}")
+    logger.info(f"Model loaded on device: {device}")
+    logger.info(f"Embedding dimension: {_embedding_model.get_sentence_embedding_dimension()}")
     
     return _embedding_model
 
@@ -71,8 +74,8 @@ def embed_texts(
     """
     model = load_embedding_model()
     
-    # Add E5 prefix if needed
-    if config.EMBEDDING_MODEL_NAME.startswith("intfloat/"):
+    # Add E5 prefix if using E5 model (check for 'e5' in model name)
+    if "e5" in config.EMBEDDING_MODEL_NAME.lower():
         prefix = config.E5_QUERY_PREFIX if is_query else config.E5_PASSAGE_PREFIX
         texts = [prefix + text for text in texts]
     

@@ -6,11 +6,17 @@ import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Optional, Any
 import numpy as np
+import logging
 import config
 
+logger = logging.getLogger(__name__)
 
 # Global client cache
 _chroma_client = None
+
+# Global collection cache
+# NOTE: _collection stores the LAST USED collection. Test code should always use
+# the collection object returned by get_or_create_collection(), not this global.
 _collection = None
 
 
@@ -26,7 +32,7 @@ def get_chroma_client() -> chromadb.Client:
     if _chroma_client is not None:
         return _chroma_client
     
-    print(f"Initializing ChromaDB at: {config.CHROMA_DB_DIR}")
+    logger.info(f"Initializing ChromaDB at: {config.CHROMA_DB_DIR}")
     
     # Create persistent client
     _chroma_client = chromadb.PersistentClient(
@@ -65,7 +71,7 @@ def get_or_create_collection(
     if reset:
         try:
             client.delete_collection(name=collection_name)
-            print(f"Deleted existing collection: {collection_name}")
+            logger.info(f"Deleted existing collection: {collection_name}")
         except Exception:
             pass  # Collection doesn't exist
     
@@ -78,7 +84,7 @@ def get_or_create_collection(
         }
     )
     
-    print(f"Collection '{collection_name}' ready. Current size: {_collection.count()}")
+    logger.info(f"Collection '{collection_name}' ready. Current size: {_collection.count()}")
     
     return _collection
 
@@ -114,7 +120,7 @@ def add_documents(
         ids=ids
     )
     
-    print(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
+    logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
 
 
 def search(
@@ -179,9 +185,9 @@ def delete_collection(collection_name: str = None) -> None:
     
     try:
         client.delete_collection(name=collection_name)
-        print(f"Deleted collection: {collection_name}")
+        logger.info(f"Deleted collection: {collection_name}")
     except Exception as e:
-        print(f"Error deleting collection: {e}")
+        logger.error(f"Error deleting collection: {e}")
 
 
 def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, Any]:

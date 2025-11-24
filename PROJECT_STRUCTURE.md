@@ -29,8 +29,8 @@ d:/RAG/
 │   ├── pdf_utils.py             # PDF processing
 │   ├── ingest.py                # Document ingestion
 │   ├── translation.py           # IndicTrans2
-│   ├── vector_store.py          # Vector operations
-│   └── test_pipeline.py         # Integration tests
+│   ├── test_pipeline.py         # Integration tests
+│   └── purge.py                 # Data cleanup utility
 │
 ├── 📚 docs/                     # All Documentation
 │   ├── QUICKSTART.md            # 5-minute setup

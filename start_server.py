@@ -119,7 +119,7 @@ def start_server(mode='production', port=8080):
     
     logger.info(f"\nAPI will be available at:")
     logger.info(f"  → http://localhost:{port}")
-    logger.info(f"  → http://localhost:{port}/docs (interactive docs)")
+    logger.info(f"  → http://localhost:{port}/api/docs (interactive docs)")
     logger.info("\nPress Ctrl+C to stop\n")
     logger.info("="*60 + "\n")
     
@@ -161,6 +161,14 @@ def main():
         
         logger.info("-"*60)
         logger.info("✓ All checks passed!\n")
+    
+    # Ensure directories exist before starting
+    try:
+        import config
+        config.ensure_directories()
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        sys.exit(1)
     
     mode = 'development' if args.dev else 'production'
     start_server(mode, port=args.port)

@@ -3,11 +3,14 @@ Main RAG pipeline: retrieval and answer generation.
 """
 
 from typing import Dict, List, Optional, Any
+import logging
 import config
 import embeddings
 import vector_store
 import lang_utils
 import translation
+
+logger = logging.getLogger(__name__)
 
 
 def retrieve_context(
@@ -27,16 +30,28 @@ def retrieve_context(
         
     Returns:
         Dictionary with:
-            - 'chunks': List of retrieved text chunks
+            - 'chunks': List of retrieved text chunks (empty if no documents)
             - 'metadatas': List of metadata dicts
             - 'distances': List of similarity distances
             - 'formatted_context': Formatted context string for LLM
+            - 'chunks_used': Number of chunks actually used in formatted context
     """
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
     
     if collection is None:
         collection = vector_store.get_or_create_collection()
+    
+    # Check if collection is empty
+    if collection.count() == 0:
+        logger.warning("No documents indexed in collection")
+        return {
+            'chunks': [],
+            'metadatas': [],
+            'distances': [],
+            'formatted_context': '',
+            'chunks_used': 0
+        }
     
     # Embed the query
     query_embedding = embeddings.embed_query(user_query)
@@ -49,17 +64,32 @@ def retrieve_context(
         collection=collection
     )
     
+    # Check if search returned results
+    if not results['documents']:
+        logger.warning(f"No results found for query: {user_query[:50]}")
+        return {
+            'chunks': [],
+            'metadatas': [],
+            'distances': [],
+            'formatted_context': '',
+            'chunks_used': 0
+        }
+    
     # Format context for LLM
     formatted_context = format_context(
         chunks=results['documents'],
         metadatas=results['metadatas']
     )
     
+    # Count how many chunks were actually used
+    chunks_used = len([line for line in formatted_context.split('\n') if line.startswith('[')])
+    
     return {
         'chunks': results['documents'],
         'metadatas': results['metadatas'],
         'distances': results['distances'],
-        'formatted_context': formatted_context
+        'formatted_context': formatted_context,
+        'chunks_used': chunks_used
     }
 
 
@@ -74,22 +104,29 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
     Returns:
         Formatted context string with citations
     """
-    # Limit total context length
     context_parts = []
     total_length = 0
+    chunks_used = 0
     
     for i, (chunk, metadata) in enumerate(zip(chunks, metadatas), 1):
-        # Stop if we exceed max context length
-        if total_length + len(chunk) > config.MAX_CONTEXT_LENGTH:
+        # Enforce maximum number of chunks
+        if chunks_used >= config.MAX_CONTEXT_CHUNKS:
             break
         
-        # Format: [1] Title - Section: chunk text
+        # Format: [i] Title - Section: chunk text
         title = metadata.get('title', 'Unknown')
         section = metadata.get('section', 'body')
         
+        # Build context part FIRST to get accurate length
         context_part = f"[{i}] {title} - {section}:\n{chunk}\n"
+        
+        # Check if adding this would exceed length limit
+        if total_length + len(context_part) > config.MAX_CONTEXT_LENGTH:
+            break
+        
         context_parts.append(context_part)
         total_length += len(context_part)
+        chunks_used += 1
     
     return "\n".join(context_parts)
 
@@ -248,7 +285,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
         raise Exception("No response generated from Gemini API")
     
     except Exception as e:
-        print(f"Error calling Gemini API: {e}")
+        logger.error(f"Error calling Gemini API: {e}")
         raise
 
 
@@ -280,13 +317,24 @@ def answer_question_strategy_a(
     
     lang_name = lang_utils.get_language_name(detected_lang)
     
-    print(f"Detected language: {lang_name} ({detected_lang})")
+    logger.info(f"Detected language: {lang_name} ({detected_lang})")
     
     # Retrieve context
-    print("Retrieving relevant context...")
+    logger.info("Retrieving relevant context...")
     context_data = retrieve_context(user_query, top_k, filter_dict)
     
-    print(f"Retrieved {len(context_data['chunks'])} chunks")
+    # Handle empty collection
+    if context_data['chunks_used'] == 0:
+        logger.warning("No documents available for answering question")
+        return {
+            'answer': "I don't have any indexed documents yet, so I cannot answer this question based on papers. Please ingest some PDFs first.",
+            'language': detected_lang,
+            'language_name': lang_name,
+            'chunks_used': 0,
+            'citations': []
+        }
+    
+    logger.info(f"Retrieved {len(context_data['chunks'])} chunks, using {context_data['chunks_used']}")
     
     # Build prompt
     prompt = build_prompt(
@@ -297,7 +345,7 @@ def answer_question_strategy_a(
     )
     
     # Generate answer
-    print("Generating answer...")
+    logger.info("Generating answer...")
     answer = llm_generate(prompt)
     
     # Extract citations (simple approach: find [1], [2], etc.)
@@ -317,7 +365,7 @@ def answer_question_strategy_a(
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
-        'chunks_used': len(context_data['chunks']),
+        'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
 
@@ -345,21 +393,32 @@ def answer_question_strategy_b(
     
     lang_name = lang_utils.get_language_name(detected_lang)
     
-    print(f"Detected language: {lang_name} ({detected_lang})")
+    logger.info(f"Detected language: {lang_name} ({detected_lang})")
     
     # Translate query to English if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
-        print("Translating query to English...")
+        logger.info("Translating query to English...")
         english_query = translation.translate_to_english(user_query, detected_lang)
-        print(f"English query: {english_query}")
+        logger.info(f"English query: {english_query}")
     else:
         english_query = user_query
     
     # Retrieve context using English query
-    print("Retrieving relevant context...")
+    logger.info("Retrieving relevant context...")
     context_data = retrieve_context(english_query, top_k, filter_dict)
     
-    print(f"Retrieved {len(context_data['chunks'])} chunks")
+    # Handle empty collection
+    if context_data['chunks_used'] == 0:
+        logger.warning("No documents available for answering question")
+        return {
+            'answer': "I don't have any indexed documents yet, so I cannot answer this question based on papers. Please ingest some PDFs first.",
+            'language': detected_lang,
+            'language_name': lang_name,
+            'chunks_used': 0,
+            'citations': []
+        }
+    
+    logger.info(f"Retrieved {len(context_data['chunks'])} chunks, using {context_data['chunks_used']}")
     
     # Build prompt for English answer
     prompt = build_prompt(
@@ -370,20 +429,13 @@ def answer_question_strategy_b(
     )
     
     # Generate answer in English
-    print("Generating answer in English...")
+    logger.info("Generating answer in English...")
     english_answer = llm_generate(prompt)
     
-    # Translate answer to target language if needed
-    if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
-        print(f"Translating answer to {lang_name}...")
-        answer = translation.translate_from_english(english_answer, detected_lang)
-    else:
-        answer = english_answer
-    
-    # Extract citations
+    # Extract citations from ENGLISH answer (before translation)
     import re
     citations = []
-    citation_nums = re.findall(r'\[(\d+)\]', answer)
+    citation_nums = re.findall(r'\[(\d+)\]', english_answer)
     for num in set(citation_nums):
         idx = int(num) - 1
         if idx < len(context_data['metadatas']):
@@ -393,11 +445,18 @@ def answer_question_strategy_b(
                 'section': context_data['metadatas'][idx].get('section', 'body')
             })
     
+    # Translate answer to target language if needed
+    if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        logger.info(f"Translating answer to {lang_name}...")
+        answer = translation.translate_from_english(english_answer, detected_lang)
+    else:
+        answer = english_answer
+    
     return {
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
-        'chunks_used': len(context_data['chunks']),
+        'chunks_used': context_data['chunks_used'],
         'citations': citations,
         'english_answer': english_answer  # Include for debugging
     }
@@ -431,29 +490,39 @@ def answer_question(
 
 if __name__ == "__main__":
     # Test retrieval (without LLM)
-    print("Testing RAG Pipeline (Retrieval Only)")
-    print("=" * 60)
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    
+    logger.info("Testing RAG Pipeline (Retrieval Only)")
+    logger.info("=" * 60)
     
     test_query = "What is the treatment for diabetes?"
     
-    print(f"\nQuery: {test_query}")
-    print("\nRetrieving context...")
+    logger.info(f"\nQuery: {test_query}")
+    logger.info("\nRetrieving context...")
     
     try:
         context_data = retrieve_context(test_query, top_k=3)
         
-        print(f"\nRetrieved {len(context_data['chunks'])} chunks:")
-        print("-" * 60)
-        print(context_data['formatted_context'])
+        if context_data['chunks_used'] == 0:
+            logger.warning("No documents found. Please ingest PDFs first.")
+        else:
+            logger.info(f"\nRetrieved {len(context_data['chunks'])} chunks, using {context_data['chunks_used']}:")
+            logger.info("-" * 60)
+            logger.info(context_data['formatted_context'])
         
-        print("\n" + "=" * 60)
-        print("Retrieval test successful!")
-        print("\nTo test full answer generation:")
-        print("1. Implement llm_generate() function")
-        print("2. Run: python example_query.py")
+        logger.info("\n" + "=" * 60)
+        logger.info("Retrieval test successful!")
+        logger.info("\nTo test full answer generation:")
+        logger.info("1. Ensure Gemini API key is configured in .env")
+        logger.info("2. Run: python examples/example_query.py")
+        logger.info("3. Or start the API server: python start_server.py")
         
     except Exception as e:
-        print(f"\nError: {e}")
-        print("\nMake sure you have:")
-        print("1. Ingested some PDFs (run: python ingest.py)")
-        print("2. Installed all dependencies (pip install -r requirements.txt)")
+        logger.error(f"\nError: {e}")
+        logger.info("\nMake sure you have:")
+        logger.info("1. Ingested some PDFs (run: python ingest.py)")
+        logger.info("2. Installed all dependencies (pip install -r requirements.txt)")

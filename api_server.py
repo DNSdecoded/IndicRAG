@@ -8,7 +8,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict
 from pathlib import Path
 import logging
@@ -51,7 +51,17 @@ app.add_middleware(
 
 # API Key authentication (optional)
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
-VALID_API_KEYS = set(os.getenv("API_KEYS", "").split(",")) if os.getenv("API_KEYS") else None
+
+# Parse and validate API keys from environment
+raw_keys = os.getenv("API_KEYS")
+if raw_keys:
+    # Filter out empty strings and whitespace-only keys
+    VALID_API_KEYS = {k.strip() for k in raw_keys.split(",") if k.strip()}
+    # If all keys were empty, disable auth
+    if not VALID_API_KEYS:
+        VALID_API_KEYS = None
+else:
+    VALID_API_KEYS = None
 
 
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
@@ -59,10 +69,13 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     if VALID_API_KEYS is None:
         return True  # No authentication required
     
-    if api_key not in VALID_API_KEYS:
+    if not api_key or api_key not in VALID_API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key"
+            detail={
+                "error": "Invalid or missing API key",
+                "code": "INVALID_API_KEY"
+            }
         )
     return True
 
@@ -74,7 +87,8 @@ class QueryRequest(BaseModel):
     strategy: str = Field("A", description="Strategy: 'A' for multilingual LLM, 'B' for English + translation")
     top_k: Optional[int] = Field(None, ge=1, le=20, description="Number of chunks to retrieve")
     
-    @validator('strategy')
+    @field_validator('strategy')
+    @classmethod
     def validate_strategy(cls, v):
         if v not in ['A', 'B']:
             raise ValueError("Strategy must be 'A' or 'B'")
@@ -167,17 +181,27 @@ async def query_question(
     start_time = time.time()
     
     try:
-        logger.info(f"Received query: {request.question[:100]}...")
+        # Log request (truncate question for privacy/brevity)
+        question_preview = request.question[:80] + "..." if len(request.question) > 80 else request.question
+        logger.info(f"Query received: strategy={request.strategy}, question='{question_preview}'")
+        
+        # Enforce top_k bounds even if client sends higher
+        top_k = request.top_k
+        if top_k is not None:
+            top_k = max(1, min(top_k, 20))  # Clamp to [1, 20]
         
         # Process query
         result = rag.answer_question(
             user_query=request.question,
             strategy=request.strategy,
-            top_k=request.top_k
+            top_k=top_k
         )
         
         processing_time = time.time() - start_time
-        logger.info(f"Query processed in {processing_time:.2f}s")
+        logger.info(
+            f"Query completed: lang={result['language']}, chunks={result['chunks_used']}, "
+            f"time={processing_time:.2f}s"
+        )
         
         # Convert citations to response model
         citations = [
@@ -199,11 +223,24 @@ async def query_question(
             timestamp=datetime.utcnow().isoformat()
         )
     
+    except ValueError as e:
+        # Handle configuration or validation errors
+        logger.warning(f"Validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": str(e),
+                "code": "VALIDATION_ERROR"
+            }
+        )
     except Exception as e:
         logger.error(f"Error processing query: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing query: {str(e)}"
+            detail={
+                "error": f"Error processing query: {str(e)}",
+                "code": "INTERNAL_ERROR"
+            }
         )
 
 

@@ -4,9 +4,12 @@ Uses IndicTrans2 models for high-quality Indic language translation.
 """
 
 from typing import Optional
+import logging
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import config
+
+logger = logging.getLogger(__name__)
 
 
 # Global model caches
@@ -34,8 +37,8 @@ def load_translation_model(direction: str = "en-indic"):
             return _en_to_indic_model, _en_to_indic_tokenizer
         
         model_name = config.TRANSLATION_MODEL_EN_TO_INDIC
-        print(f"Loading translation model: {model_name}")
-        print("This may take several minutes on first run (model is ~2.5GB)...")
+        logger.info(f"Loading translation model: {model_name}")
+        logger.info("This may take several minutes on first run (model is ~2.5GB)...")
         
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
@@ -49,9 +52,9 @@ def load_translation_model(direction: str = "en-indic"):
             model_name,
             cache_dir=str(config.MODELS_CACHE_DIR),
             trust_remote_code=True
-        ).to(device)
+        ).to(device).eval()  # Set to eval mode for inference
         
-        print(f"Model loaded on device: {device}")
+        logger.info(f"Model loaded on device: {device}")
         return _en_to_indic_model, _en_to_indic_tokenizer
     
     elif direction == "indic-en":
@@ -59,8 +62,8 @@ def load_translation_model(direction: str = "en-indic"):
             return _indic_to_en_model, _indic_to_en_tokenizer
         
         model_name = config.TRANSLATION_MODEL_INDIC_TO_EN
-        print(f"Loading translation model: {model_name}")
-        print("This may take several minutes on first run (model is ~2.5GB)...")
+        logger.info(f"Loading translation model: {model_name}")
+        logger.info("This may take several minutes on first run (model is ~2.5GB)...")
         
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
@@ -74,9 +77,9 @@ def load_translation_model(direction: str = "en-indic"):
             model_name,
             cache_dir=str(config.MODELS_CACHE_DIR),
             trust_remote_code=True
-        ).to(device)
+        ).to(device).eval()  # Set to eval mode for inference
         
-        print(f"Model loaded on device: {device}")
+        logger.info(f"Model loaded on device: {device}")
         return _indic_to_en_model, _indic_to_en_tokenizer
     
     else:

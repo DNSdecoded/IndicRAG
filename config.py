@@ -1,13 +1,17 @@
-"""
+﻿"""
 Configuration and constants for the multilingual RAG system.
 """
 
 import os
 from pathlib import Path
+import logging
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Paths
@@ -17,10 +21,43 @@ PAPERS_DIR = PROJECT_ROOT / "papers"
 CHROMA_DB_DIR = PROJECT_ROOT / "chroma_db"
 MODELS_CACHE_DIR = PROJECT_ROOT / "models"
 
-# Create directories if they don't exist
+
+def ensure_directories():
+    """
+    Create required directories if they don't exist.
+    Call this explicitly from startup scripts (start_server.py, ingest.py, etc.)
+    to avoid side effects on import.
+    
+    Raises:
+        PermissionError: If process lacks write permission
+        OSError: If directory creation fails for other reasons
+    """
+    directories = {
+        "PAPERS_DIR": PAPERS_DIR,
+        "CHROMA_DB_DIR": CHROMA_DB_DIR,
+        "MODELS_CACHE_DIR": MODELS_CACHE_DIR
+    }
+    
+    for name, directory in directories.items():
+        try:
+            directory.mkdir(exist_ok=True)
+            logger.debug(f"Ensured directory exists: {directory}")
+        except PermissionError:
+            logger.error(f"Permission denied creating {name}: {directory}")
+            raise PermissionError(
+                f"Cannot create {name} at {directory}. "
+                f"Please ensure the process has write permission to {PROJECT_ROOT}"
+            )
+        except OSError as e:
+            logger.error(f"Failed to create {name}: {directory} - {e}")
+            raise
+
+
+# Create directories if they don't exist (backward compatibility)
 PAPERS_DIR.mkdir(exist_ok=True)
 CHROMA_DB_DIR.mkdir(exist_ok=True)
 MODELS_CACHE_DIR.mkdir(exist_ok=True)
+
 
 # ============================================================================
 # Embedding Model
@@ -58,16 +95,16 @@ DISTANCE_METRIC = "cosine"  # cosine similarity for embeddings
 # ============================================================================
 # Mapping of ISO 639-1 language codes to native language names
 LANGUAGE_NAMES = {
-    "hi": "हिंदी",  # Hindi
-    "mr": "मराठी",  # Marathi
-    "ta": "தமிழ்",  # Tamil
-    "te": "తెలుగు",  # Telugu
-    "bn": "বাংলা",  # Bengali
-    "gu": "ગુજરાતી",  # Gujarati
-    "kn": "ಕನ್ನಡ",  # Kannada
-    "ml": "മലയാളം",  # Malayalam
-    "pa": "ਪੰਜਾਬੀ",  # Punjabi
-    "or": "ଓଡ଼ିଆ",  # Odia
+    "hi": "à¤¹à¤¿à¤‚à¤¦à¥€",  # Hindi
+    "mr": "à¤®à¤°à¤¾à¤ à¥€",  # Marathi
+    "ta": "à®¤à®®à®¿à®´à¯",  # Tamil
+    "te": "à°¤à±†à°²à±à°—à±",  # Telugu
+    "bn": "à¦¬à¦¾à¦‚à¦²à¦¾",  # Bengali
+    "gu": "àª—à«àªœàª°àª¾àª¤à«€",  # Gujarati
+    "kn": "à²•à²¨à³à²¨à²¡",  # Kannada
+    "ml": "à´®à´²à´¯à´¾à´³à´‚",  # Malayalam
+    "pa": "à¨ªà©°à¨œà¨¾à¨¬à©€",  # Punjabi
+    "or": "à¬“à¬¡à¬¼à¬¿à¬†",  # Odia
     "en": "English",
 }
 
@@ -77,8 +114,8 @@ INDIC_LANGUAGES = ["hi", "mr", "ta", "te", "bn", "gu", "kn", "ml", "pa", "or"]
 # ============================================================================
 # Translation Models (Strategy B)
 # ============================================================================
-TRANSLATION_MODEL_EN_TO_INDIC = "ai4bharat/indictrans2-en-indic-1B"
-TRANSLATION_MODEL_INDIC_TO_EN = "ai4bharat/indictrans2-indic-en-1B"
+TRANSLATION_MODEL_EN_TO_INDIC = "facebook/nllb-200-distilled-600M"
+TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 
 # ============================================================================
 # LLM Configuration
@@ -127,7 +164,7 @@ Use clear, simple language that a non-expert can understand.
 NOISE_PATTERNS = [
     r"Page \d+ of \d+",
     r"^\d+$",  # standalone page numbers
-    r"©.*\d{4}",  # copyright notices
+    r"Â©.*\d{4}",  # copyright notices
     r"doi:.*",
     r"arXiv:\d+\.\d+",
 ]

@@ -4,11 +4,14 @@ Document ingestion pipeline for scientific papers.
 
 from pathlib import Path
 from typing import List, Dict, Optional, Any
+import logging
 from tqdm import tqdm
 import pdf_utils
 import embeddings
 import vector_store
 import config
+
+logger = logging.getLogger(__name__)
 
 
 def ingest_paper(
@@ -67,11 +70,11 @@ def ingest_paper(
             all_ids.append(chunk_id)
     
     if not all_chunks:
-        print(f"Warning: No chunks created for paper {paper_id}")
+        logger.warning(f"No chunks created for paper {paper_id}")
         return 0
     
     # Embed all chunks
-    print(f"Embedding {len(all_chunks)} chunks from '{title}'...")
+    logger.info(f"Embedding {len(all_chunks)} chunks from '{title}'...")
     chunk_embeddings = embeddings.embed_passages(all_chunks)
     
     # Add to vector store
@@ -109,11 +112,11 @@ def ingest_pdf(
         paper_id = Path(pdf_path).stem
     
     # Process PDF
-    print(f"\nProcessing: {pdf_path}")
+    logger.info(f"\nProcessing: {pdf_path}")
     result = pdf_utils.process_pdf(pdf_path)
     
     if result is None:
-        print(f"Failed to process PDF: {pdf_path}")
+        logger.error(f"Failed to process PDF: {pdf_path}")
         return 0
     
     # Ingest the paper
@@ -125,7 +128,7 @@ def ingest_pdf(
         collection=collection
     )
     
-    print(f"Ingested {num_chunks} chunks from '{result['title']}'")
+    logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
     return num_chunks
 
 
@@ -162,11 +165,11 @@ def ingest_directory(
     pdf_files = list(pdf_dir.glob(pattern))
     
     if not pdf_files:
-        print(f"No PDF files found in {pdf_dir} matching pattern '{pattern}'")
+        logger.warning(f"No PDF files found in {pdf_dir} matching pattern '{pattern}'")
         return {"total_files": 0, "successful": 0, "failed": 0, "total_chunks": 0}
     
-    print(f"Found {len(pdf_files)} PDF files to ingest")
-    print("=" * 60)
+    logger.info(f"Found {len(pdf_files)} PDF files to ingest")
+    logger.info("=" * 60)
     
     stats = {
         "total_files": len(pdf_files),
@@ -197,55 +200,68 @@ def ingest_directory(
                 stats["failed_files"].append(str(pdf_path))
         
         except Exception as e:
-            print(f"\nError processing {pdf_path}: {e}")
+            logger.error(f"\nError processing {pdf_path}: {e}")
             stats["failed"] += 1
             stats["failed_files"].append(str(pdf_path))
     
     # Print summary
-    print("\n" + "=" * 60)
-    print("Ingestion Summary:")
-    print(f"  Total files: {stats['total_files']}")
-    print(f"  Successful: {stats['successful']}")
-    print(f"  Failed: {stats['failed']}")
-    print(f"  Total chunks: {stats['total_chunks']}")
+    logger.info("\n" + "=" * 60)
+    logger.info("Ingestion Summary:")
+    logger.info(f"  Total files: {stats['total_files']}")
+    logger.info(f"  Successful: {stats['successful']}")
+    logger.info(f"  Failed: {stats['failed']}")
+    logger.info(f"  Total chunks: {stats['total_chunks']}")
     
     if stats['failed_files']:
-        print(f"\nFailed files:")
+        logger.info(f"\nFailed files:")
         for f in stats['failed_files']:
-            print(f"  - {f}")
+            logger.info(f"  - {f}")
     
     # Final collection stats
     collection_stats = vector_store.get_collection_stats(collection)
-    print(f"\nCollection '{collection_stats['name']}' now contains {collection_stats['count']} documents")
+    logger.info(f"\nCollection '{collection_stats['name']}' now contains {collection_stats['count']} documents")
     
     return stats
 
 
 if __name__ == "__main__":
     import sys
+   
+    # Setup logging for standalone execution
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    
+    # Ensure directories exist
+    try:
+        config.ensure_directories()
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        sys.exit(1)
     
     if len(sys.argv) > 1:
         # Ingest from command line argument
         path = sys.argv[1]
         
         if Path(path).is_file():
-            # Single PDF
-            print("Ingesting single PDF...")
+            #  Single PDF
+            logger.info("Ingesting single PDF...")
             ingest_pdf(path)
         elif Path(path).is_dir():
             # Directory of PDFs
-            print("Ingesting directory of PDFs...")
+            logger.info("Ingesting directory of PDFs...")
             ingest_directory(path)
         else:
-            print(f"Invalid path: {path}")
+            logger.error(f"Invalid path: {path}")
     else:
         # Default: ingest from papers directory
         papers_dir = config.PAPERS_DIR
         
         if not any(papers_dir.glob("*.pdf")):
-            print(f"No PDFs found in {papers_dir}")
-            print(f"Please add PDF files to {papers_dir} and run again.")
-            print(f"\nUsage: python ingest.py [pdf_file_or_directory]")
+            logger.warning(f"No PDFs found in {papers_dir}")
+            logger.info(f"Please add PDF files to {papers_dir} and run again.")
+            logger.info(f"\nUsage: python ingest.py [pdf_file_or_directory]")
         else:
-            print(f"Ingesting PDFs from {papers_dir}...")
+            logger.info(f"Ingesting PDFs from {papers_dir}...")
             ingest_directory(str(papers_dir))
