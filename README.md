@@ -3,8 +3,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)]()
-[![INDICRAG.png](https://sanjaysakhinala.pages.dev/blog/INDICRAG.png)
+![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)
+
+![INDICRAG.png](https://sanjaysakhinala.pages.dev/blog/INDICRAG.png)
 
 A **production-ready** Retrieval-Augmented Generation (RAG) system with multilingual support for scientific research and knowledge exploration. Built with robust error handling, structured logging, and enterprise-grade features.
 
