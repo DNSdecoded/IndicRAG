@@ -43,6 +43,7 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 
 ### 🧹 **Operational Tools**
 * **`purge.py`** - CLI utility to safely clear PDFs, database, or model cache
+* **Web-based document management** - Upload, ingest, and purge via UI
 * Comprehensive ingestion pipeline with progress tracking
 * Pre-flight checks before server startup
 * Test suite for pipeline validation
@@ -123,7 +124,14 @@ python start_server.py --dev
 
 ### Via Web UI
 
-Open http://localhost:8080 and ask questions in any supported language!
+Open http://localhost:8080 and:
+
+1. **Ask Questions** - Enter queries in any supported language
+2. **Manage Documents** - Expand the panel to:
+   - Upload PDFs via drag-and-drop
+   - View uploaded papers list
+   - Ingest papers into the vector store
+   - Purge papers or database (with confirmation)
 
 ### Via REST API
 
@@ -198,6 +206,22 @@ Get vector store statistics.
 ### `GET /health`
 
 Health check endpoint.
+
+### `POST /upload`
+
+Upload a PDF file (multipart form).
+
+### `GET /papers`
+
+List all uploaded PDFs with sizes.
+
+### `DELETE /purge/papers`
+
+Delete all uploaded PDF files.
+
+### `DELETE /purge/database`
+
+Clear the vector database (all chunks).
 
 ---
 
@@ -309,8 +333,8 @@ LLM_MAX_TOKENS = 2048
 |----------|------|-------------|
 | English | en | English |
 | Hindi | hi | हिंदी |
-| Tamil | ta | தமிழ் |
 | Telugu | te | తెలుగు |
+| Tamil | ta | தமிழ் |
 | Bengali | bn | বাংলা |
 | Marathi | mr | मराठी |
 | Gujarati | gu | ગુજરાતી |
@@ -318,6 +342,8 @@ LLM_MAX_TOKENS = 2048
 | Malayalam | ml | മലയാളം |
 | Punjabi | pa | ਪੰਜਾਬੀ |
 | Odia | or | ଓଡ଼ିଆ |
+| Urdu | ur | اردو |
+
 
 ---
 
@@ -404,6 +430,9 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 * ✅ Empty collection handling
 * ✅ Citation extraction fixes
 * ✅ Purge utility addition
+* ✅ Web UI document management (upload, ingest, purge)
+* ✅ Improved chunking for scientific text
+* ✅ Server concurrency fix with threadpool
 
 ---
 

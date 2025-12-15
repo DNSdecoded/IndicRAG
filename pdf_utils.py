@@ -91,8 +91,14 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     if overlap is None:
         overlap = config.CHUNK_OVERLAP
     
-    # Split into sentences (simple approach)
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    # Split into sentences using robust pattern that handles scientific abbreviations
+    # This pattern:
+    # - Looks for sentence endings (.!?) followed by whitespace
+    # - Ignores common abbreviations (Fig., Eq., Dr., Mr., Ms., Prof., vs., etc., al., approx.)
+    # - Requires next character to be uppercase (indicating new sentence)
+    # - Handles edge cases like "1.0" by not splitting after digits
+    sentence_pattern = r'(?<![A-Z])(?<!\b[Ff]ig)(?<!\b[Ee]q)(?<!\b[Dd]r)(?<!\b[Mm]r)(?<!\b[Mm]s)(?<!\b[Pp]rof)(?<!\bvs)(?<!\betc)(?<!\bal)(?<!\bapprox)(?<!\d)[.!?]\s+(?=[A-Z])'
+    sentences = re.split(sentence_pattern, text)
     
     chunks = []
     current_chunk = ""

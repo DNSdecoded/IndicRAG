@@ -13,6 +13,63 @@ import translation
 logger = logging.getLogger(__name__)
 
 
+def extract_citations(answer: str, metadatas: List[Dict]) -> List[Dict]:
+    """
+    Extract and parse citations from answer text, handling multiple formats.
+    
+    Supports:
+        - Single citations: [1]
+        - Comma-separated: [1, 2] or [1,2,3]
+        - Ranges: [1-3]
+        - Consecutive: [1][2]
+    
+    Args:
+        answer: Generated answer text containing citations
+        metadatas: List of metadata dictionaries from retrieved chunks
+        
+    Returns:
+        List of citation dictionaries with number, title, and section
+    """
+    import re
+    
+    citations = []
+    seen_nums = set()
+    
+    # Match [1], [1, 2], [1-3], [1,2,3], etc.
+    raw_citations = re.findall(r'\[([\d\s,\-]+)\]', answer)
+    
+    for raw in raw_citations:
+        # Parse comma-separated and ranges
+        parts = raw.replace(' ', '').split(',')
+        for part in parts:
+            if '-' in part:
+                # Handle range like "1-3"
+                try:
+                    start, end = part.split('-')
+                    for num in range(int(start), int(end) + 1):
+                        seen_nums.add(num)
+                except ValueError:
+                    pass
+            else:
+                # Single number
+                try:
+                    seen_nums.add(int(part))
+                except ValueError:
+                    pass
+    
+    # Build citations list (sorted for consistent ordering)
+    for num in sorted(seen_nums):
+        idx = num - 1
+        if 0 <= idx < len(metadatas):
+            citations.append({
+                'number': str(num),
+                'title': metadatas[idx].get('title', 'Unknown'),
+                'section': metadatas[idx].get('section', 'body')
+            })
+    
+    return citations
+
+
 def retrieve_context(
     user_query: str,
     top_k: int = None,
@@ -348,18 +405,8 @@ def answer_question_strategy_a(
     logger.info("Generating answer...")
     answer = llm_generate(prompt)
     
-    # Extract citations (simple approach: find [1], [2], etc.)
-    import re
-    citations = []
-    citation_nums = re.findall(r'\[(\d+)\]', answer)
-    for num in set(citation_nums):
-        idx = int(num) - 1
-        if idx < len(context_data['metadatas']):
-            citations.append({
-                'number': num,
-                'title': context_data['metadatas'][idx].get('title', 'Unknown'),
-                'section': context_data['metadatas'][idx].get('section', 'body')
-            })
+    # Extract citations using robust parser
+    citations = extract_citations(answer, context_data['metadatas'])
     
     return {
         'answer': answer,
@@ -432,18 +479,8 @@ def answer_question_strategy_b(
     logger.info("Generating answer in English...")
     english_answer = llm_generate(prompt)
     
-    # Extract citations from ENGLISH answer (before translation)
-    import re
-    citations = []
-    citation_nums = re.findall(r'\[(\d+)\]', english_answer)
-    for num in set(citation_nums):
-        idx = int(num) - 1
-        if idx < len(context_data['metadatas']):
-            citations.append({
-                'number': num,
-                'title': context_data['metadatas'][idx].get('title', 'Unknown'),
-                'section': context_data['metadatas'][idx].get('section', 'body')
-            })
+    # Extract citations from ENGLISH answer (before translation) using robust parser
+    citations = extract_citations(english_answer, context_data['metadatas'])
     
     # Translate answer to target language if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):

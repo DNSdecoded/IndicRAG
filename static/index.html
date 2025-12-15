@@ -381,6 +381,319 @@
                 gap: 1rem;
             }
         }
+
+        /* Document Management Panel Styles */
+        .management-panel {
+            background: var(--surface);
+            border-radius: 1rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            background: var(--surface-light);
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.3s;
+        }
+
+        .panel-header:hover {
+            background: #3d4f65;
+        }
+
+        .panel-header h2 {
+            font-size: 1.1rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .panel-toggle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            transition: transform 0.3s;
+        }
+
+        .management-panel.open .panel-toggle {
+            transform: rotate(180deg);
+        }
+
+        .panel-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease-out;
+        }
+
+        .management-panel.open .panel-content {
+            max-height: 5000px;
+            padding-bottom: 1rem;
+        }
+
+        .panel-inner {
+            padding: 1.5rem;
+        }
+
+        .panel-section {
+            margin-bottom: 2rem;
+        }
+
+        .panel-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .panel-section h3 {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Upload Zone */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: 0.75rem;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            background: var(--background);
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: var(--primary);
+            background: rgba(6, 182, 212, 0.05);
+        }
+
+        .upload-zone.dragover {
+            transform: scale(1.01);
+        }
+
+        .upload-icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-text {
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .upload-hint {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            opacity: 0.7;
+        }
+
+        .upload-input {
+            display: none;
+        }
+
+        /* Papers Table */
+        .papers-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .papers-table th {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            background: var(--background);
+            color: var(--text-muted);
+            font-weight: 500;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .papers-table td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .papers-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .papers-empty {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+
+        .btn-small {
+            padding: 0.4rem 0.8rem;
+            font-size: 0.8rem;
+            border-radius: 0.35rem;
+        }
+
+        .btn-success {
+            background: var(--success);
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-success:hover:not(:disabled) {
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+        }
+
+        /* Status Badges */
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        /* Stats Bar */
+        .stats-bar {
+            display: flex;
+            gap: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--background);
+            border-radius: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stats-bar .stat {
+            flex: 1;
+            text-align: center;
+        }
+
+        .stats-bar .stat-value {
+            font-size: 1.75rem;
+        }
+
+        /* Danger Zone */
+        .danger-zone {
+            background: rgba(220, 38, 38, 0.1);
+            border: 1px solid rgba(220, 38, 38, 0.3);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+        }
+
+        .danger-zone h4 {
+            color: #f87171;
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+        }
+
+        .danger-actions {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #b91c1c;
+            box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 0.5rem;
+            color: white;
+            font-weight: 500;
+            animation: slideIn 0.3s ease-out;
+            max-width: 350px;
+        }
+
+        .toast-success {
+            background: var(--success);
+        }
+
+        .toast-error {
+            background: #dc2626;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(100%);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Confirmation Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 3000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--surface);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 400px;
+            width: 90%;
+            animation: fadeIn 0.3s;
+        }
+
+        .modal h3 {
+            color: #f87171;
+            margin-bottom: 1rem;
+        }
+
+        .modal p {
+            color: var(--text-muted);
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        .btn-secondary {
+            background: var(--surface-light);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #475569;
+            box-shadow: none;
+            transform: none;
+        }
     </style>
 </head>
 
@@ -391,13 +704,79 @@
             <p class="subtitle">Ask questions in any language. Get researched answers with citations.</p>
         </header>
 
+        <div class="management-panel open" id="managementPanel">
+            <div class="panel-header" onclick="toggleManagementPanel()">
+                <h2>📁 Manage Documents</h2>
+                <span class="panel-toggle">▼</span>
+            </div>
+            <div class="panel-content">
+                <div class="panel-inner">
+                    <div class="stats-bar">
+                        <div class="stat">
+                            <div class="stat-label">Papers Uploaded</div>
+                            <div class="stat-value" id="paperCount">-</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-label">Chunks Indexed</div>
+                            <div class="stat-value" id="chunkCount">-</div>
+                        </div>
+                    </div>
+
+                    <div class="panel-section">
+                        <h3>Upload Scientific Papers</h3>
+                        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                            <div class="upload-icon">📄</div>
+                            <div class="upload-text">Drag & drop PDF files here, or click to browse</div>
+                            <div class="upload-hint">Only PDF files are accepted</div>
+                        </div>
+                        <input type="file" id="fileInput" class="upload-input" accept=".pdf" multiple
+                            onchange="handleFileSelect(event)">
+                    </div>
+
+                    <div class="panel-section">
+                        <h3>Uploaded Papers</h3>
+                        <div id="papersTableContainer">
+                            <table class="papers-table">
+                                <thead>
+                                    <tr>
+                                        <th>Filename</th>
+                                        <th>Size</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="papersTableBody">
+                                    <tr>
+                                        <td colspan="3" class="papers-empty">Loading...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="panel-section">
+                        <div class="danger-zone">
+                            <h4>⚠️ Danger Zone</h4>
+                            <div class="danger-actions">
+                                <button class="btn-danger btn-small" id="purgePapersBtn">
+                                    Delete All Papers
+                                </button>
+                                <button class="btn-danger btn-small" id="purgeDatabaseBtn">
+                                    Clear Vector Database
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="main-card">
             <div class="error" id="error"></div>
 
             <div class="input-group">
                 <label for="question">Your Question</label>
                 <textarea id="question" aria-label="Enter your research question in any language"
-                    placeholder="मधुमेह का इलाज क्या है? | What is the treatment for diabetes? | நீரிழிவு நோய்க்கான சிகிச்சை என்ன?"></textarea>
+                    placeholder="Example: What is the treatment for diabetes?"></textarea>
             </div>
 
             <div class="controls">
@@ -443,35 +822,35 @@
             <h2>Try an example</h2>
             <div class="example-grid">
                 <div class="example-card" onclick="setExample('मधुमेह का इलाज क्या है?')" role="button" tabindex="0"
-                    onkeypress="if(event.key==='Enter')setExample('मधुमेह का इलाज क्या है?')">
+                    onkeypress="handleExampleKey(event, 'मधुमेह का इलाज क्या है?')">
                     <div class="example-lang">Hindi</div>
                     <div class="example-text">मधुमेह का इलाज क्या है?</div>
                 </div>
                 <div class="example-card"
                     onclick="setExample('What are the effects of climate change on biodiversity?')" role="button"
                     tabindex="0"
-                    onkeypress="if(event.key==='Enter')setExample('What are the effects of climate change on biodiversity?')">
+                    onkeypress="handleExampleKey(event, 'What are the effects of climate change on biodiversity?')">
                     <div class="example-lang">English</div>
                     <div class="example-text">What are the effects of climate change on biodiversity?</div>
                 </div>
                 <div class="example-card" onclick="setExample('நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')" role="button"
-                    tabindex="0" onkeypress="if(event.key==='Enter')setExample('நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
+                    tabindex="0" onkeypress="handleExampleKey(event, 'நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
                     <div class="example-lang">Tamil</div>
                     <div class="example-text">நீரிழிவு நோய்க்கான சிகிச்சை என்ன?</div>
                 </div>
                 <div class="example-card" onclick="setExample('কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')" role="button"
-                    tabindex="0" onkeypress="if(event.key==='Enter')setExample('কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')">
+                    tabindex="0" onkeypress="handleExampleKey(event, 'কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')">
                     <div class="example-lang">Bengali</div>
                     <div class="example-text">কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?</div>
                 </div>
                 <div class="example-card" onclick="setExample('డయాబెటిస్ చికిత్స ఏమిటి?')" role="button" tabindex="0"
-                    onkeypress="if(event.key==='Enter')setExample('డయాబెటిస్ చికిత్స ఏమిటి?')">
+                    onkeypress="handleExampleKey(event, 'డయాబెటిస్ చికిత్స ఏమిటి?')">
                     <div class="example-lang">Telugu</div>
                     <div class="example-text">డయాబెటిస్ చికిత్స ఏమిటి?</div>
                 </div>
                 <div class="example-card" onclick="setExample('¿Cuáles son los últimos avances en energía renovable?')"
                     role="button" tabindex="0"
-                    onkeypress="if(event.key==='Enter')setExample('¿Cuáles son los últimos avances en energía renovable?')">
+                    onkeypress="handleExampleKey(event, '¿Cuáles son los últimos avances en energía renovable?')">
                     <div class="example-lang">Spanish</div>
                     <div class="example-text">¿Cuáles son los últimos avances en energía renovable?</div>
                 </div>
@@ -484,11 +863,20 @@
     </div>
 
     <script>
+        // NOTE: Adjust this URL if your backend runs on a different port (e.g., http://localhost:8000)
         const API_URL = window.location.origin;
+        // const API_URL = "http://localhost:8000"; 
 
         function setExample(text) {
             document.getElementById('question').value = text;
             document.getElementById('question').focus();
+        }
+
+        function handleExampleKey(event, text) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setExample(text);
+            }
         }
 
         async function askQuestion() {
@@ -537,17 +925,17 @@
 
         function displayResult(data) {
             // Language badge
-            document.getElementById('languageBadge').textContent = data.language_name;
+            document.getElementById('languageBadge').textContent = data.language_name || 'Unknown';
 
             // Answer
-            document.getElementById('answer').textContent = data.answer;
+            document.getElementById('answer').textContent = data.answer || 'No answer provided.';
 
             // Citations
             if (data.citations && data.citations.length > 0) {
                 const citationsHtml = data.citations.map(cite => `
                     <div class="citation">
-                        <span class="citation-number">[${cite.number}]</span>
-                        ${cite.title} - ${cite.section}
+                        <span class="citation-number">[${cite.number || '?'}]</span>
+                        ${escapeHtml(cite.title)} - ${escapeHtml(cite.section)}
                     </div>
                 `).join('');
 
@@ -558,9 +946,9 @@
             }
 
             // Stats
-            document.getElementById('processingTime').textContent =
-                `${data.processing_time.toFixed(2)}s`;
-            document.getElementById('chunksUsed').textContent = data.chunks_used;
+            const time = data.processing_time ? data.processing_time.toFixed(2) : "0.00";
+            document.getElementById('processingTime').textContent = `${time}s`;
+            document.getElementById('chunksUsed').textContent = data.chunks_used || 0;
 
             // Show result
             document.getElementById('result').classList.add('active');
@@ -581,7 +969,276 @@
                 askQuestion();
             }
         });
+
+        // ====================================================================
+        // Document Management Functions
+        // ====================================================================
+
+        let pendingPurgeType = null;
+
+        function toggleManagementPanel() {
+            const panel = document.getElementById('managementPanel');
+            panel.classList.toggle('open');
+            // If opening, refresh data
+            if (panel.classList.contains('open')) {
+                loadDocumentStats();
+                loadPapersList();
+            }
+        }
+
+        async function loadDocumentStats() {
+            try {
+                // Load papers count
+                const papersRes = await fetch(`${API_URL}/papers`);
+                if (papersRes.ok) {
+                    const papers = await papersRes.json();
+                    document.getElementById('paperCount').textContent = papers.length;
+                }
+
+                // Load chunks count
+                const statsRes = await fetch(`${API_URL}/stats`);
+                if (statsRes.ok) {
+                    const stats = await statsRes.json();
+                    document.getElementById('chunkCount').textContent = stats.document_count;
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadPapersList() {
+            const tbody = document.getElementById('papersTableBody');
+
+            try {
+                const response = await fetch(`${API_URL}/papers`);
+                if (!response.ok) throw new Error("Failed to fetch papers");
+
+                const papers = await response.json();
+
+                if (papers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">No papers uploaded yet. Upload PDFs to get started!</td></tr>';
+                    return;
+                }
+
+                // Use data attributes to store filenames safely to avoid quoting bugs
+                tbody.innerHTML = papers.map(paper => {
+                    const safeId = sanitizeId(paper.filename);
+                    return `
+                    <tr>
+                        <td>${escapeHtml(paper.filename)}</td>
+                        <td>${paper.size_mb ? paper.size_mb.toFixed(2) : '?'} MB</td>
+                        <td>
+                            <button class="btn-success btn-small" 
+                                    data-filename="${escapeHtmlAttr(paper.filename)}"
+                                    onclick="triggerIngest(this)" 
+                                    id="ingest-${safeId}">
+                                Ingest
+                            </button>
+                        </td>
+                    </tr>
+                `}).join('');
+            } catch (error) {
+                tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">Error loading papers or connecting to API</td></tr>';
+                console.error('Error loading papers:', error);
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function escapeHtmlAttr(text) {
+            if (!text) return '';
+            return text.replace(/"/g, '&quot;');
+        }
+
+        function sanitizeId(filename) {
+            // Replace non-alphanumeric characters with underscores
+            return filename.replace(/[^a-zA-Z0-9]/g, '_');
+        }
+
+        // Drag and Drop Upload
+        const uploadZone = document.getElementById('uploadZone');
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+            if (files.length > 0) {
+                uploadFiles(files);
+            } else {
+                showToast('Only PDF files are allowed', 'error');
+            }
+        });
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            if (files.length > 0) {
+                uploadFiles(files);
+            }
+            event.target.value = ''; // Reset input
+        }
+
+        async function uploadFiles(files) {
+            for (const file of files) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch(`${API_URL}/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'Upload failed');
+                    }
+
+                    const result = await response.json();
+                    showToast(`Uploaded: ${result.filename}`, 'success');
+                } catch (error) {
+                    showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
+                }
+            }
+            loadDocumentStats();
+            loadPapersList();
+        }
+
+        // Wrapper function to handle the button click safely
+        function triggerIngest(btn) {
+            const filename = btn.getAttribute('data-filename');
+            ingestPaper(filename, btn);
+        }
+
+        async function ingestPaper(filename, btn) {
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
+
+            try {
+                const response = await fetch(`${API_URL}/ingest`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pdf_path: filename })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Ingestion failed');
+                }
+
+                const result = await response.json();
+                showToast(`Ingested ${result.chunks_ingested} chunks from ${filename}`, 'success');
+                btn.textContent = '✓ Done';
+                btn.classList.remove('btn-success');
+                btn.style.background = '#334155';
+                loadDocumentStats();
+            } catch (error) {
+                showToast(`Failed to ingest: ${error.message}`, 'error');
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+
+        function showPurgeModal(type) {
+            pendingPurgeType = type;
+            const modal = document.getElementById('purgeModal');
+            const title = document.getElementById('purgeModalTitle');
+            const message = document.getElementById('purgeModalMessage');
+
+            if (type === 'papers') {
+                title.textContent = 'Delete All Papers?';
+                message.textContent = 'This will permanently delete all uploaded PDF files. This action cannot be undone.';
+            } else {
+                title.textContent = 'Clear Vector Database?';
+                message.textContent = 'This will delete all indexed chunks from the database. You will need to re-ingest papers. This action cannot be undone.';
+            }
+
+            modal.classList.add('active');
+        }
+
+        function hidePurgeModal() {
+            document.getElementById('purgeModal').classList.remove('active');
+            pendingPurgeType = null;
+        }
+
+        async function confirmPurge() {
+            if (!pendingPurgeType) return;
+
+            const endpoint = pendingPurgeType === 'papers' ? '/purge/papers' : '/purge/database';
+
+            try {
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Purge failed');
+                }
+
+                const result = await response.json();
+                showToast(result.message, 'success');
+                loadDocumentStats();
+                loadPapersList();
+            } catch (error) {
+                showToast(`Purge failed: ${error.message}`, 'error');
+            }
+
+            hidePurgeModal();
+        }
+
+        // Toast Notifications
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Load stats on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDocumentStats();
+            // We also try to load papers immediately
+            loadPapersList();
+
+            // Attach purge button event listeners
+            document.getElementById('purgePapersBtn').addEventListener('click', () => showPurgeModal('papers'));
+            document.getElementById('purgeDatabaseBtn').addEventListener('click', () => showPurgeModal('database'));
+        });
     </script>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="modal-overlay" id="purgeModal">
+        <div class="modal">
+            <h3 id="purgeModalTitle">Confirm Action</h3>
+            <p id="purgeModalMessage">Are you sure you want to proceed?</p>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hidePurgeModal()">Cancel</button>
+                <button class="btn-danger" onclick="confirmPurge()">Delete</button>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

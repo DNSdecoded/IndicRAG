@@ -4,6 +4,7 @@ Production-ready REST API with authentication, validation, and monitoring.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Security, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -190,8 +191,9 @@ async def query_question(
         if top_k is not None:
             top_k = max(1, min(top_k, 20))  # Clamp to [1, 20]
         
-        # Process query
-        result = rag.answer_question(
+        # Process query (run in thread pool to avoid blocking event loop)
+        result = await run_in_threadpool(
+            rag.answer_question,
             user_query=request.question,
             strategy=request.strategy,
             top_k=top_k
@@ -270,8 +272,9 @@ async def ingest_document(
         
         logger.info(f"Ingesting document: {pdf_path}")
         
-        # Ingest the PDF
-        num_chunks = ingest_module.ingest_pdf(
+        # Ingest the PDF (run in thread pool to avoid blocking event loop)
+        num_chunks = await run_in_threadpool(
+            ingest_module.ingest_pdf,
             pdf_path=str(pdf_path),
             paper_id=pdf_path.stem
         )
@@ -315,6 +318,176 @@ async def get_stats(authenticated: bool = Depends(verify_api_key)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting stats: {str(e)}"
+        )
+
+
+# ============================================================================
+# Document Management Endpoints
+# ============================================================================
+
+from fastapi import UploadFile, File
+import shutil
+
+
+class PaperInfo(BaseModel):
+    """Information about an uploaded paper."""
+    filename: str
+    size_bytes: int
+    size_mb: float
+
+
+class UploadResponse(BaseModel):
+    """Response model for file upload."""
+    status: str
+    filename: str
+    size_bytes: int
+    message: str
+
+
+class PurgeResponse(BaseModel):
+    """Response model for purge operations."""
+    status: str
+    deleted_count: int
+    message: str
+
+
+@app.post("/upload", response_model=UploadResponse, tags=["Management"])
+async def upload_pdf(
+    file: UploadFile = File(...),
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Upload a PDF file to the papers directory.
+    
+    The file will be saved but NOT automatically ingested.
+    Use the /ingest endpoint to add it to the vector store.
+    """
+    # Validate file type
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF files are allowed"
+        )
+    
+    # Sanitize filename
+    safe_filename = Path(file.filename).name
+    destination = config.PAPERS_DIR / safe_filename
+    
+    try:
+        # Save uploaded file
+        with open(destination, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        file_size = destination.stat().st_size
+        logger.info(f"Uploaded file: {safe_filename} ({file_size} bytes)")
+        
+        return UploadResponse(
+            status="success",
+            filename=safe_filename,
+            size_bytes=file_size,
+            message=f"File uploaded successfully. Use /ingest to add to vector store."
+        )
+    
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading file: {str(e)}"
+        )
+
+
+@app.get("/papers", response_model=List[PaperInfo], tags=["Management"])
+async def list_papers(authenticated: bool = Depends(verify_api_key)):
+    """
+    List all PDF files in the papers directory.
+    """
+    try:
+        papers = []
+        for pdf_file in config.PAPERS_DIR.glob("*.pdf"):
+            size = pdf_file.stat().st_size
+            papers.append(PaperInfo(
+                filename=pdf_file.name,
+                size_bytes=size,
+                size_mb=round(size / (1024 * 1024), 2)
+            ))
+        
+        return sorted(papers, key=lambda p: p.filename)
+    
+    except Exception as e:
+        logger.error(f"Error listing papers: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error listing papers: {str(e)}"
+        )
+
+
+@app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
+async def purge_papers(authenticated: bool = Depends(verify_api_key)):
+    """
+    Delete all PDF files from the papers directory.
+    
+    WARNING: This action cannot be undone!
+    """
+    try:
+        pdf_files = list(config.PAPERS_DIR.glob("*.pdf"))
+        deleted_count = 0
+        
+        for pdf_file in pdf_files:
+            try:
+                pdf_file.unlink()
+                deleted_count += 1
+                logger.info(f"Deleted paper: {pdf_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete {pdf_file.name}: {e}")
+        
+        return PurgeResponse(
+            status="success",
+            deleted_count=deleted_count,
+            message=f"Deleted {deleted_count} PDF file(s)"
+        )
+    
+    except Exception as e:
+        logger.error(f"Error purging papers: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error purging papers: {str(e)}"
+        )
+
+
+@app.delete("/purge/database", response_model=PurgeResponse, tags=["Management"])
+async def purge_database(authenticated: bool = Depends(verify_api_key)):
+    """
+    Clear the vector database (delete all indexed chunks).
+    
+    WARNING: This action cannot be undone!
+    """
+    try:
+        import vector_store
+        
+        # Get current count before purge
+        collection = vector_store.get_or_create_collection()
+        previous_count = collection.count()
+        
+        # Delete and recreate collection
+        vector_store.delete_collection(config.COLLECTION_NAME)
+        
+        # Recreate empty collection
+        vector_store.get_or_create_collection()
+        
+        logger.info(f"Purged database: {previous_count} chunks deleted")
+        
+        return PurgeResponse(
+            status="success",
+            deleted_count=previous_count,
+            message=f"Deleted {previous_count} chunks from vector database"
+        )
+    
+    except Exception as e:
+        logger.error(f"Error purging database: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error purging database: {str(e)}"
         )
 
 
