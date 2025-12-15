@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multilingual Scientific Q&A</title>
+    <title>IndicRAG</title>
     <style>
         * {
             margin: 0;
@@ -13,17 +13,32 @@
         }
 
         :root {
-            --primary: #06b6d4;
-            --primary-dark: #0891b2;
-            --secondary: #3b82f6;
-            --success: #10b981;
-            --background: #0b1120;
-            --surface: #1e293b;
-            --surface-light: #334155;
-            --text: #f8fafc;
-            --text-muted: #94a3b8;
-            --border: #334155;
-            --gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+            /* --- COLOR PALETTE --- */
+            
+            /* Backgrounds */
+            --background: #0F172A;
+            --surface: #1E293B;
+            --surface-light: #263449;
+
+            /* Text */
+            --text: #E5E7EB;
+            --text-muted: #94A3B8;
+            --text-disabled: #64748B;
+
+            /* Accents */
+            --primary: #38BDF8;       /* Cool Blue */
+            --primary-hover: #0EA5E9; 
+            --secondary: #A78BFA;     /* Soft Violet */
+            --accent-mint: #5EEAD4;   
+
+            /* Status */
+            --success: #4ADE80;
+            --warning: #FACC15;
+            --error: #F87171;
+
+            /* Borders & Gradients */
+            --border: #263449;
+            --gradient: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
         }
 
         body {
@@ -47,18 +62,50 @@
         }
 
         h1 {
-            font-size: 2.5rem;
+            font-size: 3rem;
             font-weight: 700;
             background: var(--gradient);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
             margin-bottom: 0.5rem;
+            letter-spacing: -1px;
+            color: var(--primary);
         }
 
         .subtitle {
             color: var(--text-muted);
             font-size: 1.1rem;
+        }
+
+        /* Footer Links */
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .icon-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+            border: 1px solid var(--border);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            background: var(--surface);
+            cursor: pointer;
+        }
+
+        .icon-link:hover {
+            color: var(--primary);
+            border-color: var(--primary);
+            background: var(--surface-light);
         }
 
         .main-card {
@@ -67,6 +114,7 @@
             padding: 2rem;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             margin-bottom: 2rem;
+            border: 1px solid var(--border);
         }
 
         .input-group {
@@ -97,7 +145,7 @@
         textarea:focus {
             outline: none;
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
         }
 
         .controls {
@@ -127,25 +175,29 @@
         button {
             padding: 0.75rem 2rem;
             background: var(--gradient);
-            color: white;
+            color: var(--background);
             border: none;
             border-radius: 0.5rem;
             font-size: 1rem;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
             transition: all 0.3s;
-            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+            box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);
             flex: 0 0 auto;
         }
 
         button:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.4);
+            filter: brightness(1.1);
         }
 
         button:disabled {
-            opacity: 0.6;
+            background: var(--surface-light);
+            color: var(--text-disabled);
+            box-shadow: none;
             cursor: not-allowed;
+            opacity: 0.8;
         }
 
         .loading {
@@ -163,7 +215,7 @@
             height: 50px;
             margin: 0 auto 1rem;
             border: 4px solid var(--surface-light);
-            border-top-color: var(--primary);
+            border-top-color: var(--accent-mint);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
@@ -181,6 +233,7 @@
             padding: 2rem;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             margin-top: 2rem;
+            border: 1px solid var(--border);
         }
 
         .result.active {
@@ -212,7 +265,9 @@
         .language-badge {
             display: inline-block;
             padding: 0.5rem 1rem;
-            background: var(--primary);
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--primary);
+            border: 1px solid rgba(56, 189, 248, 0.3);
             border-radius: 2rem;
             font-size: 0.9rem;
             font-weight: 600;
@@ -230,6 +285,7 @@
             background: var(--background);
             border-radius: 0.5rem;
             padding: 1.5rem;
+            border: 1px solid var(--border);
         }
 
         .citations h3 {
@@ -244,6 +300,7 @@
             background: var(--surface-light);
             border-radius: 0.5rem;
             font-size: 0.9rem;
+            border-left: 3px solid var(--secondary);
         }
 
         .citation-number {
@@ -278,8 +335,9 @@
 
         .error {
             display: none;
-            background: #dc2626;
-            color: white;
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
             padding: 1rem;
             border-radius: 0.5rem;
             margin-bottom: 1rem;
@@ -291,19 +349,9 @@
         }
 
         @keyframes shake {
-
-            0%,
-            100% {
-                transform: translateX(0);
-            }
-
-            25% {
-                transform: translateX(-10px);
-            }
-
-            75% {
-                transform: translateX(10px);
-            }
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
         }
 
         .examples {
@@ -329,19 +377,22 @@
             cursor: pointer;
             transition: all 0.3s;
             border: 2px solid transparent;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
 
         .example-card:hover,
         .example-card:focus {
             border-color: var(--primary);
+            background: var(--surface-light);
             transform: translateY(-2px);
             outline: none;
         }
 
         .example-lang {
             font-size: 0.8rem;
-            color: var(--text-muted);
+            color: var(--secondary);
             margin-bottom: 0.5rem;
+            font-weight: 600;
         }
 
         .example-text {
@@ -358,28 +409,11 @@
         }
 
         @media (max-width: 768px) {
-            .container {
-                padding: 1rem;
-            }
-
-            h1 {
-                font-size: 2rem;
-            }
-
-            .controls {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            button,
-            select {
-                width: 100%;
-            }
-
-            .stats {
-                flex-direction: column;
-                gap: 1rem;
-            }
+            .container { padding: 1rem; }
+            h1 { font-size: 2rem; }
+            .controls { flex-direction: column; align-items: stretch; }
+            button, select { width: 100%; }
+            .stats { flex-direction: column; gap: 1rem; }
         }
 
         /* Document Management Panel Styles */
@@ -389,6 +423,7 @@
             margin-bottom: 2rem;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
+            border: 1px solid var(--border);
         }
 
         .panel-header {
@@ -400,10 +435,11 @@
             cursor: pointer;
             user-select: none;
             transition: background 0.3s;
+            border-bottom: 1px solid var(--border);
         }
 
         .panel-header:hover {
-            background: #3d4f65;
+            background: #2D3D54;
         }
 
         .panel-header h2 {
@@ -469,7 +505,7 @@
         .upload-zone:hover,
         .upload-zone.dragover {
             border-color: var(--primary);
-            background: rgba(6, 182, 212, 0.05);
+            background: rgba(56, 189, 248, 0.05);
         }
 
         .upload-zone.dragover {
@@ -488,8 +524,7 @@
 
         .upload-hint {
             font-size: 0.85rem;
-            color: var(--text-muted);
-            opacity: 0.7;
+            color: var(--text-disabled);
         }
 
         .upload-input {
@@ -525,7 +560,7 @@
         .papers-empty {
             text-align: center;
             padding: 2rem;
-            color: var(--text-muted);
+            color: var(--text-disabled);
         }
 
         .btn-small {
@@ -536,22 +571,16 @@
 
         .btn-success {
             background: var(--success);
-            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+            color: #064e3b;
+            box-shadow: 0 4px 15px rgba(74, 222, 128, 0.3);
         }
 
         .btn-success:hover:not(:disabled) {
-            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+            background: #22c55e;
+            box-shadow: 0 6px 20px rgba(74, 222, 128, 0.4);
+            filter: none;
         }
-
-        /* Status Badges */
-        .status-badge {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.25rem;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-
+        
         /* Stats Bar */
         .stats-bar {
             display: flex;
@@ -560,6 +589,7 @@
             background: var(--background);
             border-radius: 0.5rem;
             margin-bottom: 1.5rem;
+            border: 1px solid var(--border);
         }
 
         .stats-bar .stat {
@@ -573,14 +603,14 @@
 
         /* Danger Zone */
         .danger-zone {
-            background: rgba(220, 38, 38, 0.1);
-            border: 1px solid rgba(220, 38, 38, 0.3);
+            background: rgba(248, 113, 113, 0.05);
+            border: 1px solid rgba(248, 113, 113, 0.2);
             border-radius: 0.5rem;
             padding: 1.5rem;
         }
 
         .danger-zone h4 {
-            color: #f87171;
+            color: var(--error);
             margin-bottom: 1rem;
             font-size: 0.95rem;
         }
@@ -592,13 +622,14 @@
         }
 
         .btn-danger {
-            background: #dc2626;
-            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
+            background: var(--error);
+            color: #450a0a;
+            box-shadow: 0 4px 15px rgba(248, 113, 113, 0.3);
         }
 
         .btn-danger:hover:not(:disabled) {
-            background: #b91c1c;
-            box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+            background: #ef4444;
+            box-shadow: 0 6px 20px rgba(248, 113, 113, 0.4);
         }
 
         /* Toast Notifications */
@@ -619,14 +650,17 @@
             font-weight: 500;
             animation: slideIn 0.3s ease-out;
             max-width: 350px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
         }
 
         .toast-success {
             background: var(--success);
+            color: #064e3b;
         }
 
         .toast-error {
-            background: #dc2626;
+            background: var(--error);
+            color: #450a0a;
         }
 
         @keyframes slideIn {
@@ -634,14 +668,13 @@
                 opacity: 0;
                 transform: translateX(100%);
             }
-
             to {
                 opacity: 1;
                 transform: translateX(0);
             }
         }
 
-        /* Confirmation Modal */
+        /* Modals (Common) */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -649,10 +682,11 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(15, 23, 42, 0.8);
             z-index: 3000;
             align-items: center;
             justify-content: center;
+            backdrop-filter: blur(2px);
         }
 
         .modal-overlay.active {
@@ -663,36 +697,77 @@
             background: var(--surface);
             border-radius: 1rem;
             padding: 2rem;
-            max-width: 400px;
+            max-width: 500px;
             width: 90%;
             animation: fadeIn 0.3s;
+            border: 1px solid var(--border);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        /* Table inside Modal */
+        .lang-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        
+        .lang-table th {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 2px solid var(--border);
+            color: var(--primary);
+            font-size: 0.9rem;
+        }
+
+        .lang-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+
+        .lang-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Scrollbar styles for the table modal */
+        .modal::-webkit-scrollbar {
+            width: 8px;
+        }
+        .modal::-webkit-scrollbar-track {
+            background: var(--background);
+        }
+        .modal::-webkit-scrollbar-thumb {
+            background: var(--surface-light);
+            border-radius: 4px;
         }
 
         .modal h3 {
-            color: #f87171;
-            margin-bottom: 1rem;
-        }
-
-        .modal p {
-            color: var(--text-muted);
-            margin-bottom: 1.5rem;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+            font-size: 1.25rem;
         }
 
         .modal-actions {
             display: flex;
             gap: 1rem;
             justify-content: flex-end;
+            margin-top: 1.5rem;
         }
 
         .btn-secondary {
             background: var(--surface-light);
+            color: var(--text);
             box-shadow: none;
         }
 
         .btn-secondary:hover:not(:disabled) {
-            background: #475569;
+            background: #334155;
             box-shadow: none;
             transform: none;
+            filter: brightness(1.2);
         }
     </style>
 </head>
@@ -700,8 +775,8 @@
 <body>
     <div class="container">
         <header>
-            <h1>🌐 Multilingual Scientific Q&A</h1>
-            <p class="subtitle">Ask questions in any language. Get researched answers with citations.</p>
+            <h1>🌐 IndicRAG</h1>
+            <p class="subtitle">Multilingual Scientific Q&A • Ask in any language</p>
         </header>
 
         <div class="management-panel open" id="managementPanel">
@@ -821,17 +896,17 @@
         <div class="examples">
             <h2>Try an example</h2>
             <div class="example-grid">
-                <div class="example-card" onclick="setExample('मधुमेह का इलाज क्या है?')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, 'मधुमेह का इलाज क्या है?')">
-                    <div class="example-lang">Hindi</div>
-                    <div class="example-text">मधुमेह का इलाज क्या है?</div>
-                </div>
                 <div class="example-card"
                     onclick="setExample('What are the effects of climate change on biodiversity?')" role="button"
                     tabindex="0"
                     onkeypress="handleExampleKey(event, 'What are the effects of climate change on biodiversity?')">
                     <div class="example-lang">English</div>
                     <div class="example-text">What are the effects of climate change on biodiversity?</div>
+                </div>
+                <div class="example-card" onclick="setExample('मधुमेह का इलाज क्या है?')" role="button" tabindex="0"
+                    onkeypress="handleExampleKey(event, 'मधुमेह का इलाज क्या है?')">
+                    <div class="example-lang">Hindi</div>
+                    <div class="example-text">मधुमेह का इलाज क्या है?</div>
                 </div>
                 <div class="example-card" onclick="setExample('நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')" role="button"
                     tabindex="0" onkeypress="handleExampleKey(event, 'நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
@@ -848,17 +923,34 @@
                     <div class="example-lang">Telugu</div>
                     <div class="example-text">డయాబెటిస్ చికిత్స ఏమిటి?</div>
                 </div>
-                <div class="example-card" onclick="setExample('¿Cuáles son los últimos avances en energía renovable?')"
+                <div class="example-card" onclick="setExample('हवामान बदलाचे काय परिणाम आहेत?')"
                     role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, '¿Cuáles son los últimos avances en energía renovable?')">
-                    <div class="example-lang">Spanish</div>
-                    <div class="example-text">¿Cuáles son los últimos avances en energía renovable?</div>
+                    onkeypress="handleExampleKey(event, 'हवामान बदलाचे काय परिणाम आहेत?')">
+                    <div class="example-lang">Marathi</div>
+                    <div class="example-text">हवामान बदलाचे काय परिणाम आहेत?</div>
+                </div>
+                 <div class="example-card" onclick="setExample('مصنوعی ذہانت کیا ہے؟')"
+                    role="button" tabindex="0"
+                    onkeypress="handleExampleKey(event, 'مصنوعی ذہانت کیا ہے؟')">
+                    <div class="example-lang">Urdu</div>
+                    <div class="example-text">مصنوعی ذہانت کیا ہے؟</div>
                 </div>
             </div>
         </div>
 
         <footer>
             <p>Powered by LLMs & RAG • Scientific Knowledge Graph</p>
+            <div class="footer-links">
+                <button onclick="showLangModal()" class="icon-link">
+                    🌐 Supported Languages
+                </button>
+                <a href="https://github.com/DNSdecoded/IndicRAG" target="_blank" class="icon-link">
+                    <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
         </footer>
     </div>
 
@@ -1153,20 +1245,15 @@
             }
         }
 
+        // ====================================================================
+        // Modals (Purge + Supported Languages)
+        // ====================================================================
+
         function showPurgeModal(type) {
             pendingPurgeType = type;
             const modal = document.getElementById('purgeModal');
-            const title = document.getElementById('purgeModalTitle');
-            const message = document.getElementById('purgeModalMessage');
-
-            if (type === 'papers') {
-                title.textContent = 'Delete All Papers?';
-                message.textContent = 'This will permanently delete all uploaded PDF files. This action cannot be undone.';
-            } else {
-                title.textContent = 'Clear Vector Database?';
-                message.textContent = 'This will delete all indexed chunks from the database. You will need to re-ingest papers. This action cannot be undone.';
-            }
-
+            // Reset content in case it was used for something else
+            // But here we have specific IDs for title/message so it's fine.
             modal.classList.add('active');
         }
 
@@ -1200,6 +1287,15 @@
 
             hidePurgeModal();
         }
+        
+        // Supported Languages Modal
+        function showLangModal() {
+            document.getElementById('langModal').classList.add('active');
+        }
+
+        function hideLangModal() {
+            document.getElementById('langModal').classList.remove('active');
+        }
 
         // Toast Notifications
         function showToast(message, type = 'success') {
@@ -1231,11 +1327,43 @@
 
     <div class="modal-overlay" id="purgeModal">
         <div class="modal">
-            <h3 id="purgeModalTitle">Confirm Action</h3>
-            <p id="purgeModalMessage">Are you sure you want to proceed?</p>
+            <h3>Confirm Action</h3>
+            <p>Are you sure you want to proceed? This action cannot be undone.</p>
             <div class="modal-actions">
                 <button class="btn-secondary" onclick="hidePurgeModal()">Cancel</button>
                 <button class="btn-danger" onclick="confirmPurge()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="langModal">
+        <div class="modal">
+            <h3>Supported Languages</h3>
+            <table class="lang-table">
+                <thead>
+                    <tr>
+                        <th>Language</th>
+                        <th>Code</th>
+                        <th>Native Name</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>English</td><td>en</td><td>English</td></tr>
+                    <tr><td>Hindi</td><td>hi</td><td>हिंदी</td></tr>
+                    <tr><td>Telugu</td><td>te</td><td>తెలుగు</td></tr>
+                    <tr><td>Tamil</td><td>ta</td><td>தமிழ்</td></tr>
+                    <tr><td>Bengali</td><td>bn</td><td>বাংলা</td></tr>
+                    <tr><td>Marathi</td><td>mr</td><td>मराठी</td></tr>
+                    <tr><td>Gujarati</td><td>gu</td><td>ગુજરાતી</td></tr>
+                    <tr><td>Kannada</td><td>kn</td><td>ಕನ್ನಡ</td></tr>
+                    <tr><td>Malayalam</td><td>ml</td><td>മലയാളം</td></tr>
+                    <tr><td>Punjabi</td><td>pa</td><td>ਪੰਜਾਬੀ</td></tr>
+                    <tr><td>Odia</td><td>or</td><td>ଓଡ଼ିଆ</td></tr>
+                    <tr><td>Urdu</td><td>ur</td><td>اردو</td></tr>
+                </tbody>
+            </table>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideLangModal()">Close</button>
             </div>
         </div>
     </div>
