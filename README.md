@@ -28,7 +28,7 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 * Cross-lingual semantic search with E5 embeddings
 
 ### 🤖 **LLM Integration**
-* Google Gemini 2.5 Flash integration
+* Google Gemini 3 Flash Preview integration
 * Configurable safety settings and generation parameters
 * Smart citation extraction from retrieved context
 * Empty collection handling with graceful degradation
@@ -37,7 +37,8 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 * Structured logging throughout (no `print()` statements)
 * Robust error handling with detailed error shapes
 * API key authentication with secure parsing
-* Health checks and monitoring endpoints
+* Health checks and **Prometheus metrics monitoring** (`/metrics`)
+* Ready for **HTTPS reverse proxy** (Nginx) and **Windows Service** deployment
 * Pydantic v2 validation and type safety
 * Safe directory creation with permission checks
 
@@ -248,12 +249,9 @@ python purge.py --all
 python purge.py --all --yes
 ```
 
-### Testing
+### Examples
 
 ```bash
-# Run integration tests
-python test_pipeline.py
-
 # Test with example queries
 python examples/example_query.py
 ```
@@ -275,16 +273,20 @@ multilingual-rag/
 ├── vector_store.py        # ChromaDB wrapper
 ├── start_server.py        # Server launcher with pre-flight checks
 ├── purge.py               # Cleanup utility (NEW!)
-├── test_pipeline.py       # Integration tests
+│
+├── deploy/                # Deployment configurations
+│   └── nginx.example.conf # Nginx reverse proxy template
 │
 ├── static/                # Web frontend
 │   └── index.html         # Modern Ocean UI
 │
 ├── docs/                  # Documentation
 │   ├── QUICKSTART.md
-│   ├── DEPLOYMENT.md
+│   ├── DEPLOY.md
 │   ├── ARCHITECTURE.md
 │   └── CONTRIBUTING.md
+│
+├── PRODUCTION.md          # Production deployment guide
 │
 ├── examples/              # Example scripts
 │   ├── example_ingest.py
@@ -320,7 +322,7 @@ MAX_CONTEXT_CHUNKS = 5
 MAX_CONTEXT_LENGTH = 4000
 
 # LLM
-LLM_MODEL_NAME = "gemini-2.5-flash"
+LLM_MODEL_NAME = "gemini-3-flash-preview"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 2048
 ```

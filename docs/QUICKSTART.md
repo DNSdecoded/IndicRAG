@@ -26,7 +26,7 @@ copy .env.example .env
 Edit `.env` and add your API key:
 ```
 LLM_API_KEY=AIzaSyYourActualAPIKeyHere
-LLM_MODEL_NAME=gemini-1.5-flash
+LLM_MODEL_NAME=gemini-3-flash-preview
 ```
 
 **Or use environment variable:**

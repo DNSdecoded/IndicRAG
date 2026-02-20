@@ -14,11 +14,6 @@ logger = logging.getLogger(__name__)
 # Global client cache
 _chroma_client = None
 
-# Global collection cache
-# NOTE: _collection stores the LAST USED collection. Test code should always use
-# the collection object returned by get_or_create_collection(), not this global.
-_collection = None
-
 
 def get_chroma_client() -> chromadb.Client:
     """
@@ -60,8 +55,6 @@ def get_or_create_collection(
     Returns:
         ChromaDB collection instance
     """
-    global _collection
-    
     if collection_name is None:
         collection_name = config.COLLECTION_NAME
     
@@ -76,7 +69,7 @@ def get_or_create_collection(
             pass  # Collection doesn't exist
     
     # Get or create collection
-    _collection = client.get_or_create_collection(
+    collection = client.get_or_create_collection(
         name=collection_name,
         metadata={
             "hnsw:space": config.DISTANCE_METRIC,
@@ -84,9 +77,9 @@ def get_or_create_collection(
         }
     )
     
-    logger.info(f"Collection '{collection_name}' ready. Current size: {_collection.count()}")
+    logger.info(f"Collection '{collection_name}' ready. Current size: {collection.count()}")
     
-    return _collection
+    return collection
 
 
 def add_documents(
@@ -112,8 +105,14 @@ def add_documents(
     # Convert embeddings to list of lists
     embeddings_list = embeddings.tolist()
     
-    # Add to collection
-    collection.add(
+    logger.info(f"Adding {len(ids)} chunks. Unique IDs: {len(set(ids))}")
+    if len(ids) != len(set(ids)):
+        from collections import Counter
+        duplicates = {k: v for k, v in Counter(ids).items() if v > 1}
+        logger.error(f"Duplicate IDs detected before upsert: {duplicates}")
+    
+    # Add to collection (upsert replaces existing, inserts new)
+    collection.upsert(
         documents=texts,
         embeddings=embeddings_list,
         metadatas=metadatas,
@@ -154,10 +153,14 @@ def search(
     # Convert embedding to list
     query_embedding_list = query_embedding.tolist()
     
+    actual_top_k = min(top_k, collection.count())
+    if actual_top_k == 0:
+        return {'ids': [], 'documents': [], 'metadatas': [], 'distances': []}
+    
     # Search
     results = collection.query(
         query_embeddings=[query_embedding_list],
-        n_results=top_k,
+        n_results=actual_top_k,
         where=filter_dict,
         include=["documents", "metadatas", "distances"]
     )
@@ -219,6 +222,18 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     
     return stats
 
+def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) -> int:
+    """
+    Delete all chunks for a specific paper.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+        
+    results = collection.get(where={'paper_id': paper_id})
+    if results and results.get('ids'):
+        collection.delete(ids=results['ids'])
+        return len(results['ids'])
+    return 0
 
 if __name__ == "__main__":
     # Test vector store functionality

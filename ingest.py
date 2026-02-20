@@ -3,7 +3,7 @@ Document ingestion pipeline for scientific papers.
 """
 
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import logging
 from tqdm import tqdm
 import pdf_utils
@@ -36,6 +36,12 @@ def ingest_paper(
     """
     if collection is None:
         collection = vector_store.get_or_create_collection()
+        
+    # Before embedding, check if paper already exists
+    existing = collection.get(where={'paper_id': paper_id}, limit=1)
+    if existing and existing.get('ids'):
+        logger.info(f'Paper {paper_id} already indexed, skipping')
+        return 0
     
     if metadata is None:
         metadata = {}
@@ -43,6 +49,7 @@ def ingest_paper(
     all_chunks = []
     all_metadata = []
     all_ids = []
+    chunk_counter = 0
     
     # Process each section
     for section_name, section_text in sections:
@@ -54,20 +61,22 @@ def ingest_paper(
         chunks = pdf_utils.simple_chunk(section_text)
         
         # Create metadata for each chunk
-        for i, chunk in enumerate(chunks):
-            chunk_id = f"{paper_id}_{section_name}_{i}"
+        for chunk in chunks:
+            safe_section = section_name.replace(' ', '_').lower()
+            chunk_id = f"{paper_id}_{safe_section}_{chunk_counter}"
             
             chunk_metadata = {
                 "paper_id": paper_id,
                 "title": title,
                 "section": section_name,
-                "chunk_index": i,
+                "chunk_index": chunk_counter,
                 **metadata  # Add any additional metadata
             }
             
             all_chunks.append(chunk)
             all_metadata.append(chunk_metadata)
             all_ids.append(chunk_id)
+            chunk_counter += 1
     
     if not all_chunks:
         logger.warning(f"No chunks created for paper {paper_id}")
@@ -94,7 +103,7 @@ def ingest_pdf(
     paper_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     collection=None
-) -> int:
+) -> Tuple[int, str]:
     """
     Ingest a single PDF file into the vector store.
     
@@ -105,7 +114,7 @@ def ingest_pdf(
         collection: ChromaDB collection (uses default if None)
         
     Returns:
-        Number of chunks ingested, or 0 if failed
+        Tuple of (Number of chunks ingested, title extraction result)
     """
     # Generate paper_id from filename if not provided
     if paper_id is None:
@@ -117,7 +126,7 @@ def ingest_pdf(
     
     if result is None:
         logger.error(f"Failed to process PDF: {pdf_path}")
-        return 0
+        return 0, ""
     
     # Ingest the paper
     num_chunks = ingest_paper(
@@ -129,7 +138,7 @@ def ingest_pdf(
     )
     
     logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
-    return num_chunks
+    return num_chunks, result['title']
 
 
 def ingest_directory(
@@ -186,7 +195,7 @@ def ingest_directory(
             metadata = metadata_fn(str(pdf_path)) if metadata_fn else None
             
             # Ingest PDF
-            num_chunks = ingest_pdf(
+            num_chunks, title = ingest_pdf(
                 pdf_path=str(pdf_path),
                 metadata=metadata,
                 collection=collection

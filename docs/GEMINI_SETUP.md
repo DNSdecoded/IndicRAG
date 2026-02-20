@@ -21,7 +21,7 @@
 2. Edit `.env` and add your API key:
    ```
    LLM_API_KEY=AIzaSyYourActualAPIKeyHere
-   LLM_MODEL_NAME=gemini-1.5-flash
+   LLM_MODEL_NAME=gemini-3-flash-preview
    ```
 
 **Option B: Using environment variable**
@@ -50,7 +50,7 @@ pip install -r requirements.txt
 ### Step 4: Test the Setup (1 min)
 
 ```bash
-python -c "import google.generativeai as genai; import os; genai.configure(api_key=os.getenv('LLM_API_KEY')); model = genai.GenerativeModel('gemini-1.5-flash'); print(model.generate_content('Hello!').text)"
+python -c "import google.generativeai as genai; import os; genai.configure(api_key=os.getenv('LLM_API_KEY')); model = genai.GenerativeModel('gemini-3-flash-preview'); print(model.generate_content('Hello!').text)"
 ```
 
 If this prints a response, you're all set! ✅
@@ -59,7 +59,7 @@ If this prints a response, you're all set! ✅
 
 ## 📊 Gemini Model Options
 
-### gemini-1.5-flash (Recommended)
+### gemini-3-flash-preview (Recommended)
 - **Speed**: ⚡ Very fast
 - **Cost**: 💰 Most affordable
 - **Quality**: ✅ Good for most use cases
@@ -81,7 +81,7 @@ If this prints a response, you're all set! ✅
 
 ## 💰 Pricing (as of Nov 2024)
 
-### gemini-1.5-flash
+### gemini-3-flash-preview
 - **Input**: $0.075 per 1M tokens
 - **Output**: $0.30 per 1M tokens
 - **Free tier**: 15 requests/minute, 1M tokens/day
@@ -92,7 +92,7 @@ If this prints a response, you're all set! ✅
 - **Free tier**: 2 requests/minute, 50 requests/day
 
 **Typical query cost** (with 5 chunks):
-- gemini-1.5-flash: ~$0.0001 per query
+- gemini-3-flash-preview: ~$0.0001 per query
 - gemini-1.5-pro: ~$0.002 per query
 
 ---
@@ -103,7 +103,7 @@ Edit `config.py` or set environment variables:
 
 ```python
 # Model selection
-LLM_MODEL_NAME = "gemini-1.5-flash"  # or "gemini-1.5-pro"
+LLM_MODEL_NAME = "gemini-3-flash-preview"  # or "gemini-1.5-pro"
 
 # Generation parameters
 LLM_MAX_TOKENS = 2048  # Maximum response length

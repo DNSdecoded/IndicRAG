@@ -36,6 +36,10 @@ app = FastAPI(
     redoc_url="/api/redoc"
 )
 
+# Prometheus Monitoring
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)
+
 # Mount static files directory
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
@@ -44,7 +48,12 @@ if STATIC_DIR.exists():
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=[
+        "http://localhost:8080", 
+        "http://localhost:8000",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8000"
+    ],  # Explicit origins instead of '*' when credentials=True
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -273,7 +282,7 @@ async def ingest_document(
         logger.info(f"Ingesting document: {pdf_path}")
         
         # Ingest the PDF (run in thread pool to avoid blocking event loop)
-        num_chunks = await run_in_threadpool(
+        num_chunks, title = await run_in_threadpool(
             ingest_module.ingest_pdf,
             pdf_path=str(pdf_path),
             paper_id=pdf_path.stem
@@ -285,7 +294,7 @@ async def ingest_document(
             status="success",
             chunks_ingested=num_chunks,
             paper_id=pdf_path.stem,
-            title=pdf_path.stem,  # Will be extracted in actual implementation
+            title=title,
             processing_time=processing_time
         )
     
@@ -374,9 +383,17 @@ async def upload_pdf(
     destination = config.PAPERS_DIR / safe_filename
     
     try:
+        MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+        
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File too large (max 50MB)"
+            )
+            
         # Save uploaded file
         with open(destination, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
         
         file_size = destination.stat().st_size

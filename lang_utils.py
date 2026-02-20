@@ -3,8 +3,14 @@ Language detection and mapping utilities.
 """
 
 import langdetect
+from langdetect import DetectorFactory
 from typing import Optional
+import logging
 import config
+
+DetectorFactory.seed = 0  # Make detection deterministic
+
+logger = logging.getLogger(__name__)
 
 
 def detect_language(text: str) -> Optional[str]:
@@ -17,12 +23,14 @@ def detect_language(text: str) -> Optional[str]:
     Returns:
         ISO 639-1 language code (e.g., 'hi', 'en', 'ta') or None if detection fails
     """
+    if len(text.strip()) < 15:
+        return 'en'  # Too short to detect reliably
     try:
         # langdetect returns ISO 639-1 codes
         lang_code = langdetect.detect(text)
         return lang_code
     except Exception as e:
-        print(f"Language detection failed: {e}")
+        logger.warning(f"Language detection failed: {e}")
         return None
 
 

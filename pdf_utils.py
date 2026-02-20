@@ -104,6 +104,14 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     current_chunk = ""
     
     for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            logger.warning("Empty or unparseable sentence detected, skipping.")
+            continue
+            
+        if len(sentence) > max_chars:
+            logger.warning(f"Sentence exceeds max_chars ({len(sentence)} > {max_chars}). It will be kept as an oversized chunk.")
+            
         # If adding this sentence would exceed max_chars, save current chunk
         if len(current_chunk) + len(sentence) > max_chars and current_chunk:
             if len(current_chunk) >= config.MIN_CHUNK_SIZE:
@@ -136,8 +144,8 @@ def extract_sections(text: str) -> List[Tuple[str, str]]:
     """
     sections = []
     
-    # Create regex pattern for section headers
-    header_pattern = r'\n\s*(' + '|'.join(config.SECTION_HEADERS) + r')\s*\n'
+    # Create regex pattern for section headers (must be exact lines)
+    header_pattern = r'\n[ \t]*(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*\n'
     
     # Find all section headers
     matches = list(re.finditer(header_pattern, text, re.IGNORECASE))
@@ -168,27 +176,37 @@ def extract_sections(text: str) -> List[Tuple[str, str]]:
     return sections
 
 
-def extract_title_from_text(text: str) -> Optional[str]:
+def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
     """
-    Attempt to extract the paper title from the beginning of the text.
+    Attempt to extract the paper title from the largest font size on the first page.
     
     Args:
-        text: Full text of the paper
+        pdf_path: Path to the PDF file
         
     Returns:
         Extracted title or None
     """
-    # Take first few lines
-    lines = text.split('\n')[:10]
-    
-    # Look for a line that looks like a title (longer than 20 chars, not all caps)
-    for line in lines:
-        line = line.strip()
-        if 20 < len(line) < 200 and not line.isupper():
-            # Check if it's not a common header
-            if not any(header in line.lower() for header in ['abstract', 'introduction', 'arxiv']):
-                return line
-    
+    try:
+        with fitz.open(pdf_path) as doc:
+            if len(doc) == 0:
+                return None
+            page = doc[0]
+            blocks = page.get_text('dict').get('blocks', [])
+            candidates = []
+            for b in blocks:
+                for line in b.get('lines', []):
+                    for span in line.get('spans', []):
+                        text = span.get('text', '').strip()
+                        size = span.get('size', 0)
+                        if text:
+                            candidates.append((size, text))
+            
+            candidates.sort(reverse=True, key=lambda x: x[0])
+            for size, text in candidates[:10]:
+                if 20 < len(text) < 200:
+                    return text
+    except Exception as e:
+        logger.error(f"Error extracting title from PDF font info: {e}")
     return None
 
 
@@ -209,14 +227,15 @@ def process_pdf(pdf_path: str) -> Dict:
     # Extract raw text
     raw_text = extract_text_from_pdf(pdf_path)
     
-    if not raw_text:
+    if not raw_text or not raw_text.strip():
+        logger.error(f"Extracted text is empty. {pdf_path} might be a scanned PDF or image. Consider using OCR.")
         return None
     
     # Clean text
     cleaned_text = clean_text(raw_text)
     
     # Extract title
-    title = extract_title_from_text(cleaned_text)
+    title = extract_title_from_pdf(pdf_path)
     if not title:
         # Use filename as fallback
         title = Path(pdf_path).stem

@@ -1,0 +1,23 @@
+{
+    "NOISE_PATTERNS": [
+        "Page \\d+ of \\d+",
+        "^\\d+$",
+        "©.*\\d{4}",
+        "doi:.*",
+        "arXiv:\\d+\\.\\d+"
+    ],
+    "SECTION_HEADERS": [
+        "abstract",
+        "introduction",
+        "background",
+        "related work",
+        "methodology",
+        "methods",
+        "approach",
+        "results",
+        "discussion",
+        "conclusion",
+        "references",
+        "acknowledgments"
+    ]
+}

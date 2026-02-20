@@ -48,20 +48,20 @@ def check_api_key():
 
 def check_dependencies():
     """Check required packages are installed"""
+    import importlib.util
+    
     required = [
-        'fastapi',
-        'uvicorn',
-        'chromadb',
-        'sentence_transformers',
-        'google.generativeai'
+        ('fastapi', 'fastapi'),
+        ('uvicorn', 'uvicorn'),
+        ('chromadb', 'chromadb'),
+        ('sentence-transformers', 'sentence_transformers'),
+        ('google-generativeai', 'google.generativeai')
     ]
     
     missing = []
-    for package in required:
-        try:
-            __import__(package.replace('-', '_'))
-        except ImportError:
-            missing.append(package)
+    for pip_name, import_name in required:
+        if importlib.util.find_spec(import_name) is None:
+            missing.append(pip_name)
     
     if missing:
         logger.error("✗ Missing dependencies: %s", ', '.join(missing))
@@ -124,7 +124,9 @@ def start_server(mode='production', port=8080):
     logger.info("="*60 + "\n")
     
     try:
-        subprocess.run(cmd)
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Server exited with error: {e}")
     except KeyboardInterrupt:
         logger.info("\nShutting down gracefully...")
 

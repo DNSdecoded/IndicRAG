@@ -9,11 +9,15 @@ import embeddings
 import vector_store
 import lang_utils
 import translation
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
+if config.LLM_API_KEY:
+    genai.configure(api_key=config.LLM_API_KEY)
 
-def extract_citations(answer: str, metadatas: List[Dict]) -> List[Dict]:
+
+def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
     """
     Extract and parse citations from answer text, handling multiple formats.
     
@@ -26,6 +30,7 @@ def extract_citations(answer: str, metadatas: List[Dict]) -> List[Dict]:
     Args:
         answer: Generated answer text containing citations
         metadatas: List of metadata dictionaries from retrieved chunks
+        chunks: Optional list of text chunks for logging cited paragraphs
         
     Returns:
         List of citation dictionaries with number, title, and section
@@ -66,6 +71,8 @@ def extract_citations(answer: str, metadatas: List[Dict]) -> List[Dict]:
                 'title': metadatas[idx].get('title', 'Unknown'),
                 'section': metadatas[idx].get('section', 'body')
             })
+            if chunks and idx < len(chunks):
+                logger.debug(f"Citation [{num}] refers to paragraph: {chunks[idx][:200]}...")
     
     return citations
 
@@ -133,13 +140,10 @@ def retrieve_context(
         }
     
     # Format context for LLM
-    formatted_context = format_context(
+    formatted_context, chunks_used = format_context(
         chunks=results['documents'],
         metadatas=results['metadatas']
     )
-    
-    # Count how many chunks were actually used
-    chunks_used = len([line for line in formatted_context.split('\n') if line.startswith('[')])
     
     return {
         'chunks': results['documents'],
@@ -185,7 +189,7 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
         total_length += len(context_part)
         chunks_used += 1
     
-    return "\n".join(context_parts)
+    return "\n".join(context_parts), chunks_used
 
 
 def build_prompt(
@@ -206,42 +210,20 @@ def build_prompt(
     Returns:
         Complete prompt string
     """
-    # Get language name
-    lang_name = lang_utils.get_language_name(target_lang)
-    
-    if strategy == "A":
-        # Strategy A: Ask LLM to answer directly in target language
-        prompt = f"""{config.SYSTEM_PROMPT}
-
-{config.QUERY_PROMPT_TEMPLATE.format(
-    context=context,
-    question=user_query,
-    language=lang_name
-)}
-
-Remember to:
-1. Answer ONLY based on the provided context
-2. Use {lang_name} language for your response
-3. Use simple, clear language suitable for a general audience
-4. Include citations [1], [2], etc. when referencing specific papers
-5. If the context is insufficient, clearly state this in {lang_name}
-"""
-    
-    else:  # Strategy B
-        # Strategy B: Ask LLM to answer in English (will translate later)
-        prompt = f"""{config.SYSTEM_PROMPT}
-
-Context from scientific papers:
-{context}
-
-Question: {user_query}
-
-Please answer the question in English using only the information from the context above.
-Use clear, simple language suitable for a general audience.
-Include citations [1], [2], etc. when referencing specific papers.
-"""
-    
-    return prompt
+    if strategy == "B":
+        lang_name = "English"
+    else:
+        # Get language name
+        lang_name = lang_utils.get_language_name(target_lang)
+        # Guard against garbled names
+        if not lang_name.isascii() and lang_name == target_lang:
+            lang_name = f"{target_lang} (language code)"
+            
+    return config.QUERY_PROMPT_TEMPLATE.format(
+        context=context,
+        question=user_query,
+        language=lang_name
+    )
 
 
 def llm_generate(prompt: str, max_tokens: int = None) -> str:
@@ -259,8 +241,6 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
         ValueError: If API key is not configured
         Exception: If API call fails
     """
-    import google.generativeai as genai
-    
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
     
@@ -270,9 +250,6 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
             "Google Gemini API key not configured. "
             "Please set LLM_API_KEY environment variable or in .env file."
         )
-    
-    # Configure Gemini
-    genai.configure(api_key=config.LLM_API_KEY)
     
     # Safety settings - set to BLOCK_NONE for scientific content
     safety_settings = [
@@ -294,7 +271,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
         },
     ]
     
-    # Create model with generation config
+    # Create model with generation config and system instruction
     generation_config = {
         "temperature": config.LLM_TEMPERATURE,
         "max_output_tokens": max_tokens,
@@ -303,7 +280,8 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     model = genai.GenerativeModel(
         model_name=config.LLM_MODEL_NAME,
         generation_config=generation_config,
-        safety_settings=safety_settings
+        safety_settings=safety_settings,
+        system_instruction=config.SYSTEM_PROMPT
     )
     
     try:
@@ -383,8 +361,17 @@ def answer_question_strategy_a(
     # Handle empty collection
     if context_data['chunks_used'] == 0:
         logger.warning("No documents available for answering question")
+        
+        # Translate the no documents response if it's an indicative language
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+             try:
+                 no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+             except Exception:
+                 pass # Fallback to English if translation fails
+        
         return {
-            'answer': "I don't have any indexed documents yet, so I cannot answer this question based on papers. Please ingest some PDFs first.",
+            'answer': no_docs_msg,
             'language': detected_lang,
             'language_name': lang_name,
             'chunks_used': 0,
@@ -406,7 +393,7 @@ def answer_question_strategy_a(
     answer = llm_generate(prompt)
     
     # Extract citations using robust parser
-    citations = extract_citations(answer, context_data['metadatas'])
+    citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
     
     return {
         'answer': answer,
@@ -457,8 +444,17 @@ def answer_question_strategy_b(
     # Handle empty collection
     if context_data['chunks_used'] == 0:
         logger.warning("No documents available for answering question")
+        
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+             try:
+                 # Translate the no documents response
+                 no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+             except Exception:
+                 pass # Fallback to English
+             
         return {
-            'answer': "I don't have any indexed documents yet, so I cannot answer this question based on papers. Please ingest some PDFs first.",
+            'answer': no_docs_msg,
             'language': detected_lang,
             'language_name': lang_name,
             'chunks_used': 0,
@@ -480,7 +476,7 @@ def answer_question_strategy_b(
     english_answer = llm_generate(prompt)
     
     # Extract citations from ENGLISH answer (before translation) using robust parser
-    citations = extract_citations(english_answer, context_data['metadatas'])
+    citations = extract_citations(english_answer, context_data['metadatas'], context_data.get('chunks'))
     
     # Translate answer to target language if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):

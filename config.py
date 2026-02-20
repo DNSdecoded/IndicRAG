@@ -54,9 +54,7 @@ def ensure_directories():
 
 
 # Create directories if they don't exist (backward compatibility)
-PAPERS_DIR.mkdir(exist_ok=True)
-CHROMA_DB_DIR.mkdir(exist_ok=True)
-MODELS_CACHE_DIR.mkdir(exist_ok=True)
+# Removed these lines to prevent early creation on import
 
 
 # ============================================================================
@@ -121,31 +119,29 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # LLM Configuration
 # ============================================================================
 # Google Gemini API configuration
-LLM_MAX_TOKENS = 2048  # maximum tokens to generate
-LLM_TEMPERATURE = 0.3  # lower temperature for factual responses
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")  # Gemini model
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))  # lower temperature for factual responses
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3-flash-preview")  # Gemini model
 
 # LLM API Key (required for Gemini)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
 # Note: For Gemini, you can use:
-# - gemini-2.5-flash (recommended: fast and cost-effective)
+# - gemini-3-flash-preview (recommended: fast and cost-effective)
 # - gemini-2.5-pro (higher quality)
 # - gemini-flash-latest (always uses latest flash model)
 
 # ============================================================================
 # Prompt Templates
 # ============================================================================
-SYSTEM_PROMPT = """You are a scientific assistant helping users understand research papers. 
-Your task is to answer questions based ONLY on the provided context from scientific literature.
+SYSTEM_PROMPT = """You are a scientific assistant helping users understand research papers.
+Answer questions based ONLY on the provided context. Do not use external knowledge.
+For medical topics, always add: "This is not medical advice; consult a healthcare professional."
 
-Guidelines:
-- Use only information from the provided context
-- If the context doesn't contain enough information, say so clearly
-- Provide clear, simple explanations suitable for a general audience
-- Include brief citations using [1], [2], etc. when referencing specific papers
-- Do not make up information or use external knowledge
-- If discussing medical topics, add: "This is not medical advice; consult a healthcare professional"
+Good answer example:
+Q: What causes insulin resistance?
+A: Insulin resistance occurs when cells fail to respond normally to insulin [1].
+   Excess visceral fat is a major contributing factor [2].
 """
 
 QUERY_PROMPT_TEMPLATE = """Context from scientific papers:
@@ -153,24 +149,32 @@ QUERY_PROMPT_TEMPLATE = """Context from scientific papers:
 
 Question: {question}
 
-Please answer the question in {language} using only the information from the context above. 
-Use clear, simple language that a non-expert can understand.
+Answer in {language}. Cite sources as [1], [2], etc. If the context is insufficient, say so clearly.
 """
 
-# ============================================================================
-# PDF Processing
-# ============================================================================
+NO_DOCUMENTS_RESPONSE = "No documents are currently indexed. Please upload and ingest PDFs first."
+
+import json
+
+# Try loading patterns from external config
+_patterns_file = PROJECT_ROOT / "patterns.json"
+try:
+    with open(_patterns_file, "r", encoding="utf-8") as f:
+        _patterns = json.load(f)
+except FileNotFoundError:
+    _patterns = {}
+
 # Common header/footer patterns to remove
-NOISE_PATTERNS = [
+NOISE_PATTERNS = _patterns.get("NOISE_PATTERNS", [
     r"Page \d+ of \d+",
     r"^\d+$",  # standalone page numbers
-    r"Â©.*\d{4}",  # copyright notices
+    r"©.*\d{4}",  # copyright notices
     r"doi:.*",
     r"arXiv:\d+\.\d+",
-]
+])
 
 # Section headers to detect
-SECTION_HEADERS = [
+SECTION_HEADERS = _patterns.get("SECTION_HEADERS", [
     "abstract",
     "introduction",
     "background",
@@ -183,7 +187,7 @@ SECTION_HEADERS = [
     "conclusion",
     "references",
     "acknowledgments",
-]
+])
 
 # ============================================================================
 # Logging

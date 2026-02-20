@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Import config to get directory paths
 import config
-import vector_store
+import sys
 
 # Setup logging
 logging.basicConfig(
@@ -96,6 +96,8 @@ def purge_database(confirmed: bool = False) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    import vector_store
+    
     db_dir = config.CHROMA_DB_DIR
     
     if not db_dir.exists():
@@ -127,6 +129,16 @@ def purge_database(confirmed: bool = False) -> bool:
     
     # Method 2: Delete entire ChromaDB directory
     try:
+        # Before deleting directory, explicitly clear the chroma client if loaded
+        # This releases the sqlite3 file lock on Windows
+        if 'vector_store' in sys.modules:
+            vector_store._chroma_client = None
+            import gc
+            gc.collect()
+            
+        import time
+        time.sleep(1)  # Brief pause to ensure OS releases file handles
+        
         if db_dir.exists():
             shutil.rmtree(db_dir)
             logger.info(f"Deleted database directory: {db_dir}")

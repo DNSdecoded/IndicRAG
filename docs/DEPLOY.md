@@ -92,7 +92,7 @@ Edit `.env` file:
 LLM_API_KEY=your-gemini-api-key-here
 
 # Optional
-LLM_MODEL_NAME=gemini-2.5-flash    # or gemini-2.5-pro
+LLM_MODEL_NAME=gemini-3-flash-preview    # or gemini-2.5-pro
 LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
 ```
 
@@ -237,9 +237,9 @@ curl -H "X-API-Key: key1" http://localhost:8000/query ...
 - [x] Run `python example_ingest.py`
 - [x] Start server with `python start_server.py`
 - [x] Access API at http://localhost:8000/docs
-- [ ] (Optional) Set up API key authentication
-- [ ] (Optional) Configure HTTPS reverse proxy
-- [ ] (Optional) Set up monitoring
+- [x] (Optional) Set up API key authentication
+- [x] (Optional) Configure HTTPS reverse proxy
+- [x] (Optional) Set up monitoring
 
 ---
 

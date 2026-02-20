@@ -127,7 +127,7 @@ Edit `.env` file:
 LLM_API_KEY=your-gemini-api-key-here
 
 # Optional
-LLM_MODEL_NAME=gemini-2.5-flash    # or gemini-2.5-pro
+LLM_MODEL_NAME=gemini-3-flash-preview    # or gemini-2.5-pro
 LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
 ```
 
@@ -250,7 +250,7 @@ type .env  # Windows
 
 ```bash
 # Use smaller model
-LLM_MODEL_NAME=gemini-2.5-flash
+LLM_MODEL_NAME=gemini-3-flash-preview
 
 # Or increase server memory
 ```

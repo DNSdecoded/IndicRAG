@@ -13,78 +13,46 @@ logger = logging.getLogger(__name__)
 
 
 # Global model caches
-_en_to_indic_model = None
-_en_to_indic_tokenizer = None
-_indic_to_en_model = None
-_indic_to_en_tokenizer = None
+_translation_model = None
+_translation_tokenizer = None
 
-
-def load_translation_model(direction: str = "en-indic"):
+def load_translation_model():
     """
-    Load IndicTrans2 translation model.
-    
-    Args:
-        direction: Translation direction, either "en-indic" or "indic-en"
-        
-    Returns:
-        Tuple of (model, tokenizer)
+    Load translation model.
     """
-    global _en_to_indic_model, _en_to_indic_tokenizer
-    global _indic_to_en_model, _indic_to_en_tokenizer
+    global _translation_model, _translation_tokenizer
     
-    if direction == "en-indic":
-        if _en_to_indic_model is not None:
-            return _en_to_indic_model, _en_to_indic_tokenizer
+    if _translation_model is not None:
+        return _translation_model, _translation_tokenizer
         
-        model_name = config.TRANSLATION_MODEL_EN_TO_INDIC
-        logger.info(f"Loading translation model: {model_name}")
-        logger.info("This may take several minutes on first run (model is ~2.5GB)...")
-        
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        _en_to_indic_tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            cache_dir=str(config.MODELS_CACHE_DIR),
-            trust_remote_code=True
-        )
-        
-        _en_to_indic_model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name,
-            cache_dir=str(config.MODELS_CACHE_DIR),
-            trust_remote_code=True
-        ).to(device).eval()  # Set to eval mode for inference
-        
-        logger.info(f"Model loaded on device: {device}")
-        return _en_to_indic_model, _en_to_indic_tokenizer
+    model_name = config.TRANSLATION_MODEL_EN_TO_INDIC
+    logger.info(f"Loading translation model: {model_name}")
+    logger.info("This may take several minutes on first run (model is ~2.5GB)...")
     
-    elif direction == "indic-en":
-        if _indic_to_en_model is not None:
-            return _indic_to_en_model, _indic_to_en_tokenizer
-        
-        model_name = config.TRANSLATION_MODEL_INDIC_TO_EN
-        logger.info(f"Loading translation model: {model_name}")
-        logger.info("This may take several minutes on first run (model is ~2.5GB)...")
-        
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        _indic_to_en_tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            cache_dir=str(config.MODELS_CACHE_DIR),
-            trust_remote_code=True
-        )
-        
-        _indic_to_en_model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name,
-            cache_dir=str(config.MODELS_CACHE_DIR),
-            trust_remote_code=True
-        ).to(device).eval()  # Set to eval mode for inference
-        
-        logger.info(f"Model loaded on device: {device}")
-        return _indic_to_en_model, _indic_to_en_tokenizer
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    else:
-        raise ValueError(f"Invalid direction: {direction}. Must be 'en-indic' or 'indic-en'")
+    _translation_tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        cache_dir=str(config.MODELS_CACHE_DIR),
+        trust_remote_code=True
+    )
+    
+    _translation_model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_name,
+        cache_dir=str(config.MODELS_CACHE_DIR),
+        trust_remote_code=True
+    ).to(device).eval()  # Set to eval mode for inference
+    
+    logger.info(f"Model loaded on device: {device}")
+    return _translation_model, _translation_tokenizer
 
+
+NLLB_LANG_MAP = {
+    "hi": "hin_Deva", "ta": "tam_Taml", "te": "tel_Telu",
+    "bn": "ben_Beng", "mr": "mar_Deva", "gu": "guj_Gujr",
+    "kn": "kan_Knda", "ml": "mal_Mlym", "pa": "pan_Guru",
+    "or": "ory_Orya", "en": "eng_Latn"
+}
 
 def translate_text(
     text: str,
@@ -104,35 +72,24 @@ def translate_text(
     Returns:
         Translated text
     """
-    # Determine translation direction
-    if source_lang == "en" and target_lang in config.INDIC_LANGUAGES:
-        direction = "en-indic"
-    elif source_lang in config.INDIC_LANGUAGES and target_lang == "en":
-        direction = "indic-en"
-    elif source_lang == target_lang:
-        # No translation needed
+    if source_lang == target_lang:
         return text
-    else:
+        
+    if source_lang not in NLLB_LANG_MAP or target_lang not in NLLB_LANG_MAP:
         raise ValueError(
             f"Unsupported translation: {source_lang} -> {target_lang}. "
-            f"Only English <-> Indic languages are supported."
+            f"Only English and supported Indic languages are allowed."
         )
     
     # Load model
-    model, tokenizer = load_translation_model(direction)
+    model, tokenizer = load_translation_model()
     
-    # Prepare input
-    # IndicTrans2 requires language tags
-    if direction == "en-indic":
-        # Format: "en_XX: <text>" where XX is target language
-        input_text = f"en_{target_lang}: {text}"
-    else:
-        # Format: "XX_en: <text>" where XX is source language
-        input_text = f"{source_lang}_en: {text}"
+    # Set source language for the tokenizer
+    tokenizer.src_lang = NLLB_LANG_MAP[source_lang]
     
     # Tokenize
     inputs = tokenizer(
-        input_text,
+        text,
         return_tensors="pt",
         padding=True,
         truncation=True,
@@ -143,10 +100,14 @@ def translate_text(
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
+    # Target language ID
+    target_id = tokenizer.convert_tokens_to_ids(NLLB_LANG_MAP[target_lang])
+    
     # Generate translation
-    with torch.no_grad():
+    with torch.inference_mode():
         outputs = model.generate(
             **inputs,
+            forced_bos_token_id=target_id,
             max_length=max_length,
             num_beams=5,
             early_stopping=True
