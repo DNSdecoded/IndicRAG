@@ -57,7 +57,7 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 ### Prerequisites
 
 * Python 3.11+
-* Google Gemini API key ([Get one here](https://ai.google.dev/))
+* Google Gemini API key ([Get one here](https://aistudio.google.com/api-keys))
 * 8GB+ RAM recommended
 
 ### Installation
