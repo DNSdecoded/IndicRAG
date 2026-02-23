@@ -1,429 +1,298 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IndicRAG</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap"
+        rel="stylesheet">
     <style>
-        * {
+        :root {
+            --transition-theme: background 0.4s ease, color 0.4s ease, border-color 0.4s ease;
+        }
+
+        [data-theme="dark"] {
+            --bg-base: #0A0A0C;
+            --bg-surface: #111117;
+            --bg-elevated: #18181F;
+            --bg-glass: rgba(24, 24, 31, 0.7);
+            --bg-glass-hover: rgba(30, 30, 40, 0.88);
+            --text-primary: #F0EEF8;
+            --text-secondary: #9A96B0;
+            --text-muted: #5A5672;
+            --text-disabled: #3A3850;
+            --border: rgba(255, 255, 255, 0.07);
+            --border-hover: rgba(139, 92, 246, 0.4);
+            --border-focus: rgba(139, 92, 246, 0.7);
+            --primary: #8B5CF6;
+            --primary-glow: rgba(139, 92, 246, 0.25);
+            --primary-light: #A78BFA;
+            --secondary: #38BDF8;
+            --secondary-glow: rgba(56, 189, 248, 0.2);
+            --accent: #F472B6;
+            --accent-glow: rgba(244, 114, 182, 0.2);
+            --mint: #34D399;
+            --success: #34D399;
+            --warning: #FBBF24;
+            --error: #F87171;
+            --error-bg: rgba(248, 113, 113, 0.08);
+            --shadow-card: 0 20px 60px rgba(0, 0, 0, 0.5), 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        [data-theme="light"] {
+            --bg-base: #F4F2FB;
+            --bg-surface: #FFFFFF;
+            --bg-elevated: #ECEAF6;
+            --bg-glass: rgba(255, 255, 255, 0.78);
+            --bg-glass-hover: rgba(255, 255, 255, 0.95);
+            --text-primary: #1A1830;
+            --text-secondary: #5B5480;
+            --text-muted: #8E88AE;
+            --text-disabled: #BDB9D8;
+            --border: rgba(0, 0, 0, 0.08);
+            --border-hover: rgba(124, 58, 237, 0.35);
+            --border-focus: rgba(124, 58, 237, 0.6);
+            --primary: #7C3AED;
+            --primary-glow: rgba(124, 58, 237, 0.18);
+            --primary-light: #8B5CF6;
+            --secondary: #0EA5E9;
+            --secondary-glow: rgba(14, 165, 233, 0.15);
+            --accent: #EC4899;
+            --accent-glow: rgba(236, 72, 153, 0.15);
+            --mint: #10B981;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --error: #EF4444;
+            --error-bg: rgba(239, 68, 68, 0.06);
+            --shadow-card: 0 8px 40px rgba(100, 80, 200, 0.08), 0 2px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        *,
+        *::before,
+        *::after {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
 
-        :root {
-            /* --- COLOR PALETTE --- */
-            
-            /* Backgrounds */
-            --background: #0F172A;
-            --surface: #1E293B;
-            --surface-light: #263449;
-
-            /* Text */
-            --text: #E5E7EB;
-            --text-muted: #94A3B8;
-            --text-disabled: #64748B;
-
-            /* Accents */
-            --primary: #38BDF8;       /* Cool Blue */
-            --primary-hover: #0EA5E9; 
-            --secondary: #A78BFA;     /* Soft Violet */
-            --accent-mint: #5EEAD4;   
-
-            /* Status */
-            --success: #4ADE80;
-            --warning: #FACC15;
-            --error: #F87171;
-
-            /* Borders & Gradients */
-            --border: #263449;
-            --gradient: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+        html {
+            scroll-behavior: smooth;
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: var(--background);
-            color: var(--text);
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg-base);
+            color: var(--text-primary);
             line-height: 1.6;
             min-height: 100vh;
+            overflow-x: hidden;
+            transition: var(--transition-theme);
         }
 
+        /* ─── BACKGROUND ─────────────────────────────── */
+        #sci-canvas {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Radial vignette to anchor content */
+        .bg-vignette {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            background: radial-gradient(ellipse 70% 60% at 50% 40%, transparent 0%, var(--bg-base) 100%);
+            opacity: 0.55;
+            transition: opacity 0.4s;
+        }
+
+        [data-theme="light"] .bg-vignette {
+            opacity: 0.45;
+        }
+
+        /* ─── THEME TOGGLE ───────────────────────────── */
+        .theme-toggle {
+            position: fixed;
+            top: 1.25rem;
+            right: 1.5rem;
+            z-index: 100;
+            width: 54px;
+            height: 30px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 50px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            padding: 3px;
+            transition: background 0.3s, border-color 0.3s;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--primary);
+        }
+
+        .toggle-thumb {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.3s;
+            box-shadow: 0 2px 8px var(--primary-glow);
+        }
+
+        [data-theme="light"] .toggle-thumb {
+            transform: translateX(24px);
+        }
+
+        /* ─── LAYOUT ─────────────────────────────────── */
         .container {
-            max-width: 1200px;
+            position: relative;
+            z-index: 1;
+            max-width: 1100px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 2rem 1.5rem;
         }
 
+        /* ─── HEADER ─────────────────────────────────── */
         header {
             text-align: center;
             margin-bottom: 3rem;
-            padding: 2rem 0;
+            padding: 3rem 0 1rem;
+        }
+
+        .logo-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+            border-radius: 16px;
+            font-size: 26px;
+            box-shadow: 0 8px 24px var(--primary-glow), 0 0 0 1px rgba(139, 92, 246, 0.3);
+            margin-bottom: 1rem;
+            animation: iconPulse 4s ease-in-out infinite;
+        }
+
+        @keyframes iconPulse {
+
+            0%,
+            100% {
+                box-shadow: 0 8px 24px var(--primary-glow), 0 0 0 1px rgba(139, 92, 246, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 12px 36px var(--primary-glow), 0 0 0 4px rgba(139, 92, 246, 0.12);
+            }
         }
 
         h1 {
-            font-size: 3rem;
-            font-weight: 700;
-            background: var(--gradient);
+            font-family: 'Syne', sans-serif;
+            font-size: clamp(2.2rem, 5vw, 3.5rem);
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary-light) 0%, var(--secondary) 50%, var(--accent) 100%);
+            background-size: 200% 200%;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            margin-bottom: 0.5rem;
-            letter-spacing: -1px;
-            color: var(--primary);
+            letter-spacing: -1.5px;
+            line-height: 1.1;
+            animation: gradShift 6s ease infinite;
+        }
+
+        @keyframes gradShift {
+
+            0%,
+            100% {
+                background-position: 0% 50%;
+            }
+
+            50% {
+                background-position: 100% 50%;
+            }
         }
 
         .subtitle {
-            color: var(--text-muted);
-            font-size: 1.1rem;
+            color: var(--text-secondary);
+            font-size: 1rem;
+            font-weight: 300;
+            margin-top: 0.5rem;
         }
 
-        /* Footer Links */
-        .footer-links {
+        .badge-row {
             display: flex;
             justify-content: center;
-            gap: 1rem;
+            gap: 0.5rem;
             margin-top: 1rem;
             flex-wrap: wrap;
         }
 
-        .icon-link {
+        .badge {
             display: inline-flex;
             align-items: center;
-            gap: 0.5rem;
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 0.9rem;
-            transition: all 0.3s;
+            gap: 0.35rem;
+            padding: 0.3rem 0.8rem;
+            background: var(--bg-glass);
             border: 1px solid var(--border);
-            padding: 0.5rem 1rem;
-            border-radius: 2rem;
-            background: var(--surface);
-            cursor: pointer;
-        }
-
-        .icon-link:hover {
-            color: var(--primary);
-            border-color: var(--primary);
-            background: var(--surface-light);
-        }
-
-        .main-card {
-            background: var(--surface);
-            border-radius: 1rem;
-            padding: 2rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            margin-bottom: 2rem;
-            border: 1px solid var(--border);
-        }
-
-        .input-group {
-            margin-bottom: 1.5rem;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
+            border-radius: 50px;
+            font-size: 0.75rem;
             color: var(--text-muted);
-            font-size: 0.9rem;
+            backdrop-filter: blur(8px);
             font-weight: 500;
         }
 
-        textarea {
-            width: 100%;
-            padding: 1rem;
-            background: var(--background);
-            border: 2px solid var(--border);
-            border-radius: 0.5rem;
-            color: var(--text);
-            font-size: 1rem;
-            resize: vertical;
-            min-height: 100px;
-            transition: all 0.3s;
-        }
-
-        textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
-        }
-
-        .controls {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        select {
-            padding: 0.75rem 1rem;
-            background: var(--background);
-            border: 2px solid var(--border);
-            border-radius: 0.5rem;
-            color: var(--text);
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            flex: 1;
-        }
-
-        select:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        button {
-            padding: 0.75rem 2rem;
-            background: var(--gradient);
-            color: var(--background);
-            border: none;
-            border-radius: 0.5rem;
-            font-size: 1rem;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s;
-            box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);
-            flex: 0 0 auto;
-        }
-
-        button:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(56, 189, 248, 0.4);
-            filter: brightness(1.1);
-        }
-
-        button:disabled {
-            background: var(--surface-light);
-            color: var(--text-disabled);
-            box-shadow: none;
-            cursor: not-allowed;
-            opacity: 0.8;
-        }
-
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 2rem;
-        }
-
-        .loading.active {
-            display: block;
-        }
-
-        .spinner {
-            width: 50px;
-            height: 50px;
-            margin: 0 auto 1rem;
-            border: 4px solid var(--surface-light);
-            border-top-color: var(--accent-mint);
+        .badge-dot {
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            background: var(--mint);
+            box-shadow: 0 0 6px var(--mint);
+            animation: blink 2s ease-in-out infinite;
         }
 
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
+        @keyframes blink {
 
-        .result {
-            display: none;
-            background: var(--surface);
-            border-radius: 1rem;
-            padding: 2rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            margin-top: 2rem;
-            border: 1px solid var(--border);
-        }
-
-        .result.active {
-            display: block;
-            animation: fadeIn 0.5s;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-
-            to {
+            0%,
+            100% {
                 opacity: 1;
-                transform: translateY(0);
+            }
+
+            50% {
+                opacity: 0.3;
             }
         }
 
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 2px solid var(--border);
-        }
-
-        .language-badge {
-            display: inline-block;
-            padding: 0.5rem 1rem;
-            background: rgba(56, 189, 248, 0.15);
-            color: var(--primary);
-            border: 1px solid rgba(56, 189, 248, 0.3);
-            border-radius: 2rem;
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-
-        .answer {
-            font-size: 1.1rem;
-            line-height: 1.8;
-            margin-bottom: 2rem;
-            color: var(--text);
-            white-space: pre-wrap;
-        }
-
-        .citations {
-            background: var(--background);
-            border-radius: 0.5rem;
-            padding: 1.5rem;
+        /* ─── GLASS CARD ─────────────────────────────── */
+        .glass-card {
+            background: var(--bg-glass);
             border: 1px solid var(--border);
+            border-radius: 16px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: var(--shadow-card);
+            transition: border-color 0.3s, box-shadow 0.3s, var(--transition-theme);
         }
 
-        .citations h3 {
-            font-size: 1rem;
-            margin-bottom: 1rem;
-            color: var(--text-muted);
+        .glass-card:hover {
+            border-color: var(--border-hover);
         }
 
-        .citation {
-            padding: 0.75rem;
-            margin-bottom: 0.5rem;
-            background: var(--surface-light);
-            border-radius: 0.5rem;
-            font-size: 0.9rem;
-            border-left: 3px solid var(--secondary);
-        }
-
-        .citation-number {
-            font-weight: 700;
-            color: var(--primary);
-            margin-right: 0.5rem;
-        }
-
-        .stats {
-            display: flex;
-            gap: 2rem;
-            margin-top: 1.5rem;
-            padding-top: 1.5rem;
-            border-top: 2px solid var(--border);
-        }
-
-        .stat {
-            flex: 1;
-        }
-
-        .stat-label {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-bottom: 0.25rem;
-        }
-
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
-
-        .error {
-            display: none;
-            background: rgba(248, 113, 113, 0.1);
-            border: 1px solid var(--error);
-            color: var(--error);
-            padding: 1rem;
-            border-radius: 0.5rem;
-            margin-bottom: 1rem;
-        }
-
-        .error.active {
-            display: block;
-            animation: shake 0.5s;
-        }
-
-        @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-10px); }
-            75% { transform: translateX(10px); }
-        }
-
-        .examples {
-            margin-top: 3rem;
-        }
-
-        .examples h2 {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            text-align: center;
-        }
-
-        .example-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1rem;
-        }
-
-        .example-card {
-            background: var(--surface);
-            padding: 1.5rem;
-            border-radius: 0.5rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        }
-
-        .example-card:hover,
-        .example-card:focus {
-            border-color: var(--primary);
-            background: var(--surface-light);
-            transform: translateY(-2px);
-            outline: none;
-        }
-
-        .example-lang {
-            font-size: 0.8rem;
-            color: var(--secondary);
-            margin-bottom: 0.5rem;
-            font-weight: 600;
-        }
-
-        .example-text {
-            font-size: 1rem;
-            color: var(--text);
-        }
-
-        footer {
-            text-align: center;
-            margin-top: 4rem;
-            padding: 2rem;
-            color: var(--text-muted);
-            font-size: 0.9rem;
-        }
-
-        @media (max-width: 768px) {
-            .container { padding: 1rem; }
-            h1 { font-size: 2rem; }
-            .controls { flex-direction: column; align-items: stretch; }
-            button, select { width: 100%; }
-            .stats { flex-direction: column; gap: 1rem; }
-        }
-
-        /* Document Management Panel Styles */
+        /* ─── MANAGEMENT PANEL ───────────────────────── */
         .management-panel {
-            background: var(--surface);
-            border-radius: 1rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            margin-bottom: 1.5rem;
             overflow: hidden;
-            border: 1px solid var(--border);
         }
 
         .panel-header {
@@ -431,29 +300,43 @@
             justify-content: space-between;
             align-items: center;
             padding: 1rem 1.5rem;
-            background: var(--surface-light);
             cursor: pointer;
             user-select: none;
-            transition: background 0.3s;
+            transition: background 0.25s;
+            border-radius: 16px;
+        }
+
+        .management-panel.open .panel-header {
+            border-radius: 16px 16px 0 0;
             border-bottom: 1px solid var(--border);
         }
 
         .panel-header:hover {
-            background: #2D3D54;
+            background: var(--bg-glass-hover);
         }
 
         .panel-header h2 {
-            font-size: 1.1rem;
-            color: var(--text);
+            font-family: 'Syne', sans-serif;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-primary);
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.6rem;
         }
 
         .panel-toggle {
-            font-size: 1.2rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
-            transition: transform 0.3s;
+            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-elevated);
+            border-radius: 50%;
+            border: 1px solid var(--border);
         }
 
         .management-panel.open .panel-toggle {
@@ -463,12 +346,11 @@
         .panel-content {
             max-height: 0;
             overflow: hidden;
-            transition: max-height 0.4s ease-out;
+            transition: max-height 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         .management-panel.open .panel-content {
             max-height: 5000px;
-            padding-bottom: 1rem;
         }
 
         .panel-inner {
@@ -484,28 +366,86 @@
         }
 
         .panel-section h3 {
-            font-size: 0.95rem;
+            font-family: 'Syne', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 700;
             color: var(--text-muted);
-            margin-bottom: 1rem;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 1.5px;
+            margin-bottom: 1rem;
+        }
+
+        /* Stats Bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-pill {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            text-align: center;
+            transition: var(--transition-theme), border-color 0.3s;
+        }
+
+        .stat-pill:hover {
+            border-color: var(--border-hover);
+        }
+
+        .stat-label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+        }
+
+        .stat-value {
+            font-family: 'Syne', sans-serif;
+            font-size: 1.75rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary-light), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         /* Upload Zone */
         .upload-zone {
             border: 2px dashed var(--border);
-            border-radius: 0.75rem;
-            padding: 2rem;
+            border-radius: 12px;
+            padding: 2.5rem 2rem;
             text-align: center;
-            transition: all 0.3s;
             cursor: pointer;
-            background: var(--background);
+            transition: all 0.3s;
+            background: var(--bg-elevated);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-zone::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, var(--primary-glow), transparent 70%);
+            opacity: 0;
+            transition: opacity 0.3s;
         }
 
         .upload-zone:hover,
         .upload-zone.dragover {
             border-color: var(--primary);
-            background: rgba(56, 189, 248, 0.05);
+            background: var(--bg-glass-hover);
+        }
+
+        .upload-zone:hover::before,
+        .upload-zone.dragover::before {
+            opacity: 1;
         }
 
         .upload-zone.dragover {
@@ -514,125 +454,647 @@
 
         .upload-icon {
             font-size: 2.5rem;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.75rem;
+            display: block;
+            position: relative;
         }
 
         .upload-text {
-            color: var(--text-muted);
-            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-bottom: 0.4rem;
+            position: relative;
         }
 
         .upload-hint {
-            font-size: 0.85rem;
-            color: var(--text-disabled);
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            position: relative;
         }
 
         .upload-input {
             display: none;
         }
 
-        /* Papers Table */
+        /* Table */
+        .table-wrap {
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
         .papers-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.9rem;
+            font-size: 0.875rem;
         }
 
         .papers-table th {
             text-align: left;
-            padding: 0.75rem 1rem;
-            background: var(--background);
+            padding: 0.7rem 1rem;
+            background: var(--bg-elevated);
             color: var(--text-muted);
-            font-weight: 500;
-            border-bottom: 2px solid var(--border);
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border);
         }
 
         .papers-table td {
-            padding: 0.75rem 1rem;
+            padding: 0.85rem 1rem;
             border-bottom: 1px solid var(--border);
-            color: var(--text);
+            color: var(--text-primary);
+            transition: background 0.2s;
         }
 
-        .papers-table tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
+        .papers-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .papers-table tbody tr:hover td {
+            background: var(--bg-elevated);
         }
 
         .papers-empty {
             text-align: center;
             padding: 2rem;
-            color: var(--text-disabled);
-        }
-
-        .btn-small {
-            padding: 0.4rem 0.8rem;
-            font-size: 0.8rem;
-            border-radius: 0.35rem;
-        }
-
-        .btn-success {
-            background: var(--success);
-            color: #064e3b;
-            box-shadow: 0 4px 15px rgba(74, 222, 128, 0.3);
-        }
-
-        .btn-success:hover:not(:disabled) {
-            background: #22c55e;
-            box-shadow: 0 6px 20px rgba(74, 222, 128, 0.4);
-            filter: none;
-        }
-        
-        /* Stats Bar */
-        .stats-bar {
-            display: flex;
-            gap: 2rem;
-            padding: 1rem 1.5rem;
-            background: var(--background);
-            border-radius: 0.5rem;
-            margin-bottom: 1.5rem;
-            border: 1px solid var(--border);
-        }
-
-        .stats-bar .stat {
-            flex: 1;
-            text-align: center;
-        }
-
-        .stats-bar .stat-value {
-            font-size: 1.75rem;
+            color: var(--text-muted);
+            font-style: italic;
         }
 
         /* Danger Zone */
         .danger-zone {
-            background: rgba(248, 113, 113, 0.05);
+            background: var(--error-bg);
             border: 1px solid rgba(248, 113, 113, 0.2);
-            border-radius: 0.5rem;
-            padding: 1.5rem;
+            border-radius: 12px;
+            padding: 1.25rem;
         }
 
         .danger-zone h4 {
             color: var(--error);
+            font-family: 'Syne', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 700;
             margin-bottom: 1rem;
-            font-size: 0.95rem;
         }
 
         .danger-actions {
             display: flex;
-            gap: 1rem;
+            gap: 0.75rem;
             flex-wrap: wrap;
         }
 
+        /* ─── MAIN CARD ───────────────────────────────── */
+        .main-card {
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .input-group {
+            margin-bottom: 1.25rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 1rem 1.1rem;
+            background: var(--bg-elevated);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 1rem;
+            font-weight: 400;
+            resize: vertical;
+            min-height: 110px;
+            transition: border-color 0.25s, box-shadow 0.25s, var(--transition-theme);
+        }
+
+        textarea::placeholder {
+            color: var(--text-muted);
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow), 0 0 20px var(--primary-glow);
+        }
+
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            align-items: stretch;
+            flex-wrap: wrap;
+        }
+
+        select {
+            flex: 1;
+            padding: 0.8rem 1rem;
+            background: var(--bg-elevated);
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: border-color 0.25s, var(--transition-theme);
+            min-width: 200px;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* ─── BUTTONS ─────────────────────────────────── */
+        button {
+            font-family: 'DM Sans', sans-serif;
+            cursor: pointer;
+            border: none;
+            transition: all 0.25s;
+        }
+
+        .btn-primary {
+            padding: 0.8rem 2rem;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+            color: #fff;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            box-shadow: 0 4px 20px var(--primary-glow);
+            letter-spacing: 0.3px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), transparent);
+            opacity: 0;
+            transition: opacity 0.25s;
+        }
+
+        .btn-primary:hover:not(:disabled)::after {
+            opacity: 1;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px var(--primary-glow), 0 4px 12px var(--accent-glow);
+        }
+
+        .btn-primary:disabled {
+            background: var(--bg-elevated);
+            color: var(--text-disabled);
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        .btn-small {
+            padding: 0.4rem 0.9rem;
+            font-size: 0.78rem;
+            border-radius: 7px;
+            font-weight: 600;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--mint), #059669);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(52, 211, 153, 0.3);
+        }
+
+        .btn-success:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(52, 211, 153, 0.4);
+        }
+
         .btn-danger {
-            background: var(--error);
-            color: #450a0a;
+            background: linear-gradient(135deg, var(--error), #dc2626);
+            color: #fff;
             box-shadow: 0 4px 15px rgba(248, 113, 113, 0.3);
         }
 
         .btn-danger:hover:not(:disabled) {
-            background: #ef4444;
+            transform: translateY(-1px);
             box-shadow: 0 6px 20px rgba(248, 113, 113, 0.4);
         }
 
-        /* Toast Notifications */
+        .btn-secondary {
+            background: var(--bg-elevated);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--bg-glass-hover);
+            color: var(--text-primary);
+            border-color: var(--border-hover);
+        }
+
+        /* ─── LOADING ─────────────────────────────────── */
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner-wrap {
+            position: relative;
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 1.25rem;
+        }
+
+        .spinner-outer {
+            position: absolute;
+            inset: 0;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .spinner-inner {
+            position: absolute;
+            inset: 10px;
+            border: 2px solid var(--border);
+            border-bottom-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite reverse;
+        }
+
+        .spinner-dot {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            background: var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--primary);
+            animation: dotPulse 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes dotPulse {
+
+            0%,
+            100% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: translate(-50%, -50%) scale(1.4);
+                opacity: 0.6;
+            }
+        }
+
+        .loading p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 300;
+        }
+
+        /* ─── RESULT ──────────────────────────────────── */
+        .result {
+            display: none;
+            padding: 2rem;
+            margin-top: 1.5rem;
+        }
+
+        .result.active {
+            display: block;
+            animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(24px)
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0)
+            }
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .result-header h3 {
+            font-family: 'Syne', sans-serif;
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .language-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.9rem;
+            background: var(--primary-glow);
+            color: var(--primary-light);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            border-radius: 50px;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+
+        .answer {
+            font-size: 1.05rem;
+            line-height: 1.85;
+            margin-bottom: 1.75rem;
+            color: var(--text-primary);
+            font-weight: 300;
+        }
+
+        /* ─── MARKDOWN STYLES (for answer) ────────────── */
+        .markdown-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 0.9rem;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+        }
+
+        .markdown-body th {
+            text-align: left;
+            padding: 0.8rem 1.2rem;
+            background: var(--bg-glass);
+            color: var(--text-primary);
+            font-weight: 700;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .markdown-body td {
+            padding: 0.8rem 1.2rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .markdown-body tr:last-child td {
+            border-bottom: none;
+        }
+
+        .markdown-body tr:hover td {
+            background: var(--bg-glass-hover);
+        }
+
+        .markdown-body p {
+            margin-bottom: 1rem;
+        }
+
+        .markdown-body strong {
+            color: var(--primary-light);
+            font-weight: 700;
+        }
+
+        .markdown-body hr {
+            border: 0;
+            height: 1px;
+            background: var(--border);
+            margin: 1.5rem 0;
+        }
+
+        .citations {
+            background: var(--bg-elevated);
+            border-radius: 10px;
+            padding: 1.25rem;
+            border: 1px solid var(--border);
+        }
+
+        .citations h3 {
+            font-family: 'Syne', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 0.75rem;
+        }
+
+        .citation {
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            background: var(--bg-glass);
+            border-radius: 8px;
+            font-size: 0.875rem;
+            border-left: 3px solid var(--primary);
+            color: var(--text-secondary);
+        }
+
+        .citation:last-child {
+            margin-bottom: 0;
+        }
+
+        .citation-number {
+            font-weight: 700;
+            color: var(--primary);
+            margin-right: 0.5rem;
+        }
+
+        .result-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        /* ─── ERROR ───────────────────────────────────── */
+        .error {
+            display: none;
+            background: var(--error-bg);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            color: var(--error);
+            padding: 0.9rem 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .error.active {
+            display: block;
+            animation: shake 0.4s ease-out;
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0)
+            }
+
+            20% {
+                transform: translateX(-8px)
+            }
+
+            60% {
+                transform: translateX(6px)
+            }
+
+            80% {
+                transform: translateX(-4px)
+            }
+        }
+
+        /* ─── EXAMPLES ────────────────────────────────── */
+        .examples {
+            margin-top: 2.5rem;
+        }
+
+        .examples-title {
+            font-family: 'Syne', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            text-align: center;
+            margin-bottom: 1.25rem;
+        }
+
+        .example-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .example-card {
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.15rem;
+            cursor: pointer;
+            transition: all 0.25s;
+            backdrop-filter: blur(10px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .example-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--accent));
+            opacity: 0;
+            transition: opacity 0.25s;
+        }
+
+        .example-card:hover {
+            border-color: var(--border-hover);
+            background: var(--bg-glass-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px var(--primary-glow);
+        }
+
+        .example-card:hover::before {
+            opacity: 1;
+        }
+
+        .example-card:focus {
+            outline: none;
+            border-color: var(--border-focus);
+        }
+
+        .example-lang {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.4rem;
+        }
+
+        .example-text {
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        /* ─── FOOTER ──────────────────────────────────── */
+        footer {
+            text-align: center;
+            margin-top: 4rem;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 300;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .icon-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            padding: 0.45rem 1rem;
+            border-radius: 50px;
+            background: var(--bg-glass);
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            transition: all 0.25s;
+            font-family: 'DM Sans', sans-serif;
+        }
+
+        .icon-link:hover {
+            color: var(--primary-light);
+            border-color: var(--border-hover);
+            background: var(--bg-glass-hover);
+            transform: translateY(-1px);
+        }
+
+        /* ─── TOAST ───────────────────────────────────── */
         .toast-container {
             position: fixed;
             bottom: 2rem;
@@ -644,49 +1106,51 @@
         }
 
         .toast {
-            padding: 1rem 1.5rem;
-            border-radius: 0.5rem;
-            color: white;
+            padding: 0.85rem 1.25rem;
+            border-radius: 10px;
+            font-size: 0.875rem;
             font-weight: 500;
-            animation: slideIn 0.3s ease-out;
-            max-width: 350px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            max-width: 340px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(12px);
         }
 
         .toast-success {
-            background: var(--success);
-            color: #064e3b;
+            background: rgba(52, 211, 153, 0.1);
+            color: var(--mint);
+            border-color: rgba(52, 211, 153, 0.3);
         }
 
         .toast-error {
-            background: var(--error);
-            color: #450a0a;
+            background: var(--error-bg);
+            color: var(--error);
+            border-color: rgba(248, 113, 113, 0.3);
         }
 
-        @keyframes slideIn {
+        @keyframes toastIn {
             from {
                 opacity: 0;
-                transform: translateX(100%);
+                transform: translateX(60px)
             }
+
             to {
                 opacity: 1;
-                transform: translateX(0);
+                transform: translateX(0)
             }
         }
 
-        /* Modals (Common) */
+        /* ─── MODALS ──────────────────────────────────── */
         .modal-overlay {
             display: none;
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(15, 23, 42, 0.8);
+            inset: 0;
+            background: rgba(10, 10, 12, 0.75);
             z-index: 3000;
             align-items: center;
             justify-content: center;
-            backdrop-filter: blur(2px);
+            backdrop-filter: blur(6px);
         }
 
         .modal-overlay.active {
@@ -694,113 +1158,164 @@
         }
 
         .modal {
-            background: var(--surface);
-            border-radius: 1rem;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 18px;
             padding: 2rem;
             max-width: 500px;
             width: 90%;
-            animation: fadeIn 0.3s;
-            border: 1px solid var(--border);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: var(--shadow-card);
             max-height: 90vh;
             overflow-y: auto;
         }
 
-        /* Table inside Modal */
+        .modal h3 {
+            font-family: 'Syne', sans-serif;
+            color: var(--text-primary);
+            margin-bottom: 0.75rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .modal p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 300;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            margin-top: 1.75rem;
+        }
+
+        .modal::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .modal::-webkit-scrollbar-track {
+            background: var(--bg-elevated);
+            border-radius: 3px;
+        }
+
+        .modal::-webkit-scrollbar-thumb {
+            background: var(--border-hover);
+            border-radius: 3px;
+        }
+
         .lang-table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 1rem;
         }
-        
+
         .lang-table th {
             text-align: left;
-            padding: 0.75rem;
+            padding: 0.6rem 0.75rem;
             border-bottom: 2px solid var(--border);
             color: var(--primary);
-            font-size: 0.9rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            font-family: 'Syne', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .lang-table td {
-            padding: 0.75rem;
+            padding: 0.65rem 0.75rem;
             border-bottom: 1px solid var(--border);
-            color: var(--text);
-            font-size: 0.9rem;
+            color: var(--text-primary);
+            font-size: 0.875rem;
         }
 
         .lang-table tr:last-child td {
             border-bottom: none;
         }
 
-        /* Scrollbar styles for the table modal */
-        .modal::-webkit-scrollbar {
-            width: 8px;
-        }
-        .modal::-webkit-scrollbar-track {
-            background: var(--background);
-        }
-        .modal::-webkit-scrollbar-thumb {
-            background: var(--surface-light);
-            border-radius: 4px;
+        .lang-table tbody tr:hover td {
+            background: var(--bg-elevated);
         }
 
-        .modal h3 {
-            color: var(--text);
-            margin-bottom: 0.5rem;
-            font-size: 1.25rem;
-        }
+        /* ─── RESPONSIVE ──────────────────────────────── */
+        @media (max-width:768px) {
+            .container {
+                padding: 1rem;
+            }
 
-        .modal-actions {
-            display: flex;
-            gap: 1rem;
-            justify-content: flex-end;
-            margin-top: 1.5rem;
-        }
+            .controls {
+                flex-direction: column;
+            }
 
-        .btn-secondary {
-            background: var(--surface-light);
-            color: var(--text);
-            box-shadow: none;
-        }
+            .btn-primary,
+            select {
+                width: 100%;
+            }
 
-        .btn-secondary:hover:not(:disabled) {
-            background: #334155;
-            box-shadow: none;
-            transform: none;
-            filter: brightness(1.2);
+            .result-stats {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-bar {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .theme-toggle {
+                top: 1rem;
+                right: 1rem;
+            }
         }
     </style>
 </head>
 
 <body>
+    <!-- Scientific Background -->
+    <canvas id="sci-canvas"></canvas>
+    <div class="bg-vignette"></div>
+
+    <!-- Theme toggle -->
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark mode">
+        <div class="toggle-thumb"><span id="themeIcon">🌙</span></div>
+    </button>
+
     <div class="container">
         <header>
-            <h1>🌐 IndicRAG</h1>
-            <p class="subtitle">Multilingual Scientific Q&A • Ask in any language</p>
+            <div class="logo-icon">🌐</div>
+            <h1>IndicRAG</h1>
+            <p class="subtitle">Multilingual Scientific Q&A — Ask in any Indic language</p>
+            <div class="badge-row">
+                <span class="badge"><span class="badge-dot"></span> Live</span>
+                <span class="badge">12 Languages</span>
+                <span class="badge">LLM Powered</span>
+            </div>
         </header>
 
-        <div class="management-panel open" id="managementPanel">
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-pill glass-card">
+                <div class="stat-label">Papers Uploaded</div>
+                <div class="stat-value" id="paperCount">—</div>
+            </div>
+            <div class="stat-pill glass-card">
+                <div class="stat-label">Chunks Indexed</div>
+                <div class="stat-value" id="chunkCount">—</div>
+            </div>
+        </div>
+
+        <!-- Management Panel -->
+        <div class="glass-card management-panel" id="managementPanel">
             <div class="panel-header" onclick="toggleManagementPanel()">
-                <h2>📁 Manage Documents</h2>
+                <h2>📁 Knowledge Base Management</h2>
                 <span class="panel-toggle">▼</span>
             </div>
             <div class="panel-content">
                 <div class="panel-inner">
-                    <div class="stats-bar">
-                        <div class="stat">
-                            <div class="stat-label">Papers Uploaded</div>
-                            <div class="stat-value" id="paperCount">-</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-label">Chunks Indexed</div>
-                            <div class="stat-value" id="chunkCount">-</div>
-                        </div>
-                    </div>
 
                     <div class="panel-section">
                         <h3>Upload Scientific Papers</h3>
                         <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-                            <div class="upload-icon">📄</div>
+                            <span class="upload-icon">📄</span>
                             <div class="upload-text">Drag & drop PDF files here, or click to browse</div>
                             <div class="upload-hint">Only PDF files are accepted</div>
                         </div>
@@ -809,8 +1324,13 @@
                     </div>
 
                     <div class="panel-section">
-                        <h3>Uploaded Papers</h3>
-                        <div id="papersTableContainer">
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3 style="margin-bottom: 0;">Uploaded Papers</h3>
+                            <button class="btn-success btn-small" onclick="ingestAllPapers()" id="ingestAllBtn">Ingest
+                                All PDFs</button>
+                        </div>
+                        <div class="table-wrap">
                             <table class="papers-table">
                                 <thead>
                                     <tr>
@@ -821,7 +1341,7 @@
                                 </thead>
                                 <tbody id="papersTableBody">
                                     <tr>
-                                        <td colspan="3" class="papers-empty">Loading...</td>
+                                        <td colspan="3" class="papers-empty">Loading…</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -832,12 +1352,9 @@
                         <div class="danger-zone">
                             <h4>⚠️ Danger Zone</h4>
                             <div class="danger-actions">
-                                <button class="btn-danger btn-small" id="purgePapersBtn">
-                                    Delete All Papers
-                                </button>
-                                <button class="btn-danger btn-small" id="purgeDatabaseBtn">
-                                    Clear Vector Database
-                                </button>
+                                <button class="btn-danger btn-small" id="purgePapersBtn">Delete All Papers</button>
+                                <button class="btn-danger btn-small" id="purgeDatabaseBtn">Clear Vector
+                                    Database</button>
                             </div>
                         </div>
                     </div>
@@ -845,93 +1362,94 @@
             </div>
         </div>
 
-        <div class="main-card">
+        <!-- Main Query Card -->
+        <div class="glass-card main-card">
             <div class="error" id="error"></div>
-
             <div class="input-group">
                 <label for="question">Your Question</label>
                 <textarea id="question" aria-label="Enter your research question in any language"
                     placeholder="Example: What is the treatment for diabetes?"></textarea>
             </div>
-
             <div class="controls">
                 <select id="strategy" aria-label="Select query strategy">
                     <option value="A">Strategy A: Multilingual LLM (Recommended)</option>
                     <option value="B">Strategy B: Translate to English First</option>
                 </select>
-                <button id="askBtn" onclick="askQuestion()" aria-label="Submit question">Ask Question</button>
+                <button class="btn-primary" id="askBtn" onclick="askQuestion()">Ask Question</button>
             </div>
         </div>
 
+        <!-- Loading -->
         <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>Searching scientific databases, translating, and synthesizing...</p>
+            <div class="spinner-wrap">
+                <div class="spinner-outer"></div>
+                <div class="spinner-inner"></div>
+                <div class="spinner-dot"></div>
+            </div>
+            <p>Searching scientific databases, translating, synthesizing…</p>
         </div>
 
-        <div class="result" id="result">
+        <!-- Result -->
+        <div class="glass-card result" id="result">
             <div class="result-header">
                 <h3>Answer</h3>
                 <span class="language-badge" id="languageBadge">English</span>
             </div>
-
-            <div class="answer" id="answer"></div>
-
-            <div class="citations" id="citationsSection" style="display: none;">
+            <div class="answer markdown-body" id="answer"></div>
+            <div class="citations" id="citationsSection" style="display:none;">
                 <h3>Source Citations</h3>
                 <div id="citations"></div>
             </div>
-
-            <div class="stats">
-                <div class="stat">
+            <div class="result-stats">
+                <div class="stat-pill">
                     <div class="stat-label">Processing Time</div>
                     <div class="stat-value" id="processingTime">0.00s</div>
                 </div>
-                <div class="stat">
+                <div class="stat-pill">
                     <div class="stat-label">Chunks Analyzed</div>
                     <div class="stat-value" id="chunksUsed">0</div>
                 </div>
             </div>
         </div>
 
+        <!-- Examples -->
         <div class="examples">
-            <h2>Try an example</h2>
+            <div class="examples-title">Try an example</div>
             <div class="example-grid">
                 <div class="example-card"
                     onclick="setExample('What are the effects of climate change on biodiversity?')" role="button"
                     tabindex="0"
-                    onkeypress="handleExampleKey(event, 'What are the effects of climate change on biodiversity?')">
+                    onkeypress="handleExampleKey(event,'What are the effects of climate change on biodiversity?')">
                     <div class="example-lang">English</div>
                     <div class="example-text">What are the effects of climate change on biodiversity?</div>
                 </div>
                 <div class="example-card" onclick="setExample('मधुमेह का इलाज क्या है?')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, 'मधुमेह का इलाज क्या है?')">
+                    onkeypress="handleExampleKey(event,'मधुमेह का इलाज क्या है?')">
                     <div class="example-lang">Hindi</div>
                     <div class="example-text">मधुमेह का इलाज क्या है?</div>
                 </div>
                 <div class="example-card" onclick="setExample('நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')" role="button"
-                    tabindex="0" onkeypress="handleExampleKey(event, 'நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
+                    tabindex="0" onkeypress="handleExampleKey(event,'நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
                     <div class="example-lang">Tamil</div>
                     <div class="example-text">நீரிழிவு நோய்க்கான சிகிச்சை என்ன?</div>
                 </div>
                 <div class="example-card" onclick="setExample('কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')" role="button"
-                    tabindex="0" onkeypress="handleExampleKey(event, 'কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')">
+                    tabindex="0" onkeypress="handleExampleKey(event,'কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')">
                     <div class="example-lang">Bengali</div>
                     <div class="example-text">কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?</div>
                 </div>
                 <div class="example-card" onclick="setExample('డయాబెటిస్ చికిత్స ఏమిటి?')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, 'డయాబెటిస్ చికిత్స ఏమిటి?')">
+                    onkeypress="handleExampleKey(event,'డయాబెటిస్ చికిత్స ఏమిటి?')">
                     <div class="example-lang">Telugu</div>
                     <div class="example-text">డయాబెటిస్ చికిత్స ఏమిటి?</div>
                 </div>
-                <div class="example-card" onclick="setExample('हवामान बदलाचे काय परिणाम आहेत?')"
-                    role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, 'हवामान बदलाचे काय परिणाम आहेत?')">
+                <div class="example-card" onclick="setExample('हवामान बदलाचे काय परिणाम आहेत?')" role="button"
+                    tabindex="0" onkeypress="handleExampleKey(event,'हवामान बदलाचे काय परिणाम आहेत?')">
                     <div class="example-lang">Marathi</div>
                     <div class="example-text">हवामान बदलाचे काय परिणाम आहेत?</div>
                 </div>
-                 <div class="example-card" onclick="setExample('مصنوعی ذہانت کیا ہے؟')"
-                    role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event, 'مصنوعی ذہانت کیا ہے؟')">
+                <div class="example-card" onclick="setExample('مصنوعی ذہانت کیا ہے؟')" role="button" tabindex="0"
+                    onkeypress="handleExampleKey(event,'مصنوعی ذہانت کیا ہے؟')">
                     <div class="example-lang">Urdu</div>
                     <div class="example-text">مصنوعی ذہانت کیا ہے؟</div>
                 </div>
@@ -941,12 +1459,11 @@
         <footer>
             <p>Powered by LLMs & RAG • Scientific Knowledge Graph</p>
             <div class="footer-links">
-                <button onclick="showLangModal()" class="icon-link">
-                    🌐 Supported Languages
-                </button>
+                <button onclick="showLangModal()" class="icon-link">🌐 Supported Languages</button>
                 <a href="https://github.com/DNSdecoded/IndicRAG" target="_blank" class="icon-link">
                     <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path>
+                        <path
+                            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
                     </svg>
                     GitHub
                 </a>
@@ -954,377 +1471,9 @@
         </footer>
     </div>
 
-    <script>
-        // NOTE: Adjust this URL if your backend runs on a different port (e.g., http://localhost:8000)
-        const API_URL = window.location.origin;
-        // const API_URL = "http://localhost:8000"; 
-
-        function setExample(text) {
-            document.getElementById('question').value = text;
-            document.getElementById('question').focus();
-        }
-
-        function handleExampleKey(event, text) {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                setExample(text);
-            }
-        }
-
-        async function askQuestion() {
-            const question = document.getElementById('question').value.trim();
-            const strategy = document.getElementById('strategy').value;
-
-            if (!question) {
-                showError('Please enter a question');
-                return;
-            }
-
-            // Hide previous results and errors
-            document.getElementById('error').classList.remove('active');
-            document.getElementById('result').classList.remove('active');
-            document.getElementById('loading').classList.add('active');
-            document.getElementById('askBtn').disabled = true;
-
-            try {
-                const response = await fetch(`${API_URL}/query`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        question: question,
-                        strategy: strategy,
-                        top_k: 5
-                    })
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to get answer');
-                }
-
-                const data = await response.json();
-                displayResult(data);
-
-            } catch (error) {
-                showError(error.message);
-            } finally {
-                document.getElementById('loading').classList.remove('active');
-                document.getElementById('askBtn').disabled = false;
-            }
-        }
-
-        function displayResult(data) {
-            // Language badge
-            document.getElementById('languageBadge').textContent = data.language_name || 'Unknown';
-
-            // Answer
-            document.getElementById('answer').textContent = data.answer || 'No answer provided.';
-
-            // Citations
-            if (data.citations && data.citations.length > 0) {
-                const citationsHtml = data.citations.map(cite => `
-                    <div class="citation">
-                        <span class="citation-number">[${cite.number || '?'}]</span>
-                        ${escapeHtml(cite.title)} - ${escapeHtml(cite.section)}
-                    </div>
-                `).join('');
-
-                document.getElementById('citations').innerHTML = citationsHtml;
-                document.getElementById('citationsSection').style.display = 'block';
-            } else {
-                document.getElementById('citationsSection').style.display = 'none';
-            }
-
-            // Stats
-            const time = data.processing_time ? data.processing_time.toFixed(2) : "0.00";
-            document.getElementById('processingTime').textContent = `${time}s`;
-            document.getElementById('chunksUsed').textContent = data.chunks_used || 0;
-
-            // Show result
-            document.getElementById('result').classList.add('active');
-            document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function showError(message) {
-            const errorEl = document.getElementById('error');
-            errorEl.textContent = message;
-            errorEl.classList.add('active');
-            setTimeout(() => errorEl.classList.remove('active'), 5000);
-        }
-
-        // Allow Enter key to submit (Shift+Enter for newline)
-        document.getElementById('question').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                askQuestion();
-            }
-        });
-
-        // ====================================================================
-        // Document Management Functions
-        // ====================================================================
-
-        let pendingPurgeType = null;
-
-        function toggleManagementPanel() {
-            const panel = document.getElementById('managementPanel');
-            panel.classList.toggle('open');
-            // If opening, refresh data
-            if (panel.classList.contains('open')) {
-                loadDocumentStats();
-                loadPapersList();
-            }
-        }
-
-        async function loadDocumentStats() {
-            try {
-                // Load papers count
-                const papersRes = await fetch(`${API_URL}/papers`);
-                if (papersRes.ok) {
-                    const papers = await papersRes.json();
-                    document.getElementById('paperCount').textContent = papers.length;
-                }
-
-                // Load chunks count
-                const statsRes = await fetch(`${API_URL}/stats`);
-                if (statsRes.ok) {
-                    const stats = await statsRes.json();
-                    document.getElementById('chunkCount').textContent = stats.document_count;
-                }
-            } catch (error) {
-                console.error('Error loading stats:', error);
-            }
-        }
-
-        async function loadPapersList() {
-            const tbody = document.getElementById('papersTableBody');
-
-            try {
-                const response = await fetch(`${API_URL}/papers`);
-                if (!response.ok) throw new Error("Failed to fetch papers");
-
-                const papers = await response.json();
-
-                if (papers.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">No papers uploaded yet. Upload PDFs to get started!</td></tr>';
-                    return;
-                }
-
-                // Use data attributes to store filenames safely to avoid quoting bugs
-                tbody.innerHTML = papers.map(paper => {
-                    const safeId = sanitizeId(paper.filename);
-                    return `
-                    <tr>
-                        <td>${escapeHtml(paper.filename)}</td>
-                        <td>${paper.size_mb ? paper.size_mb.toFixed(2) : '?'} MB</td>
-                        <td>
-                            <button class="btn-success btn-small" 
-                                    data-filename="${escapeHtmlAttr(paper.filename)}"
-                                    onclick="triggerIngest(this)" 
-                                    id="ingest-${safeId}">
-                                Ingest
-                            </button>
-                        </td>
-                    </tr>
-                `}).join('');
-            } catch (error) {
-                tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">Error loading papers or connecting to API</td></tr>';
-                console.error('Error loading papers:', error);
-            }
-        }
-
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function escapeHtmlAttr(text) {
-            if (!text) return '';
-            return text.replace(/"/g, '&quot;');
-        }
-
-        function sanitizeId(filename) {
-            // Replace non-alphanumeric characters with underscores
-            return filename.replace(/[^a-zA-Z0-9]/g, '_');
-        }
-
-        // Drag and Drop Upload
-        const uploadZone = document.getElementById('uploadZone');
-
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.classList.add('dragover');
-        });
-
-        uploadZone.addEventListener('dragleave', () => {
-            uploadZone.classList.remove('dragover');
-        });
-
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.classList.remove('dragover');
-            const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-            if (files.length > 0) {
-                uploadFiles(files);
-            } else {
-                showToast('Only PDF files are allowed', 'error');
-            }
-        });
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files);
-            if (files.length > 0) {
-                uploadFiles(files);
-            }
-            event.target.value = ''; // Reset input
-        }
-
-        async function uploadFiles(files) {
-            for (const file of files) {
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-
-                    const response = await fetch(`${API_URL}/upload`, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) {
-                        const error = await response.json();
-                        throw new Error(error.detail || 'Upload failed');
-                    }
-
-                    const result = await response.json();
-                    showToast(`Uploaded: ${result.filename}`, 'success');
-                } catch (error) {
-                    showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
-                }
-            }
-            loadDocumentStats();
-            loadPapersList();
-        }
-
-        // Wrapper function to handle the button click safely
-        function triggerIngest(btn) {
-            const filename = btn.getAttribute('data-filename');
-            ingestPaper(filename, btn);
-        }
-
-        async function ingestPaper(filename, btn) {
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = 'Processing...';
-
-            try {
-                const response = await fetch(`${API_URL}/ingest`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pdf_path: filename })
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Ingestion failed');
-                }
-
-                const result = await response.json();
-                showToast(`Ingested ${result.chunks_ingested} chunks from ${filename}`, 'success');
-                btn.textContent = '✓ Done';
-                btn.classList.remove('btn-success');
-                btn.style.background = '#334155';
-                loadDocumentStats();
-            } catch (error) {
-                showToast(`Failed to ingest: ${error.message}`, 'error');
-                btn.disabled = false;
-                btn.textContent = originalText;
-            }
-        }
-
-        // ====================================================================
-        // Modals (Purge + Supported Languages)
-        // ====================================================================
-
-        function showPurgeModal(type) {
-            pendingPurgeType = type;
-            const modal = document.getElementById('purgeModal');
-            // Reset content in case it was used for something else
-            // But here we have specific IDs for title/message so it's fine.
-            modal.classList.add('active');
-        }
-
-        function hidePurgeModal() {
-            document.getElementById('purgeModal').classList.remove('active');
-            pendingPurgeType = null;
-        }
-
-        async function confirmPurge() {
-            if (!pendingPurgeType) return;
-
-            const endpoint = pendingPurgeType === 'papers' ? '/purge/papers' : '/purge/database';
-
-            try {
-                const response = await fetch(`${API_URL}${endpoint}`, {
-                    method: 'DELETE'
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Purge failed');
-                }
-
-                const result = await response.json();
-                showToast(result.message, 'success');
-                loadDocumentStats();
-                loadPapersList();
-            } catch (error) {
-                showToast(`Purge failed: ${error.message}`, 'error');
-            }
-
-            hidePurgeModal();
-        }
-        
-        // Supported Languages Modal
-        function showLangModal() {
-            document.getElementById('langModal').classList.add('active');
-        }
-
-        function hideLangModal() {
-            document.getElementById('langModal').classList.remove('active');
-        }
-
-        // Toast Notifications
-        function showToast(message, type = 'success') {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
-            toast.textContent = message;
-            container.appendChild(toast);
-
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => toast.remove(), 300);
-            }, 4000);
-        }
-
-        // Load stats on page load
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDocumentStats();
-            // We also try to load papers immediately
-            loadPapersList();
-
-            // Attach purge button event listeners
-            document.getElementById('purgePapersBtn').addEventListener('click', () => showPurgeModal('papers'));
-            document.getElementById('purgeDatabaseBtn').addEventListener('click', () => showPurgeModal('database'));
-        });
-    </script>
-
     <div class="toast-container" id="toastContainer"></div>
 
+    <!-- Purge Modal -->
     <div class="modal-overlay" id="purgeModal">
         <div class="modal">
             <h3>Confirm Action</h3>
@@ -1336,6 +1485,7 @@
         </div>
     </div>
 
+    <!-- Language Modal -->
     <div class="modal-overlay" id="langModal">
         <div class="modal">
             <h3>Supported Languages</h3>
@@ -1344,22 +1494,70 @@
                     <tr>
                         <th>Language</th>
                         <th>Code</th>
-                        <th>Native Name</th>
+                        <th>Native</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr><td>English</td><td>en</td><td>English</td></tr>
-                    <tr><td>Hindi</td><td>hi</td><td>हिंदी</td></tr>
-                    <tr><td>Telugu</td><td>te</td><td>తెలుగు</td></tr>
-                    <tr><td>Tamil</td><td>ta</td><td>தமிழ்</td></tr>
-                    <tr><td>Bengali</td><td>bn</td><td>বাংলা</td></tr>
-                    <tr><td>Marathi</td><td>mr</td><td>मराठी</td></tr>
-                    <tr><td>Gujarati</td><td>gu</td><td>ગુજરાતી</td></tr>
-                    <tr><td>Kannada</td><td>kn</td><td>ಕನ್ನಡ</td></tr>
-                    <tr><td>Malayalam</td><td>ml</td><td>മലയാളം</td></tr>
-                    <tr><td>Punjabi</td><td>pa</td><td>ਪੰਜਾਬੀ</td></tr>
-                    <tr><td>Odia</td><td>or</td><td>ଓଡ଼ିଆ</td></tr>
-                    <tr><td>Urdu</td><td>ur</td><td>اردو</td></tr>
+                    <tr>
+                        <td>English</td>
+                        <td>en</td>
+                        <td>English</td>
+                    </tr>
+                    <tr>
+                        <td>Hindi</td>
+                        <td>hi</td>
+                        <td>हिंदी</td>
+                    </tr>
+                    <tr>
+                        <td>Telugu</td>
+                        <td>te</td>
+                        <td>తెలుగు</td>
+                    </tr>
+                    <tr>
+                        <td>Tamil</td>
+                        <td>ta</td>
+                        <td>தமிழ்</td>
+                    </tr>
+                    <tr>
+                        <td>Bengali</td>
+                        <td>bn</td>
+                        <td>বাংলা</td>
+                    </tr>
+                    <tr>
+                        <td>Marathi</td>
+                        <td>mr</td>
+                        <td>मराठी</td>
+                    </tr>
+                    <tr>
+                        <td>Gujarati</td>
+                        <td>gu</td>
+                        <td>ગુજરાતી</td>
+                    </tr>
+                    <tr>
+                        <td>Kannada</td>
+                        <td>kn</td>
+                        <td>ಕನ್ನಡ</td>
+                    </tr>
+                    <tr>
+                        <td>Malayalam</td>
+                        <td>ml</td>
+                        <td>മലയാളം</td>
+                    </tr>
+                    <tr>
+                        <td>Punjabi</td>
+                        <td>pa</td>
+                        <td>ਪੰਜਾਬੀ</td>
+                    </tr>
+                    <tr>
+                        <td>Odia</td>
+                        <td>or</td>
+                        <td>ଓଡ଼ିଆ</td>
+                    </tr>
+                    <tr>
+                        <td>Urdu</td>
+                        <td>ur</td>
+                        <td>اردو</td>
+                    </tr>
                 </tbody>
             </table>
             <div class="modal-actions">
@@ -1367,6 +1565,631 @@
             </div>
         </div>
     </div>
+
+    <script>
+        // ═══════════════════════════════════════════════════════════════
+        // SCIENTIFIC BACKGROUND ANIMATION ENGINE
+        // Layers: Neural graph · DNA helix · Atoms · Wave equations ·
+        //         Floating formulae · Constellation field · Data pulses
+        // ═══════════════════════════════════════════════════════════════
+        const sciCanvas = document.getElementById('sci-canvas');
+        const sciCtx = sciCanvas.getContext('2d');
+        let W, H, tick = 0;
+
+        function resize() {
+            W = sciCanvas.width = window.innerWidth;
+            H = sciCanvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', () => { resize(); initAll(); });
+
+        // ── Colour helpers ──────────────────────────────────────────────
+        function isDark() { return document.documentElement.getAttribute('data-theme') !== 'light'; }
+
+        const PALETTE = {
+            dark: { primary: [139, 92, 246], secondary: [56, 189, 248], accent: [244, 114, 182], mint: [52, 211, 153], warn: [251, 191, 36] },
+            light: { primary: [124, 58, 237], secondary: [14, 165, 233], accent: [236, 72, 153], mint: [16, 185, 129], warn: [245, 158, 11] }
+        };
+        function pal(key, a = 1) {
+            const theme = isDark() ? PALETTE.dark : PALETTE.light;
+            const [r, g, b] = theme[key];
+            return `rgba(${r},${g},${b},${a})`;
+        }
+        function baseAlpha(a) { return isDark() ? a : a * 0.55; }
+
+        // ── 1. NEURAL NETWORK NODES ─────────────────────────────────────
+        let nodes = [];
+        function initNodes() {
+            nodes = [];
+            const count = Math.min(40, Math.floor(W * H / 28000));
+            for (let i = 0; i < count; i++) {
+                nodes.push({
+                    x: Math.random() * W, y: Math.random() * H,
+                    vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
+                    r: Math.random() * 2.2 + 0.8,
+                    phase: Math.random() * Math.PI * 2,
+                    phaseSpeed: 0.008 + Math.random() * 0.012,
+                    colorKey: ['primary', 'secondary', 'accent', 'mint'][Math.floor(Math.random() * 4)],
+                    type: Math.random() < 0.15 ? 'hub' : 'node'   // hubs are bigger
+                });
+            }
+        }
+
+        function drawNodes() {
+            // move
+            nodes.forEach(n => {
+                n.x += n.vx; n.y += n.vy; n.phase += n.phaseSpeed;
+                if (n.x < 0) n.x = W; if (n.x > W) n.x = 0;
+                if (n.y < 0) n.y = H; if (n.y > H) n.y = 0;
+            });
+
+            // connections
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const threshold = nodes[i].type === 'hub' || nodes[j].type === 'hub' ? 200 : 130;
+                    if (dist < threshold) {
+                        const alpha = baseAlpha((1 - dist / threshold) * 0.12);
+                        sciCtx.beginPath();
+                        sciCtx.moveTo(nodes[i].x, nodes[i].y);
+                        sciCtx.lineTo(nodes[j].x, nodes[j].y);
+                        sciCtx.strokeStyle = pal('primary', alpha);
+                        sciCtx.lineWidth = 0.5;
+                        sciCtx.stroke();
+
+                        // data pulse travelling along edge
+                        if (Math.random() < 0.002) {
+                            pulses.push({ x1: nodes[i].x, y1: nodes[i].y, x2: nodes[j].x, y2: nodes[j].y, t: 0, speed: 0.008 + Math.random() * 0.012, colorKey: nodes[i].colorKey });
+                        }
+                    }
+                }
+            }
+
+            // draw nodes
+            nodes.forEach(n => {
+                const a = baseAlpha(0.5 + 0.3 * Math.sin(n.phase));
+                const r = n.type === 'hub' ? n.r * 2.5 : n.r;
+                // glow
+                const grd = sciCtx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r * 3.5);
+                grd.addColorStop(0, pal(n.colorKey, a * 0.8));
+                grd.addColorStop(1, pal(n.colorKey, 0));
+                sciCtx.beginPath(); sciCtx.arc(n.x, n.y, r * 3.5, 0, Math.PI * 2);
+                sciCtx.fillStyle = grd; sciCtx.fill();
+                // core
+                sciCtx.beginPath(); sciCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+                sciCtx.fillStyle = pal(n.colorKey, a); sciCtx.fill();
+            });
+        }
+
+        // ── 2. DATA PULSES along edges ──────────────────────────────────
+        let pulses = [];
+        function drawPulses() {
+            pulses = pulses.filter(p => p.t <= 1);
+            pulses.forEach(p => {
+                p.t += p.speed;
+                const x = p.x1 + (p.x2 - p.x1) * p.t;
+                const y = p.y1 + (p.y2 - p.y1) * p.t;
+                sciCtx.beginPath(); sciCtx.arc(x, y, 2.2, 0, Math.PI * 2);
+                sciCtx.fillStyle = pal(p.colorKey, baseAlpha(0.75));
+                sciCtx.fill();
+            });
+        }
+
+        // ── 3. DNA DOUBLE HELIX ─────────────────────────────────────────
+        let dnaHelices = [];
+        function initDNA() {
+            dnaHelices = [];
+            // 2 helices scattered around the canvas
+            const positions = [
+                { x: W * 0.08, y: H * 0.1, len: Math.min(H * 0.7, 500) },
+                { x: W * 0.92, y: H * 0.2, len: Math.min(H * 0.6, 450) }
+            ];
+            positions.forEach(p => dnaHelices.push(p));
+        }
+
+        function drawDNA() {
+            dnaHelices.forEach(h => {
+                const amplitude = 22, period = 60, steps = Math.floor(h.len / 3);
+                const phase = tick * 0.018;
+                for (let i = 0; i < steps; i++) {
+                    const t = i / steps;
+                    const y = h.y + t * h.len;
+                    const x1 = h.x + Math.sin(t * Math.PI * 2 * (h.len / period) + phase) * amplitude;
+                    const x2 = h.x + Math.sin(t * Math.PI * 2 * (h.len / period) + phase + Math.PI) * amplitude;
+
+                    // strand dots
+                    if (i % 2 === 0) {
+                        sciCtx.beginPath(); sciCtx.arc(x1, y, 1.2, 0, Math.PI * 2);
+                        sciCtx.fillStyle = pal('secondary', baseAlpha(0.55)); sciCtx.fill();
+                        sciCtx.beginPath(); sciCtx.arc(x2, y, 1.2, 0, Math.PI * 2);
+                        sciCtx.fillStyle = pal('accent', baseAlpha(0.55)); sciCtx.fill();
+                    }
+
+                    // base pair rungs (every ~10 steps)
+                    if (i % 10 === 0) {
+                        sciCtx.beginPath();
+                        sciCtx.moveTo(x1, y); sciCtx.lineTo(x2, y);
+                        sciCtx.strokeStyle = pal('mint', baseAlpha(0.2));
+                        sciCtx.lineWidth = 0.8; sciCtx.stroke();
+                        // rung endpoints
+                        [x1, x2].forEach(xd => {
+                            sciCtx.beginPath(); sciCtx.arc(xd, y, 2.2, 0, Math.PI * 2);
+                            sciCtx.fillStyle = pal('mint', baseAlpha(0.55)); sciCtx.fill();
+                        });
+                    }
+                }
+            });
+        }
+
+        // ── 4. ORBITING ATOMS ──────────────────────────────────────────
+        let atoms = [];
+        function initAtoms() {
+            atoms = [];
+            const count = 4;
+            for (let i = 0; i < count; i++) {
+                atoms.push({
+                    x: Math.random() * W, y: Math.random() * H * 0.8 + H * 0.1,
+                    nucleusR: 4 + Math.random() * 4,
+                    orbits: Array.from({ length: 2 + Math.floor(Math.random() * 2) }, (_, oi) => ({
+                        rx: 28 + oi * 18 + Math.random() * 12,
+                        ry: 14 + oi * 10 + Math.random() * 8,
+                        angle: Math.random() * Math.PI, tilt: Math.random() * Math.PI,
+                        speed: (0.012 + Math.random() * 0.018) * (Math.random() < 0.5 ? 1 : -1),
+                        electronAngle: Math.random() * Math.PI * 2,
+                        colorKey: ['primary', 'secondary', 'accent', 'mint'][oi % 4]
+                    })),
+                    phase: Math.random() * Math.PI * 2,
+                    drift: { x: (Math.random() - 0.5) * 0.08, y: (Math.random() - 0.5) * 0.05 }
+                });
+            }
+        }
+
+        function drawAtoms() {
+            atoms.forEach(a => {
+                a.x += a.drift.x; a.y += a.drift.y; a.phase += 0.005;
+                if (a.x < -80) a.x = W + 80; if (a.x > W + 80) a.x = -80;
+                if (a.y < -80) a.y = H + 80; if (a.y > H + 80) a.y = -80;
+
+                // nucleus glow
+                const grd = sciCtx.createRadialGradient(a.x, a.y, 0, a.x, a.y, a.nucleusR * 3.5);
+                grd.addColorStop(0, pal('warn', baseAlpha(0.45 + 0.2 * Math.sin(a.phase))));
+                grd.addColorStop(1, pal('warn', 0));
+                sciCtx.beginPath(); sciCtx.arc(a.x, a.y, a.nucleusR * 3.5, 0, Math.PI * 2);
+                sciCtx.fillStyle = grd; sciCtx.fill();
+                // nucleus core
+                sciCtx.beginPath(); sciCtx.arc(a.x, a.y, a.nucleusR, 0, Math.PI * 2);
+                sciCtx.fillStyle = pal('warn', baseAlpha(0.6)); sciCtx.fill();
+
+                // orbits & electrons
+                a.orbits.forEach(o => {
+                    o.electronAngle += o.speed;
+                    // orbit ellipse
+                    sciCtx.save();
+                    sciCtx.translate(a.x, a.y);
+                    sciCtx.rotate(o.tilt);
+                    sciCtx.beginPath();
+                    sciCtx.ellipse(0, 0, o.rx, o.ry, 0, 0, Math.PI * 2);
+                    sciCtx.strokeStyle = pal(o.colorKey, baseAlpha(0.14));
+                    sciCtx.lineWidth = 0.8; sciCtx.stroke();
+
+                    // electron
+                    const ex = Math.cos(o.electronAngle) * o.rx;
+                    const ey = Math.sin(o.electronAngle) * o.ry;
+                    // electron glow
+                    const eg = sciCtx.createRadialGradient(ex, ey, 0, ex, ey, 6);
+                    eg.addColorStop(0, pal(o.colorKey, baseAlpha(0.9)));
+                    eg.addColorStop(1, pal(o.colorKey, 0));
+                    sciCtx.beginPath(); sciCtx.arc(ex, ey, 6, 0, Math.PI * 2);
+                    sciCtx.fillStyle = eg; sciCtx.fill();
+                    sciCtx.beginPath(); sciCtx.arc(ex, ey, 2, 0, Math.PI * 2);
+                    sciCtx.fillStyle = pal(o.colorKey, baseAlpha(1)); sciCtx.fill();
+
+                    // electron trail
+                    for (let tr = 1; tr <= 5; tr++) {
+                        const ta = o.electronAngle - o.speed * tr * 3;
+                        sciCtx.beginPath();
+                        sciCtx.arc(Math.cos(ta) * o.rx, Math.sin(ta) * o.ry, 1.2 - tr * 0.18, 0, Math.PI * 2);
+                        sciCtx.fillStyle = pal(o.colorKey, baseAlpha((0.5 - tr * 0.08)));
+                        sciCtx.fill();
+                    }
+                    sciCtx.restore();
+                });
+            });
+        }
+
+        // ── 5. WAVE EQUATIONS (sine/cosine pulses) ──────────────────────
+        function drawWaves() {
+            const waves = [
+                { yBase: H * 0.15, amplitude: 18, freq: 0.018, speed: 0.025, colorKey: 'secondary', alpha: 0.13 },
+                { yBase: H * 0.82, amplitude: 14, freq: 0.022, speed: -0.03, colorKey: 'accent', alpha: 0.11 },
+                { yBase: H * 0.5, amplitude: 10, freq: 0.03, speed: 0.02, colorKey: 'mint', alpha: 0.09 }
+            ];
+            waves.forEach(w => {
+                sciCtx.beginPath();
+                for (let x = 0; x < W; x += 3) {
+                    const y = w.yBase + Math.sin(x * w.freq + tick * w.speed) * w.amplitude
+                        + Math.sin(x * w.freq * 1.7 + tick * w.speed * 0.6 + 1.2) * w.amplitude * 0.4;
+                    x === 0 ? sciCtx.moveTo(x, y) : sciCtx.lineTo(x, y);
+                }
+                sciCtx.strokeStyle = pal(w.colorKey, baseAlpha(w.alpha));
+                sciCtx.lineWidth = 1.2; sciCtx.stroke();
+            });
+        }
+
+        // ── 6. FLOATING SCIENTIFIC FORMULAE ────────────────────────────
+        const FORMULAE = [
+            'E = mc²', 'F = ma', 'PV = nRT', 'ΔG = ΔH − TΔS',
+            'λ = h/p', '∇²ψ', 'i℃ℏ ∂ψ/∂t', 'H₂O', 'DNA', 'RNA',
+            'σ = √variance', '∑ xᵢ/n', 'lim δ→0', 'pH = −log[H⁺]',
+            'ATP', 'v = λf', 'E = hf', '∮ B·dA = 0', 'NAD⁺'
+        ];
+        let formulae = [];
+        function initFormulae() {
+            formulae = FORMULAE.map(f => ({
+                text: f,
+                x: Math.random() * W, y: Math.random() * H,
+                vx: (Math.random() - 0.5) * 0.18, vy: -0.06 - Math.random() * 0.1,
+                alpha: Math.random() * 0.18 + 0.06,
+                size: 10 + Math.random() * 7,
+                colorKey: ['primary', 'secondary', 'accent', 'mint'][Math.floor(Math.random() * 4)],
+                rotate: (Math.random() - 0.5) * 0.3,
+                currentRotate: Math.random() * Math.PI * 2
+            }));
+        }
+
+        function drawFormulae() {
+            formulae.forEach(f => {
+                f.x += f.vx; f.y += f.vy; f.currentRotate += f.rotate * 0.005;
+                if (f.y < -30) { f.y = H + 30; f.x = Math.random() * W; }
+                if (f.x < -60) f.x = W + 60; if (f.x > W + 60) f.x = -60;
+                sciCtx.save();
+                sciCtx.translate(f.x, f.y);
+                sciCtx.rotate(f.currentRotate * 0.04);
+                sciCtx.font = `${f.size}px 'DM Sans', monospace`;
+                sciCtx.fillStyle = pal(f.colorKey, baseAlpha(f.alpha));
+                sciCtx.fillText(f.text, 0, 0);
+                sciCtx.restore();
+            });
+        }
+
+        // ── 7. HEXAGONAL GRID (chemistry / protein structure) ──────────
+        function drawHexGrid() {
+            const hexR = 28, hexH = hexR * Math.sqrt(3);
+            const cols = Math.ceil(W / (hexR * 1.5)) + 2;
+            const rows = Math.ceil(H / hexH) + 2;
+            const pulseFreq = 0.0006;
+
+            for (let row = -1; row < rows; row++) {
+                for (let col = -1; col < cols; col++) {
+                    const cx = col * hexR * 1.5 - 14;
+                    const cy = row * hexH + (col % 2 === 0 ? 0 : hexH / 2) - 14;
+
+                    // distance from center for fade
+                    const distCenter = Math.sqrt((cx - W / 2) ** 2 + (cy - H / 2) ** 2);
+                    const fadeR = Math.min(W, H) * 0.65;
+                    if (distCenter > fadeR) continue;
+
+                    const alphaMod = (1 - distCenter / fadeR) * 0.07
+                        + 0.02 * Math.sin(cx * pulseFreq + tick * 0.008)
+                        * Math.sin(cy * pulseFreq + tick * 0.006);
+
+                    sciCtx.beginPath();
+                    for (let i = 0; i < 6; i++) {
+                        const angle = (Math.PI / 3) * i - Math.PI / 6;
+                        const px = cx + hexR * Math.cos(angle);
+                        const py = cy + hexR * Math.sin(angle);
+                        i === 0 ? sciCtx.moveTo(px, py) : sciCtx.lineTo(px, py);
+                    }
+                    sciCtx.closePath();
+                    sciCtx.strokeStyle = pal('primary', baseAlpha(Math.max(0, alphaMod)));
+                    sciCtx.lineWidth = 0.5; sciCtx.stroke();
+                }
+            }
+        }
+
+        // ── 8. SCANNING BEAMS ───────────────────────────────────────────
+        let beams = [];
+        function initBeams() {
+            beams = [
+                { angle: -Math.PI / 4, speed: 0.0015, length: Math.max(W, H) * 1.4, colorKey: 'secondary' },
+                { angle: Math.PI / 3, speed: -0.001, length: Math.max(W, H) * 1.2, colorKey: 'primary' }
+            ];
+        }
+
+        function drawBeams() {
+            beams.forEach(b => {
+                b.angle += b.speed;
+                const cx = W * 0.5, cy = H * 0.5;
+                const ex = cx + Math.cos(b.angle) * b.length;
+                const ey = cy + Math.sin(b.angle) * b.length;
+                const grd = sciCtx.createLinearGradient(cx, cy, ex, ey);
+                grd.addColorStop(0, pal(b.colorKey, baseAlpha(0.06)));
+                grd.addColorStop(0.5, pal(b.colorKey, baseAlpha(0.02)));
+                grd.addColorStop(1, pal(b.colorKey, 0));
+                sciCtx.beginPath();
+                sciCtx.moveTo(cx, cy);
+                sciCtx.lineTo(cx + Math.cos(b.angle - 0.04) * b.length, cy + Math.sin(b.angle - 0.04) * b.length);
+                sciCtx.lineTo(ex, ey);
+                sciCtx.closePath();
+                sciCtx.fillStyle = grd; sciCtx.fill();
+            });
+        }
+
+        // ── MASTER INIT & LOOP ──────────────────────────────────────────
+        function initAll() {
+            initNodes();
+            initDNA();
+            initAtoms();
+            initFormulae();
+            initBeams();
+        }
+        initAll();
+
+        function sciLoop() {
+            sciCtx.clearRect(0, 0, W, H);
+            tick++;
+
+            // fill base colour
+            sciCtx.fillStyle = isDark() ? '#0A0A0C' : '#F4F2FB';
+            sciCtx.fillRect(0, 0, W, H);
+
+            drawHexGrid();
+            drawWaves();
+            drawBeams();
+            drawDNA();
+            drawAtoms();
+            drawNodes();
+            drawPulses();
+            drawFormulae();
+
+            requestAnimationFrame(sciLoop);
+        }
+        sciLoop();
+
+        // ─── THEME ──────────────────────────────────────
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentDark = html.getAttribute('data-theme') === 'dark';
+            html.setAttribute('data-theme', currentDark ? 'light' : 'dark');
+            document.getElementById('themeIcon').textContent = currentDark ? '☀️' : '🌙';
+            localStorage.setItem('indicrag-theme', currentDark ? 'light' : 'dark');
+        }
+        const saved = localStorage.getItem('indicrag-theme');
+        if (saved) {
+            document.documentElement.setAttribute('data-theme', saved);
+            document.getElementById('themeIcon').textContent = saved === 'light' ? '☀️' : '🌙';
+        }
+
+        // ─── API ─────────────────────────────────────────
+        const API_URL = window.location.origin;
+
+        function setExample(text) {
+            document.getElementById('question').value = text;
+            document.getElementById('question').focus();
+        }
+
+        function handleExampleKey(event, text) {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExample(text); }
+        }
+
+        async function askQuestion() {
+            const question = document.getElementById('question').value.trim();
+            const strategy = document.getElementById('strategy').value;
+            if (!question) { showError('Please enter a question'); return; }
+
+            document.getElementById('error').classList.remove('active');
+            document.getElementById('result').classList.remove('active');
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('askBtn').disabled = true;
+
+            try {
+                const res = await fetch(`${API_URL}/query`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, strategy, top_k: 5 })
+                });
+                if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Failed'); }
+                displayResult(await res.json());
+            } catch (e) {
+                showError(e.message);
+            } finally {
+                document.getElementById('loading').classList.remove('active');
+                document.getElementById('askBtn').disabled = false;
+            }
+        }
+
+        function displayResult(data) {
+            document.getElementById('languageBadge').textContent = data.language_name || 'Unknown';
+
+            const answerEl = document.getElementById('answer');
+            if (data.answer) {
+                // Parse markdown into HTML safely 
+                answerEl.innerHTML = marked.parse(data.answer);
+            } else {
+                answerEl.textContent = 'No answer provided.';
+            }
+
+            if (data.citations && data.citations.length > 0) {
+                document.getElementById('citations').innerHTML = data.citations.map(c =>
+                    `<div class="citation"><span class="citation-number">[${c.number || '?'}]</span>${escapeHtml(c.title)} — ${escapeHtml(c.section)}</div>`
+                ).join('');
+                document.getElementById('citationsSection').style.display = 'block';
+            } else {
+                document.getElementById('citationsSection').style.display = 'none';
+            }
+
+            document.getElementById('processingTime').textContent = `${(data.processing_time || 0).toFixed(2)}s`;
+            document.getElementById('chunksUsed').textContent = data.chunks_used || 0;
+            document.getElementById('result').classList.add('active');
+            document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg; el.classList.add('active');
+            setTimeout(() => el.classList.remove('active'), 5000);
+        }
+
+        document.getElementById('question').addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askQuestion(); }
+        });
+
+        // ─── DOCUMENT MANAGEMENT ─────────────────────────
+        let pendingPurgeType = null;
+
+        function toggleManagementPanel() {
+            const p = document.getElementById('managementPanel');
+            p.classList.toggle('open');
+            if (p.classList.contains('open')) { loadDocumentStats(); loadPapersList(); }
+        }
+
+        async function loadDocumentStats() {
+            try {
+                const r1 = await fetch(`${API_URL}/papers`);
+                if (r1.ok) document.getElementById('paperCount').textContent = (await r1.json()).length;
+                const r2 = await fetch(`${API_URL}/stats`);
+                if (r2.ok) document.getElementById('chunkCount').textContent = (await r2.json()).document_count;
+            } catch (e) { }
+        }
+
+        async function loadPapersList() {
+            const tbody = document.getElementById('papersTableBody');
+            try {
+                const r = await fetch(`${API_URL}/papers`);
+                if (!r.ok) throw new Error();
+                const papers = await r.json();
+                if (!papers.length) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">No papers yet. Upload PDFs to get started!</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = papers.map(p => {
+                    const sid = p.filename.replace(/[^a-zA-Z0-9]/g, '_');
+                    return `<tr>
+                    <td>${escapeHtml(p.filename)}</td>
+                    <td>${p.size_mb ? p.size_mb.toFixed(2) : '?'} MB</td>
+                    <td><button class="btn-success btn-small" data-filename="${escapeHtmlAttr(p.filename)}" onclick="triggerIngest(this)" id="ingest-${sid}">Ingest</button></td>
+                </tr>`;
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">Error loading papers or connecting to API</td></tr>';
+            }
+        }
+
+        function escapeHtml(t) {
+            if (!t) return '';
+            const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
+        }
+        function escapeHtmlAttr(t) { return t ? t.replace(/"/g, '&quot;') : ''; }
+
+        const uploadZone = document.getElementById('uploadZone');
+        uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+        uploadZone.addEventListener('drop', e => {
+            e.preventDefault(); uploadZone.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+            files.length ? uploadFiles(files) : showToast('Only PDF files are allowed', 'error');
+        });
+
+        function handleFileSelect(e) {
+            const files = Array.from(e.target.files);
+            if (files.length) uploadFiles(files);
+            e.target.value = '';
+        }
+
+        async function uploadFiles(files) {
+            for (const file of files) {
+                try {
+                    const fd = new FormData(); fd.append('file', file);
+                    const r = await fetch(`${API_URL}/upload`, { method: 'POST', body: fd });
+                    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Upload failed'); }
+                    showToast(`✓ Uploaded: ${(await r.json()).filename}`, 'success');
+                } catch (e) { showToast(`✗ ${file.name}: ${e.message}`, 'error'); }
+            }
+            loadDocumentStats(); loadPapersList();
+        }
+
+        function triggerIngest(btn) { ingestPaper(btn.getAttribute('data-filename'), btn); }
+
+        async function ingestPaper(filename, btn) {
+            const orig = btn.textContent;
+            btn.disabled = true; btn.textContent = 'Processing…';
+            try {
+                const r = await fetch(`${API_URL}/ingest`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pdf_path: filename })
+                });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Ingestion failed'); }
+                const res = await r.json();
+                showToast(`✓ Ingested ${res.chunks_ingested} chunks`, 'success');
+                btn.textContent = '✓ Done';
+                btn.style.cssText = 'background:var(--bg-elevated);color:var(--text-muted);cursor:default;';
+                loadDocumentStats();
+            } catch (e) {
+                showToast(`✗ ${e.message}`, 'error');
+                btn.disabled = false; btn.textContent = orig;
+            }
+        }
+
+        async function ingestAllPapers() {
+            const btn = document.getElementById('ingestAllBtn');
+            if (!btn) return;
+            const orig = btn.textContent;
+            btn.disabled = true; btn.textContent = 'Processing All…';
+            showToast('Starting bulk ingestion...', 'success');
+            try {
+                const r = await fetch(`${API_URL}/ingest/all`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }
+                });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Bulk ingestion failed'); }
+                const res = await r.json();
+                showToast(`✓ ${res.title} (${res.chunks_ingested} chunks)`, 'success');
+                loadDocumentStats();
+                loadPapersList();
+            } catch (e) {
+                showToast(`✗ ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false; btn.textContent = orig;
+            }
+        }
+
+        function showPurgeModal(type) { pendingPurgeType = type; document.getElementById('purgeModal').classList.add('active'); }
+        function hidePurgeModal() { document.getElementById('purgeModal').classList.remove('active'); pendingPurgeType = null; }
+
+        async function confirmPurge() {
+            if (!pendingPurgeType) return;
+            const ep = pendingPurgeType === 'papers' ? '/purge/papers' : '/purge/database';
+            try {
+                const r = await fetch(`${API_URL}${ep}`, { method: 'DELETE' });
+                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Purge failed'); }
+                showToast((await r.json()).message, 'success');
+                loadDocumentStats(); loadPapersList();
+            } catch (e) { showToast(`Purge failed: ${e.message}`, 'error'); }
+            hidePurgeModal();
+        }
+
+        function showLangModal() { document.getElementById('langModal').classList.add('active'); }
+        function hideLangModal() { document.getElementById('langModal').classList.remove('active'); }
+
+        document.querySelectorAll('.modal-overlay').forEach(o => {
+            o.addEventListener('click', e => {
+                if (e.target === o) { o.classList.remove('active'); if (o.id === 'purgeModal') pendingPurgeType = null; }
+            });
+        });
+
+        function showToast(msg, type = 'success') {
+            const c = document.getElementById('toastContainer');
+            const t = document.createElement('div');
+            t.className = `toast toast-${type}`; t.textContent = msg;
+            c.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 4000);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDocumentStats(); loadPapersList();
+            document.getElementById('purgePapersBtn').addEventListener('click', () => showPurgeModal('papers'));
+            document.getElementById('purgeDatabaseBtn').addEventListener('click', () => showPurgeModal('database'));
+        });
+    </script>
 </body>
 
 </html>

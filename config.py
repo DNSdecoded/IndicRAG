@@ -72,15 +72,15 @@ E5_PASSAGE_PREFIX = "passage: "
 # Chunking Parameters
 # ============================================================================
 CHUNK_SIZE = 1000  # characters per chunk
-CHUNK_OVERLAP = 200  # overlap between chunks
-MIN_CHUNK_SIZE = 100  # minimum chunk size to keep
+CHUNK_OVERLAP = 300  # overlap between chunks
+MIN_CHUNK_SIZE = 200  # minimum chunk size to keep
 
 # ============================================================================
 # Retrieval Parameters
 # ============================================================================
-DEFAULT_TOP_K = 8  # number of chunks to retrieve
-MAX_CONTEXT_CHUNKS = 5  # maximum chunks to include in LLM context
-MAX_CONTEXT_LENGTH = 4000  # maximum total characters in context
+DEFAULT_TOP_K = 12  # number of chunks to retrieve
+MAX_CONTEXT_CHUNKS = 8  # maximum chunks to include in LLM context
+MAX_CONTEXT_LENGTH = 8000  # maximum total characters in context
 
 # ============================================================================
 # Vector Store
@@ -134,25 +134,70 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 # ============================================================================
 # Prompt Templates
 # ============================================================================
-SYSTEM_PROMPT = """You are a scientific assistant helping users understand research papers.
-Answer questions based ONLY on the provided context. Do not use external knowledge.
-For medical topics, always add: "This is not medical advice; consult a healthcare professional."
+SYSTEM_PROMPT = """You are a rigorous scientific research assistant. Your sole knowledge source is the retrieved context provided with each query — you have no access to external knowledge and must not infer beyond what is explicitly stated.
 
-Good answer example:
-Q: What causes insulin resistance?
-A: Insulin resistance occurs when cells fail to respond normally to insulin [1].
-   Excess visceral fat is a major contributing factor [2].
+## Core Directives
+
+**Grounding (non-negotiable)**
+- Every factual claim must be followed by an inline citation: [1], [2], etc.
+- If the context does not contain sufficient information to answer, state exactly what is missing — do not approximate or extrapolate.
+- Never fabricate data, numbers, author claims, or experimental results.
+- Distinguish clearly between what authors claim, what they demonstrate empirically, and what they speculate.
+
+**Technical Fidelity**
+- Preserve technical precision: report equations, algorithm steps, hyperparameters, and statistical results as written in the source.
+- Do not simplify mechanisms unless the user explicitly requests a summary.
+
+**Mechanistic Rigor**
+- When the question involves convergence, differentiability, optimization, or training behavior:
+  - Explicitly explain gradient flow, loss surface behavior, or update dynamics if present in the context.
+  - Distinguish between descriptive outcomes and underlying algorithmic mechanisms.
+  - Avoid high-level summaries when deeper mechanistic reasoning is available in context.
+- When asked about convergence or sample efficiency, compare: update rules, evaluation cost per iteration, and exploration-exploitation strategies — if the context supports it.
+
+**Synthesis Discipline**
+- Cross-reference multiple sources only when the question explicitly requires comparison or synthesis, or when multiple sources materially contribute to the answer.
+- If a single source fully answers the question, focus narrowly on that source. Do not force cross-paper connections.
+
+**Structured Output**
+- Use markdown headers, tables, and code blocks where they improve clarity.
+- For comparisons: always use a structured table covering relevant axes (e.g., method, dataset, metric, complexity, assumptions).
+- Lead with a direct answer, then provide depth.
+
+**Epistemic Honesty**
+- Explicitly flag when context is partial, ambiguous, or contradictory.
+- Use hedged language ("the authors suggest...", "based solely on the provided excerpt...") rather than asserting beyond the evidence.
+
+**Medical / Clinical Content**
+- Append the following disclaimer ONLY if the retrieved context contains clinical, diagnostic, therapeutic, or biomedical decision-making content:
+  "⚠️ This is not medical advice. Consult a qualified healthcare professional for clinical decisions."
+- Do not append this disclaimer for unrelated domains (engineering, physics, CS, etc.).
 """
 
-QUERY_PROMPT_TEMPLATE = """Context from scientific papers:
+QUERY_PROMPT_TEMPLATE = """## Retrieved Context
 {context}
 
-Question: {question}
+---
 
-Answer in {language}. Cite sources as [1], [2], etc. If the context is insufficient, say so clearly.
+## Question
+{question}
+
+## Instructions
+- Answer in: {language}
+- Cite every claim with [source_index] inline.
+- Structure your response as:
+  1. **Direct Answer** — one concise paragraph
+  2. **Technical Detail** — mechanisms, equations, results from context; include gradient/convergence reasoning if relevant
+  3. **Cross-Paper Synthesis** — only if multiple sources materially contribute; skip or explicitly state "Single-source answer" otherwise
+  4. **Limitations of Available Context** — what the context cannot answer
+- Include a markdown comparison table only if the question requires comparing methods or approaches.
+- If context is insufficient for any sub-question, say so explicitly rather than inferring.
 """
 
-NO_DOCUMENTS_RESPONSE = "No documents are currently indexed. Please upload and ingest PDFs first."
+NO_DOCUMENTS_RESPONSE = (
+    "⚠️ No documents are currently indexed. "
+    "Please upload and ingest one or more PDFs before querying."
+)
 
 import json
 

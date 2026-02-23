@@ -425,6 +425,12 @@ MAX_CONTEXT_CHUNKS = 3  # Fewer chunks in context
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
 **Recent improvements:**
+* ✅ Complete UI/UX revamp with dark/light themes and robust markdown support
+* ✅ Parallel PDF ingestion pipeline with MD5 hash caching
+* ✅ Bulk extraction endpoint (`/ingest/all`)
+* ✅ Enhanced math-aware sentence chunking via `regex` library
+* ✅ Stricter system prompts enforcing epistemic honesty and mechanistic rigor
+* ✅ Resilient lock-free vector database pruning
 * ✅ Production logging migration
 * ✅ Robust error handling
 * ✅ Pydantic v2 compatibility
@@ -433,7 +439,6 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 * ✅ Citation extraction fixes
 * ✅ Purge utility addition
 * ✅ Web UI document management (upload, ingest, purge)
-* ✅ Improved chunking for scientific text
 * ✅ Server concurrency fix with threadpool
 
 ---

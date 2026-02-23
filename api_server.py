@@ -308,6 +308,49 @@ async def ingest_document(
         )
 
 
+@app.post("/ingest/all", response_model=IngestResponse, tags=["Management"])
+async def ingest_all_documents(
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Ingest all PDF documents in the papers directory.
+    
+    Requires authentication if API keys are configured.
+    """
+    start_time = time.time()
+    
+    try:
+        import ingest as ingest_module
+        import config
+        
+        logger.info("Ingesting all documents in papers directory")
+        
+        # Ingest all PDFs (run in thread pool to avoid blocking event loop)
+        stats = await run_in_threadpool(
+            ingest_module.ingest_directory,
+            pdf_dir=str(config.PAPERS_DIR)
+        )
+        
+        processing_time = time.time() - start_time
+        
+        return IngestResponse(
+            status="success",
+            chunks_ingested=stats.get('total_chunks', 0),
+            paper_id="all",
+            title=f"Ingested {stats.get('successful', 0)} of {stats.get('total_files', 0)} papers",
+            processing_time=processing_time
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ingesting all documents: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error ingesting all documents: {str(e)}"
+        )
+
+
 @app.get("/stats", tags=["Management"])
 async def get_stats(authenticated: bool = Depends(verify_api_key)):
     """Get vector store statistics."""

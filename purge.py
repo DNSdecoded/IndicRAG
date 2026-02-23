@@ -96,8 +96,6 @@ def purge_database(confirmed: bool = False) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    import vector_store
-    
     db_dir = config.CHROMA_DB_DIR
     
     if not db_dir.exists():
@@ -106,39 +104,30 @@ def purge_database(confirmed: bool = False) -> bool:
         db_dir.mkdir(exist_ok=True)
         return True
     
-    # Get database stats if possible
+    # Try to get count by reading sqlite directly without chroma to avoid persistent locks
+    count = "unknown"
     try:
-        collection = vector_store.get_or_create_collection()
-        count = collection.count()
-        logger.warning(f"Database contains {count} document chunk(s)")
+        import sqlite3
+        db_file = db_dir / "chroma.sqlite3"
+        if db_file.exists():
+            conn = sqlite3.connect(db_file)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM embeddings")
+                count = cursor.fetchone()[0]
+            finally:
+                conn.close()
+            logger.warning(f"Database contains {count} document chunk(s)")
     except Exception as e:
-        logger.warning(f"Could not read database stats: {e}")
-        count = "unknown"
+        logger.debug(f"Could not read database stats directly: {e}")
     
     if not confirmed:
         if not confirm_action(f"Delete vector database ({count} chunks)?"):
             logger.info("Cancelled database deletion")
             return False
     
-    # Method 1: Delete collection logically
+    # Delete entire ChromaDB directory directly
     try:
-        vector_store.delete_collection(config.COLLECTION_NAME)
-        logger.info("Deleted vector store collection")
-    except Exception as e:
-        logger.warning(f"Could not delete collection: {e}")
-    
-    # Method 2: Delete entire ChromaDB directory
-    try:
-        # Before deleting directory, explicitly clear the chroma client if loaded
-        # This releases the sqlite3 file lock on Windows
-        if 'vector_store' in sys.modules:
-            vector_store._chroma_client = None
-            import gc
-            gc.collect()
-            
-        import time
-        time.sleep(1)  # Brief pause to ensure OS releases file handles
-        
         if db_dir.exists():
             shutil.rmtree(db_dir)
             logger.info(f"Deleted database directory: {db_dir}")

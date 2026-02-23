@@ -6,12 +6,22 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import logging
 from tqdm import tqdm
+import hashlib
+import concurrent.futures
 import pdf_utils
 import embeddings
 import vector_store
 import config
 
 logger = logging.getLogger(__name__)
+
+def calculate_md5(file_path: str) -> str:
+    """Calculate MD5 hash of a file."""
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 
 def ingest_paper(
@@ -37,14 +47,19 @@ def ingest_paper(
     if collection is None:
         collection = vector_store.get_or_create_collection()
         
-    # Before embedding, check if paper already exists
-    existing = collection.get(where={'paper_id': paper_id}, limit=1)
-    if existing and existing.get('ids'):
-        logger.info(f'Paper {paper_id} already indexed, skipping')
-        return 0
-    
     if metadata is None:
         metadata = {}
+        
+    # Before embedding, check if paper already exists
+    existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
+    if existing and existing.get('ids'):
+        existing_metadata = existing['metadatas'][0]
+        if 'file_hash' in metadata and existing_metadata.get('file_hash') == metadata['file_hash']:
+            logger.info(f'Paper {paper_id} already indexed and unchanged, skipping')
+            return 0
+        else:
+            logger.info(f'Paper {paper_id} has changed or hash missing. Reindexing...')
+            vector_store.delete_by_paper_id(paper_id, collection)
     
     all_chunks = []
     all_metadata = []
@@ -53,6 +68,11 @@ def ingest_paper(
     
     # Process each section
     for section_name, section_text in sections:
+        # Skip references/bibliography to save context space
+        if section_name.lower() in ['references', 'bibliography']:
+            logger.debug(f"Skipping '{section_name}' for paper {paper_id}")
+            continue
+            
         # Skip very short sections
         if len(section_text) < config.MIN_CHUNK_SIZE:
             continue
@@ -122,6 +142,11 @@ def ingest_pdf(
     
     # Process PDF
     logger.info(f"\nProcessing: {pdf_path}")
+    
+    if metadata is None:
+        metadata = {}
+    metadata['file_hash'] = calculate_md5(pdf_path)
+    
     result = pdf_utils.process_pdf(pdf_path)
     
     if result is None:
@@ -139,6 +164,21 @@ def ingest_pdf(
     
     logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
     return num_chunks, result['title']
+
+
+def _extract_worker(path: str) -> tuple:
+    """Worker function for parallel PDF extraction."""
+    import pdf_utils
+    from pathlib import Path
+    
+    # Calculate metadata and hash
+    m = {} # We can always compute and append file_hash without needing metadata_fn references
+    from ingest import calculate_md5  # Import locally to avoid circular dependencies if moved later
+    m['file_hash'] = calculate_md5(path)
+    
+    paper_id = Path(path).stem
+    res = pdf_utils.process_pdf(path)
+    return path, paper_id, res, m
 
 
 def ingest_directory(
@@ -188,30 +228,38 @@ def ingest_directory(
         "failed_files": []
     }
     
-    # Process each PDF
-    for pdf_path in tqdm(pdf_files, desc="Ingesting PDFs"):
-        try:
-            # Get metadata if function provided
-            metadata = metadata_fn(str(pdf_path)) if metadata_fn else None
-            
-            # Ingest PDF
-            num_chunks, title = ingest_pdf(
-                pdf_path=str(pdf_path),
-                metadata=metadata,
-                collection=collection
-            )
-            
-            if num_chunks > 0:
+    # Process each PDF using parallel extraction
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # Pass metadata_fn explicitly if needed, but ProcessPoolExecutor limits passing functions.
+        # If metadata_fn is just returning empty dict natively, we can safely omit or pass a simpler ref.
+        # Since metadata_fn is usually None in our calls, we'll just omit it to prevent pickling issues.
+        future_to_pdf = {executor.submit(_extract_worker, str(p)): str(p) for p in pdf_files}
+        
+        for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=len(pdf_files), desc="Ingesting PDFs"):
+            pdf_path = future_to_pdf[future]
+            try:
+                path, paper_id, result, metadata = future.result()
+                
+                if result is None:
+                    stats["failed"] += 1
+                    stats["failed_files"].append(path)
+                    continue
+                    
+                num_chunks = ingest_paper(
+                    paper_id=paper_id,
+                    title=result['title'],
+                    sections=result['sections'],
+                    metadata=metadata,
+                    collection=collection
+                )
+                
                 stats["successful"] += 1
                 stats["total_chunks"] += num_chunks
-            else:
+                
+            except Exception as e:
+                logger.error(f"\nError processing {pdf_path}: {e}")
                 stats["failed"] += 1
                 stats["failed_files"].append(str(pdf_path))
-        
-        except Exception as e:
-            logger.error(f"\nError processing {pdf_path}: {e}")
-            stats["failed"] += 1
-            stats["failed_files"].append(str(pdf_path))
     
     # Print summary
     logger.info("\n" + "=" * 60)

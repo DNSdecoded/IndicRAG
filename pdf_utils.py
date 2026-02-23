@@ -2,7 +2,7 @@
 PDF extraction and text processing utilities.
 """
 
-import re
+import regex as re
 import fitz  # PyMuPDF
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
@@ -74,6 +74,40 @@ def clean_text(text: str) -> str:
     return text
 
 
+def recursive_split(text: str, max_chars: int) -> List[str]:
+    """Fallback recursive splitting for oversized sentences."""
+    if len(text) <= max_chars:
+        return [text]
+    
+    # Try splitting by comma
+    parts = text.split(', ')
+    if len(parts) > 1 and max(len(p) for p in parts) < max_chars:
+        chunks = []
+        current = ""
+        for p in parts:
+            if len(current) + len(p) + 2 > max_chars and current:
+                chunks.append(current)
+                current = p
+            else:
+                current += ", " + p if current else p
+        if current:
+            chunks.append(current)
+        return chunks
+        
+    # Split by words
+    words = text.split(' ')
+    chunks = []
+    current = ""
+    for w in words:
+        if len(current) + len(w) + 1 > max_chars and current:
+            chunks.append(current)
+            current = w
+        else:
+            current += " " + w if current else w
+    if current:
+        chunks.append(current)
+    return chunks
+
 def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[str]:
     """
     Split text into overlapping chunks.
@@ -91,45 +125,64 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     if overlap is None:
         overlap = config.CHUNK_OVERLAP
     
+    # Protect math formulas with placeholders
+    math_pattern = r'(\$[^$]+\$)'
+    math_blocks = []
+    
+    def math_replacer(match):
+        math_blocks.append(match.group(1))
+        return f"__MATH_{len(math_blocks)-1}__"
+    
+    text = re.sub(math_pattern, math_replacer, text)
+    
     # Split into sentences using robust pattern that handles scientific abbreviations
-    # This pattern:
     # - Looks for sentence endings (.!?) followed by whitespace
-    # - Ignores common abbreviations (Fig., Eq., Dr., Mr., Ms., Prof., vs., etc., al., approx.)
-    # - Requires next character to be uppercase (indicating new sentence)
-    # - Handles edge cases like "1.0" by not splitting after digits
-    sentence_pattern = r'(?<![A-Z])(?<!\b[Ff]ig)(?<!\b[Ee]q)(?<!\b[Dd]r)(?<!\b[Mm]r)(?<!\b[Mm]s)(?<!\b[Pp]rof)(?<!\bvs)(?<!\betc)(?<!\bal)(?<!\bapprox)(?<!\d)[.!?]\s+(?=[A-Z])'
+    # - Ignores common abbreviations
+    # - Requires next character to be uppercase (Unicode \p{Lu})
+    # - Handles edge cases like "1.0"
+    sentence_pattern = r'(?<!\b(?:[Ff]ig|[Ee]q|[Dd]r|[Mm]r|[Mm]s|[Pp]rof|[Vv]s|[Ee]tc|[Ee]t|[Aa]l|[Aa]pprox|[Vv]ol|[Pp]p|[Nn]o|[\d]))[.!?]\s+(?=\p{Lu})'
     sentences = re.split(sentence_pattern, text)
     
     chunks = []
     current_chunk = ""
     
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            logger.warning("Empty or unparseable sentence detected, skipping.")
-            continue
-            
-        if len(sentence) > max_chars:
-            logger.warning(f"Sentence exceeds max_chars ({len(sentence)} > {max_chars}). It will be kept as an oversized chunk.")
-            
-        # If adding this sentence would exceed max_chars, save current chunk
-        if len(current_chunk) + len(sentence) > max_chars and current_chunk:
+    def append_sentence_to_chunk(s: str):
+        nonlocal current_chunk, chunks
+        if len(current_chunk) + len(s) > max_chars and current_chunk:
             if len(current_chunk) >= config.MIN_CHUNK_SIZE:
                 chunks.append(current_chunk.strip())
             
-            # Start new chunk with overlap from previous chunk
             if overlap > 0 and len(current_chunk) > overlap:
-                current_chunk = current_chunk[-overlap:] + " " + sentence
+                current_chunk = current_chunk[-overlap:] + " " + s
             else:
-                current_chunk = sentence
+                current_chunk = s
         else:
-            current_chunk += " " + sentence if current_chunk else sentence
-    
+            current_chunk += " " + s if current_chunk else s
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        if len(sentence) > max_chars:
+            # Recursive character splitting for oversized blocks
+            sub_sentences = recursive_split(sentence, max_chars)
+            for sub_s in sub_sentences:
+                append_sentence_to_chunk(sub_s)
+        else:
+            append_sentence_to_chunk(sentence)
+            
     # Add the last chunk
     if current_chunk and len(current_chunk) >= config.MIN_CHUNK_SIZE:
         chunks.append(current_chunk.strip())
-    
-    return chunks
+        
+    # Restore math blocks
+    def restore_math(chunk_text):
+        for i, block in enumerate(math_blocks):
+            chunk_text = chunk_text.replace(f"__MATH_{i}__", block)
+        return chunk_text
+
+    return [restore_math(c) for c in chunks]
 
 
 def extract_sections(text: str) -> List[Tuple[str, str]]:
@@ -145,7 +198,7 @@ def extract_sections(text: str) -> List[Tuple[str, str]]:
     sections = []
     
     # Create regex pattern for section headers (must be exact lines)
-    header_pattern = r'\n[ \t]*(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*\n'
+    header_pattern = r'\n[ \t]*(?:\d+\.?|[A-Z]\.)?[ \t]*(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*\n'
     
     # Find all section headers
     matches = list(re.finditer(header_pattern, text, re.IGNORECASE))

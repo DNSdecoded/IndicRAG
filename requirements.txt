@@ -26,6 +26,7 @@ prometheus-fastapi-instrumentator>=6.1.0
 python-dotenv>=1.0.0
 tqdm>=4.66.0
 numpy>=1.24.0
+regex>=2023.10.3
 
 # Strategy B Translation (required for IndicTrans2)
 sentencepiece>=0.1.99
