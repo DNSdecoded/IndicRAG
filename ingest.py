@@ -71,39 +71,48 @@ def ingest_paper(
     all_metadata = []
     all_ids = []
     chunk_counter = 0
-    
-    # Process each section
-    for section_name, section_text in sections:
-        # Skip references/bibliography to save context space
-        if section_name.lower() in ['references', 'bibliography']:
-            logger.debug(f"Skipping '{section_name}' for paper {paper_id}")
-            continue
-            
-        # Skip very short sections
-        if len(section_text) < config.MIN_CHUNK_SIZE:
-            continue
-        
-        # Chunk the section
-        chunks = pdf_utils.simple_chunk(section_text)
-        
-        # Create metadata for each chunk
-        for chunk in chunks:
-            safe_section = section_name.replace(' ', '_').lower()
-            chunk_id = f"{paper_id}_{safe_section}_{chunk_counter}"
-            
-            chunk_metadata = {
-                "paper_id": paper_id,
-                "title": title,
-                "section": section_name,
-                "chunk_index": chunk_counter,
-                **metadata  # Add any additional metadata
-            }
-            
-            all_chunks.append(chunk)
-            all_metadata.append(chunk_metadata)
-            all_ids.append(chunk_id)
-            chunk_counter += 1
-    
+
+    def _build_chunks(sections_iter, skip_refs: bool):
+        """Process sections into chunk lists, optionally skipping references."""
+        nonlocal chunk_counter
+        for section_name, section_text in sections_iter:
+            if skip_refs and section_name.lower() in ['references', 'bibliography']:
+                logger.debug(f"Skipping '{section_name}' for paper {paper_id}")
+                continue
+            # Skip very short sections
+            if len(section_text) < config.MIN_CHUNK_SIZE:
+                continue
+            # Chunk the section
+            chunks = pdf_utils.simple_chunk(section_text)
+            for chunk in chunks:
+                safe_section = section_name.replace(' ', '_').lower()
+                chunk_id = f"{paper_id}_{safe_section}_{chunk_counter}"
+                chunk_metadata = {
+                    "paper_id": paper_id,
+                    "title": title,
+                    "section": section_name,
+                    "chunk_index": chunk_counter,
+                    **metadata
+                }
+                all_chunks.append(chunk)
+                all_metadata.append(chunk_metadata)
+                all_ids.append(chunk_id)
+                chunk_counter += 1
+
+    # First pass: normal behaviour — skip references/bibliography
+    _build_chunks(sections, skip_refs=True)
+
+    # Fallback: multi-chapter books often have every chapter's body mis-labeled
+    # as 'references' by the section extractor. If nothing survived the filter,
+    # retry including those sections so no content is silently lost.
+    if not all_chunks:
+        logger.warning(
+            f"No chunks after reference-filter for '{paper_id}'. "
+            "Retrying without section-name filter (likely a multi-chapter book)."
+        )
+        chunk_counter = 0
+        _build_chunks(sections, skip_refs=False)
+
     if not all_chunks:
         logger.warning(f"No chunks created for paper {paper_id}")
         return 0
