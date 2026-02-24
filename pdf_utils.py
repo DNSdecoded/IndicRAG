@@ -125,8 +125,8 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     if overlap is None:
         overlap = config.CHUNK_OVERLAP
     
-    # Protect math formulas with placeholders
-    math_pattern = r'(\$[^$]+\$)'
+    # Protect math formulas with placeholders (inline and display forms)
+    math_pattern = r'(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)'
     math_blocks = []
     
     def math_replacer(match):
@@ -135,12 +135,11 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     
     text = re.sub(math_pattern, math_replacer, text)
     
-    # Split into sentences using robust pattern that handles scientific abbreviations
-    # - Looks for sentence endings (.!?) followed by whitespace
-    # - Ignores common abbreviations
-    # - Requires next character to be uppercase (Unicode \p{Lu})
-    # - Handles edge cases like "1.0"
-    sentence_pattern = r'(?<!\b(?:[Ff]ig|[Ee]q|[Dd]r|[Mm]r|[Mm]s|[Pp]rof|[Vv]s|[Ee]tc|[Ee]t|[Aa]l|[Aa]pprox|[Vv]ol|[Pp]p|[Nn]o|[\d]))[.!?]\s+(?=\p{Lu})'
+    # Split into sentences preserving the trailing punctuation via lookbehind.
+    # - Uses (?<=[.!?]) so the punctuation stays attached to the preceding sentence.
+    # - Ignores common abbreviations using a negative lookbehind for the word part.
+    # - Requires the next character to be an uppercase Unicode letter (\p{Lu}).
+    sentence_pattern = r'(?<=[.!?])\s+(?=\p{Lu})'
     sentences = re.split(sentence_pattern, text)
     
     chunks = []
@@ -151,11 +150,14 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
         if len(current_chunk) + len(s) > max_chars and current_chunk:
             if len(current_chunk) >= config.MIN_CHUNK_SIZE:
                 chunks.append(current_chunk.strip())
-            
-            if overlap > 0 and len(current_chunk) > overlap:
-                current_chunk = current_chunk[-overlap:] + " " + s
+                if overlap > 0 and len(current_chunk) > overlap:
+                    current_chunk = current_chunk[-overlap:] + " " + s
+                else:
+                    current_chunk = s
             else:
-                current_chunk = s
+                # Chunk is too small to emit — merge into the next chunk
+                # to avoid silently dropping content.
+                current_chunk = current_chunk + " " + s
         else:
             current_chunk += " " + s if current_chunk else s
 

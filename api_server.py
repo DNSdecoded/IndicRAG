@@ -145,6 +145,16 @@ class IngestResponse(BaseModel):
     processing_time: float
 
 
+class BulkIngestResponse(BaseModel):
+    """Response model for bulk document ingestion."""
+    status: str
+    total_files: int
+    successful: int
+    failed: int
+    chunks_ingested: int
+    processing_time: float
+
+
 # Routes
 
 @app.get("/", tags=["General"])
@@ -308,7 +318,7 @@ async def ingest_document(
         )
 
 
-@app.post("/ingest/all", response_model=IngestResponse, tags=["Management"])
+@app.post("/ingest/all", response_model=BulkIngestResponse, tags=["Management"])
 async def ingest_all_documents(
     authenticated: bool = Depends(verify_api_key)
 ):
@@ -321,7 +331,6 @@ async def ingest_all_documents(
     
     try:
         import ingest as ingest_module
-        import config
         
         logger.info("Ingesting all documents in papers directory")
         
@@ -332,12 +341,14 @@ async def ingest_all_documents(
         )
         
         processing_time = time.time() - start_time
+        status_value = "partial" if stats.get('failed', 0) > 0 else "success"
         
-        return IngestResponse(
-            status="success",
+        return BulkIngestResponse(
+            status=status_value,
+            total_files=stats.get('total_files', 0),
+            successful=stats.get('successful', 0),
+            failed=stats.get('failed', 0),
             chunks_ingested=stats.get('total_chunks', 0),
-            paper_id="all",
-            title=f"Ingested {stats.get('successful', 0)} of {stats.get('total_files', 0)} papers",
             processing_time=processing_time
         )
     
@@ -348,7 +359,7 @@ async def ingest_all_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error ingesting all documents: {str(e)}"
-        )
+        ) from e
 
 
 @app.get("/stats", tags=["Management"])

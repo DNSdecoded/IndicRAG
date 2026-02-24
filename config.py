@@ -208,6 +208,9 @@ try:
         _patterns = json.load(f)
 except FileNotFoundError:
     _patterns = {}
+except json.JSONDecodeError as e:
+    logger.warning(f"Failed to parse {_patterns_file}: {e}. Using default patterns.")
+    _patterns = {}
 
 # Common header/footer patterns to remove
 NOISE_PATTERNS = _patterns.get("NOISE_PATTERNS", [
