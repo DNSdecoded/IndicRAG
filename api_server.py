@@ -147,7 +147,10 @@ class HealthResponse(BaseModel):
 
 import re as _re
 
-_SAFE_PATH_RE = _re.compile(r'^[\w\-. /\\]+$')  # allow only safe filename characters
+# Block the genuinely dangerous characters: null bytes, shell metacharacters.
+# We rely on the is_absolute() + relative_to() checks for traversal; the regex
+# only needs to reject characters that can't appear in safe filenames.
+_UNSAFE_CHARS_RE = _re.compile(r'[\x00\|;&`$<>"\'\!\*\?\{\}\[\]\\~]')
 
 class IngestRequest(BaseModel):
     """Request model for document ingestion."""
@@ -166,10 +169,10 @@ class IngestRequest(BaseModel):
             raise ValueError("pdf_path must be a relative path, not an absolute path.")
         # Reject any path component that is '..' (CWE-22/23)
         parts = PurePosixPath(v.replace('\\', '/')).parts
-        if '..' in parts or '.' in parts[:-1]:  # allow trailing '.' only as part of filename
+        if '..' in parts:
             raise ValueError("pdf_path must not contain '..' traversal sequences.")
-        # Reject unsafe characters
-        if not _SAFE_PATH_RE.match(v):
+        # Reject shell-dangerous characters (null bytes, metacharacters)
+        if _UNSAFE_CHARS_RE.search(v):
             raise ValueError("pdf_path contains invalid characters.")
         return v.strip()
 
