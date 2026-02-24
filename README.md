@@ -350,7 +350,7 @@ LLM_MAX_TOKENS = 2048
 
 ---
 
-## � Final KPI Metrics
+## 📈 Final KPI Metrics
 
 | Metric | Final Score |
 |--------|-------------|
@@ -366,7 +366,7 @@ LLM_MAX_TOKENS = 2048
 
 ---
 
-## �📊 Performance
+## 📊 Performance
 
 Typical query latency (on CPU):
 * **Strategy A** (direct multilingual): ~1-2s
