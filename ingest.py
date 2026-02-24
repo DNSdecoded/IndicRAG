@@ -59,7 +59,13 @@ def ingest_paper(
             return 0
         else:
             logger.info(f'Paper {paper_id} has changed or hash missing. Reindexing...')
-            vector_store.delete_by_paper_id(paper_id, collection)
+            try:
+                vector_store.delete_by_paper_id(paper_id, collection)
+            except Exception as del_err:
+                logger.error(f"Failed to delete existing chunks for paper {paper_id}: {del_err}")
+                raise RuntimeError(
+                    f"Aborting re-index of '{paper_id}' to prevent duplicate chunks: {del_err}"
+                ) from del_err
     
     all_chunks = []
     all_metadata = []
@@ -166,15 +172,20 @@ def ingest_pdf(
     return num_chunks, result['title']
 
 
-def _extract_worker(path: str) -> tuple:
+def _extract_worker(path: str, metadata: dict = None) -> tuple:
     """Worker function for parallel PDF extraction."""
+    import hashlib
     import pdf_utils
     from pathlib import Path
     
-    # Calculate metadata and hash
-    m = {} # We can always compute and append file_hash without needing metadata_fn references
-    from ingest import calculate_md5  # Import locally to avoid circular dependencies if moved later
-    m['file_hash'] = calculate_md5(path)
+    # Compute MD5 hash locally — no heavy module imports
+    hash_md5 = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    
+    m = dict(metadata) if metadata else {}
+    m['file_hash'] = hash_md5.hexdigest()
     
     paper_id = Path(path).stem
     res = pdf_utils.process_pdf(path)
@@ -230,10 +241,22 @@ def ingest_directory(
     
     # Process each PDF using parallel extraction
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        # Pass metadata_fn explicitly if needed, but ProcessPoolExecutor limits passing functions.
-        # If metadata_fn is just returning empty dict natively, we can safely omit or pass a simpler ref.
-        # Since metadata_fn is usually None in our calls, we'll just omit it to prevent pickling issues.
-        future_to_pdf = {executor.submit(_extract_worker, str(p)): str(p) for p in pdf_files}
+        # Evaluate metadata_fn in the parent process so the result (a plain dict)
+        # can be safely pickled and passed to worker processes.
+        def _get_metadata(p):
+            if metadata_fn is None:
+                return {}
+            try:
+                result = metadata_fn(p)
+                return result if isinstance(result, dict) else {}
+            except Exception as meta_err:
+                logger.warning(f"metadata_fn failed for {p}, using empty metadata: {meta_err}")
+                return {}
+
+        future_to_pdf = {
+            executor.submit(_extract_worker, str(p), _get_metadata(p)): str(p)
+            for p in pdf_files
+        }
         
         for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=len(pdf_files), desc="Ingesting PDFs"):
             pdf_path = future_to_pdf[future]

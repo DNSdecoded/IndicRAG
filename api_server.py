@@ -3,22 +3,36 @@ FastAPI server for the Multilingual Scientific RAG system.
 Production-ready REST API with authentication, validation, and monitoring.
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Security, status
+from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 import logging
 import time
 from datetime import datetime
 import os
+import uuid
+import threading
 
 import rag
 import config
+
+# ---------------------------------------------------------------------------
+# In-memory job store for background ingestion tasks
+# ---------------------------------------------------------------------------
+_jobs: Dict[str, Dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
+
+
+def _update_job(job_id: str, **kwargs):
+    """Thread-safe update of a job's fields."""
+    with _jobs_lock:
+        _jobs[job_id].update(kwargs)
 
 # Configure logging
 logging.basicConfig(
@@ -143,6 +157,37 @@ class IngestResponse(BaseModel):
     paper_id: str
     title: str
     processing_time: float
+
+
+class BulkIngestResponse(BaseModel):
+    """Response model for bulk document ingestion."""
+    status: str
+    total_files: int
+    successful: int
+    failed: int
+    chunks_ingested: int
+    processing_time: float
+
+
+class IngestJobResponse(BaseModel):
+    """Immediate response when a bulk ingestion job is accepted."""
+    job_id: str
+    status: str
+    message: str
+
+
+class JobStatusResponse(BaseModel):
+    """Status of a background ingestion job."""
+    job_id: str
+    status: str          # pending | running | success | partial | failed
+    total_files: Optional[int] = None
+    successful: Optional[int] = None
+    failed: Optional[int] = None
+    chunks_ingested: Optional[int] = None
+    processing_time: Optional[float] = None
+    error: Optional[str] = None
+    submitted_at: str
+    completed_at: Optional[str] = None
 
 
 # Routes
@@ -308,47 +353,90 @@ async def ingest_document(
         )
 
 
-@app.post("/ingest/all", response_model=IngestResponse, tags=["Management"])
+def _run_bulk_ingest(job_id: str):
+    """Background worker: runs ingest_directory and updates the job store."""
+    import ingest as ingest_module
+    start_time = time.time()
+    _update_job(job_id, status="running")
+    try:
+        stats = ingest_module.ingest_directory(pdf_dir=str(config.PAPERS_DIR))
+        processing_time = time.time() - start_time
+        status_value = "partial" if stats.get("failed", 0) > 0 else "success"
+        _update_job(
+            job_id,
+            status=status_value,
+            total_files=stats.get("total_files", 0),
+            successful=stats.get("successful", 0),
+            failed=stats.get("failed", 0),
+            chunks_ingested=stats.get("total_chunks", 0),
+            processing_time=processing_time,
+            completed_at=datetime.utcnow().isoformat(),
+        )
+        logger.info(f"Bulk ingest job {job_id} finished: {status_value}")
+    except Exception as e:
+        processing_time = time.time() - start_time
+        logger.error(f"Bulk ingest job {job_id} failed: {e}", exc_info=True)
+        _update_job(
+            job_id,
+            status="failed",
+            processing_time=processing_time,
+            error=str(e),
+            completed_at=datetime.utcnow().isoformat(),
+        )
+
+
+@app.post("/ingest/all", response_model=IngestJobResponse, status_code=202, tags=["Management"])
 async def ingest_all_documents(
+    background_tasks: BackgroundTasks,
     authenticated: bool = Depends(verify_api_key)
 ):
     """
-    Ingest all PDF documents in the papers directory.
-    
-    Requires authentication if API keys are configured.
+    Kick off background ingestion of all PDFs in the papers directory.
+
+    Returns **202 Accepted** with a `job_id` immediately.
+    Poll `GET /ingest/status/{job_id}` to check progress and results.
     """
-    start_time = time.time()
-    
-    try:
-        import ingest as ingest_module
-        import config
-        
-        logger.info("Ingesting all documents in papers directory")
-        
-        # Ingest all PDFs (run in thread pool to avoid blocking event loop)
-        stats = await run_in_threadpool(
-            ingest_module.ingest_directory,
-            pdf_dir=str(config.PAPERS_DIR)
-        )
-        
-        processing_time = time.time() - start_time
-        
-        return IngestResponse(
-            status="success",
-            chunks_ingested=stats.get('total_chunks', 0),
-            paper_id="all",
-            title=f"Ingested {stats.get('successful', 0)} of {stats.get('total_files', 0)} papers",
-            processing_time=processing_time
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error ingesting all documents: {e}", exc_info=True)
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "status": "pending",
+            "submitted_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "total_files": None,
+            "successful": None,
+            "failed": None,
+            "chunks_ingested": None,
+            "processing_time": None,
+            "error": None,
+        }
+    background_tasks.add_task(_run_bulk_ingest, job_id)
+    logger.info(f"Bulk ingest job {job_id} queued")
+    return IngestJobResponse(
+        job_id=job_id,
+        status="pending",
+        message="Ingestion started. Poll /ingest/status/{job_id} for progress."
+    )
+
+
+@app.get("/ingest/status/{job_id}", response_model=JobStatusResponse, tags=["Management"])
+async def get_ingest_status(
+    job_id: str,
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Retrieve the status and results of a background ingestion job.
+
+    Possible `status` values: `pending`, `running`, `success`, `partial`, `failed`.
+    """
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error ingesting all documents: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job '{job_id}' not found."
         )
+    return JobStatusResponse(**job)
 
 
 @app.get("/stats", tags=["Management"])

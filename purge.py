@@ -12,7 +12,6 @@ from pathlib import Path
 
 # Import config to get directory paths
 import config
-import sys
 
 # Setup logging
 logging.basicConfig(
