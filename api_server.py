@@ -315,10 +315,33 @@ async def ingest_document(
     try:
         import ingest as ingest_module
         from pathlib import Path
-        
-        # Validate path
-        pdf_path = Path(config.PAPERS_DIR) / request.pdf_path
-        if not pdf_path.exists():
+
+        # --- Path traversal guard (CWE-22) ---
+        base_dir = Path(config.PAPERS_DIR).resolve()
+
+        # 1. Reject absolute paths from the client
+        if Path(request.pdf_path).is_absolute():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="pdf_path must be a relative path."
+            )
+
+        # 2. Build and fully resolve the target path
+        pdf_path = (base_dir / request.pdf_path).resolve()
+
+        # 3. Verify the resolved path stays inside base_dir
+        base_str = str(base_dir)
+        pdf_str  = str(pdf_path)
+        sep = "\\" if "\\" in base_str else "/"
+        if not (pdf_str == base_str or pdf_str.startswith(base_str + sep)):
+            logger.warning(f"Path traversal attempt blocked: {request.pdf_path!r}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid pdf_path: must be within the papers directory."
+            )
+
+        # 4. Confirm the file exists and is a regular file
+        if not pdf_path.exists() or not pdf_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"PDF file not found: {request.pdf_path}"
