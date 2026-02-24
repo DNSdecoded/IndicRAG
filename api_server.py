@@ -145,9 +145,33 @@ class HealthResponse(BaseModel):
     gemini_configured: bool
 
 
+import re as _re
+
+_SAFE_PATH_RE = _re.compile(r'^[\w\-. /\\]+$')  # allow only safe filename characters
+
 class IngestRequest(BaseModel):
     """Request model for document ingestion."""
-    pdf_path: str = Field(..., description="Path to PDF file (relative to papers/ directory)")
+    pdf_path: str = Field(..., description="Relative path to PDF file inside the papers/ directory")
+
+    @field_validator('pdf_path')
+    @classmethod
+    def sanitize_pdf_path(cls, v: str) -> str:
+        """Reject absolute paths, traversal sequences, and unsafe characters (CWE-22/23/36/73/99)."""
+        from pathlib import PurePosixPath, PureWindowsPath
+        # Reject empty
+        if not v or not v.strip():
+            raise ValueError("pdf_path must not be empty.")
+        # Reject absolute paths on both POSIX and Windows
+        if PurePosixPath(v).is_absolute() or PureWindowsPath(v).is_absolute():
+            raise ValueError("pdf_path must be a relative path, not an absolute path.")
+        # Reject any path component that is '..' (CWE-22/23)
+        parts = PurePosixPath(v.replace('\\', '/')).parts
+        if '..' in parts or '.' in parts[:-1]:  # allow trailing '.' only as part of filename
+            raise ValueError("pdf_path must not contain '..' traversal sequences.")
+        # Reject unsafe characters
+        if not _SAFE_PATH_RE.match(v):
+            raise ValueError("pdf_path contains invalid characters.")
+        return v.strip()
 
 
 class IngestResponse(BaseModel):
@@ -316,56 +340,55 @@ async def ingest_document(
         import ingest as ingest_module
         from pathlib import Path
 
-        # --- Path traversal guard (CWE-22) ---
+        # At this point request.pdf_path is already sanitized by the Pydantic validator:
+        # - not absolute, no '..' components, safe characters only.
         base_dir = Path(config.PAPERS_DIR).resolve()
 
-        # 1. Reject absolute paths from the client
-        if Path(request.pdf_path).is_absolute():
+        # Build and resolve the candidate path
+        candidate = (base_dir / request.pdf_path).resolve()
+
+        # Use Path.relative_to() as the authoritative containment check.
+        # This raises ValueError if candidate is not inside base_dir, ensuring
+        # the taint chain is severed: safe_pdf_path is reconstructed from
+        # base_dir (trusted) + the verified relative portion only.
+        try:
+            relative_part = candidate.relative_to(base_dir)
+        except ValueError:
+            logger.warning(f"Path traversal blocked after resolve: {request.pdf_path!r}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="pdf_path must be a relative path."
+                detail="Invalid pdf_path: path escapes the papers directory."
             )
 
-        # 2. Build and fully resolve the target path
-        pdf_path = (base_dir / request.pdf_path).resolve()
+        # Reconstruct from trusted base only (breaks taint chain for CodeQL)
+        safe_pdf_path = base_dir / relative_part
 
-        # 3. Verify the resolved path stays inside base_dir
-        base_str = str(base_dir)
-        pdf_str  = str(pdf_path)
-        sep = "\\" if "\\" in base_str else "/"
-        if not (pdf_str == base_str or pdf_str.startswith(base_str + sep)):
-            logger.warning(f"Path traversal attempt blocked: {request.pdf_path!r}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid pdf_path: must be within the papers directory."
-            )
-
-        # 4. Confirm the file exists and is a regular file
-        if not pdf_path.exists() or not pdf_path.is_file():
+        # Confirm it exists and is a regular file
+        if not safe_pdf_path.exists() or not safe_pdf_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"PDF file not found: {request.pdf_path}"
             )
-        
-        logger.info(f"Ingesting document: {pdf_path}")
-        
+
+        logger.info(f"Ingesting document: {safe_pdf_path}")
+
         # Ingest the PDF (run in thread pool to avoid blocking event loop)
         num_chunks, title = await run_in_threadpool(
             ingest_module.ingest_pdf,
-            pdf_path=str(pdf_path),
-            paper_id=pdf_path.stem
+            pdf_path=str(safe_pdf_path),
+            paper_id=safe_pdf_path.stem
         )
-        
+
         processing_time = time.time() - start_time
-        
+
         return IngestResponse(
             status="success",
             chunks_ingested=num_chunks,
-            paper_id=pdf_path.stem,
+            paper_id=safe_pdf_path.stem,
             title=title,
             processing_time=processing_time
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
