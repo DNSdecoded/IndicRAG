@@ -1,0 +1,39 @@
+{
+  "_instructions": "For each query, list the paper IDs that are truly relevant. Paper IDs should match the keys in 'corpus'. Add or remove queries as needed.",
+  "corpus": {
+    "tandem_nn": "Tandem Neural Network Based Design of Miniaturized Microstrip Antennas",
+    "bayesian_stp": "Bayesian Optimization Based on Student's T Process for Microstrip Antenna",
+    "bayesian_techniques": "BAYESIAN OPTIMIZATION TECHNIQUES FOR Antenna Design",
+    "ppo_pixel": "Proximal Policy Optimization Reinforcement Learning for Pixel Patch Antennas",
+    "ppo_wireless": "Optimizing Wireless Coverage and Capacity with PPO",
+    "surrogate_lowcost": "A Low-Cost Optimization Method for 2-D Surrogate Antenna",
+    "surrogate_framework": "An Antenna Optimization Framework Based on Surrogate Models",
+    "ai_ml_review": "A Comprehensive Review of AI and Machine Learning Techniques for Antenna"
+  },
+  "queries": [
+    {
+      "id": "A",
+      "text": "What is the role of smooth thresholding in tandem neural network antenna design?",
+      "relevant_papers": ["tandem_nn"],
+      "notes": "Single-source question — only the tandem NN paper is relevant"
+    },
+    {
+      "id": "B",
+      "text": "Compare Bayesian optimization and PPO-based RL methods for antenna optimization.",
+      "relevant_papers": ["bayesian_stp", "bayesian_techniques", "ppo_pixel", "ppo_wireless"],
+      "notes": "Cross-method comparison — both BO and PPO papers are relevant"
+    },
+    {
+      "id": "C",
+      "text": "How do surrogate-model-based methods differ from policy-based RL in sample efficiency and convergence behavior?",
+      "relevant_papers": ["surrogate_lowcost", "surrogate_framework", "ppo_pixel"],
+      "notes": "RL context missing from corpus — ppo_pixel listed as relevant but was absent from retrieved results"
+    },
+    {
+      "id": "D",
+      "text": "What hyperparameters control PPO training stability in the cited antenna design paper?",
+      "relevant_papers": ["ppo_pixel"],
+      "notes": "Strict grounding test — only the PPO paper is relevant"
+    }
+  ]
+}

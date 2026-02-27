@@ -1,0 +1,89 @@
+{
+  "_instructions": "Paste your system's output for each query. 'retrieved_papers' = paper IDs returned by ChromaDB (in rank order, rank 1 first). 'answer_claims' = individual factual sentences from the answer. 'claim_citations' = the paper ID cited for that claim. 'cited_chunk_text' = the actual chunk text that was cited.",
+  "results": [
+    {
+      "query_id": "A",
+      "retrieved_papers": ["tandem_nn", "tandem_nn", "tandem_nn", "tandem_nn", "tandem_nn"],
+      "answer_claims": [
+        {
+          "claim": "The smooth thresholding function promotes the discrete nature of design parameters within an exponentially large design space.",
+          "cited_paper": "tandem_nn",
+          "cited_chunk_text": "The ST function is integrated into a tandem neural network architecture consisting of two cascaded networks. Its primary role is to facilitate the design of structures characterized by discrete variables (0 or 1), which is necessary for pixel-based antenna geometries."
+        },
+        {
+          "claim": "The ST function works in conjunction with crucial regularization terms in the network loss function to aid in the realization of discrete designs.",
+          "cited_paper": "tandem_nn",
+          "cited_chunk_text": "The ST function does not operate in isolation; it works in conjunction with crucial regularization terms in the network loss function to aid in the realization of discrete designs."
+        },
+        {
+          "claim": "The resulting antennas can be up to 50% more compact in area and up to 18% thinner in substrate height.",
+          "cited_paper": "tandem_nn",
+          "cited_chunk_text": "The resulting antennas can be up to 50% more compact in area and up to 18% thinner in substrate height while maintaining competitive performance in gain, radiation efficiency (RE), and fractional bandwidth (FBW)."
+        },
+        {
+          "claim": "The framework enables the synthesis of custom microstrip antennas in less than one second once the network is trained.",
+          "cited_paper": "tandem_nn",
+          "cited_chunk_text": "The framework enables the synthesis of custom microstrip antennas in less than one second once the network is trained."
+        }
+      ]
+    },
+    {
+      "query_id": "B",
+      "retrieved_papers": ["bayesian_techniques", "bayesian_stp", "ppo_pixel", "bayesian_stp", "ppo_wireless"],
+      "answer_claims": [
+        {
+          "claim": "BO-STP-EST demonstrated superior performance by finding a minimum value of 2.88e-5 in only 3 iterations.",
+          "cited_paper": "bayesian_stp",
+          "cited_chunk_text": "BO-STP-EST demonstrated superior performance by finding a minimum value (2.88 × 10^-5) in only 3 iterations."
+        },
+        {
+          "claim": "BO-GP-EST required 8 iterations to find its minimum.",
+          "cited_paper": "bayesian_stp",
+          "cited_chunk_text": "BO-GP-EST required 8 iterations to find its minimum."
+        },
+        {
+          "claim": "The PPO algorithm obtains the probability distribution of design parameters based on optimization targets using actor and critic neural network architectures.",
+          "cited_paper": "ppo_pixel",
+          "cited_chunk_text": "Unlike traditional neural networks that learn direct mapping relationships, the PPO algorithm obtains the probability distribution of design parameters based on optimization targets. It utilizes actor and critic neural network architectures to handle high-dimensional mapping between exponentially large design spaces and objectives."
+        },
+        {
+          "claim": "RL is specifically noted for its utility in dynamic environments where antennas must continuously adjust configurations to meet fluctuating user demand or interference.",
+          "cited_paper": "ppo_wireless",
+          "cited_chunk_text": "RL is specifically noted for its utility in dynamic environments where antennas must continuously adjust configurations (e.g., tilt and transmission power) to meet fluctuating user demand or interference."
+        }
+      ]
+    },
+    {
+      "query_id": "C",
+      "retrieved_papers": ["surrogate_lowcost", "surrogate_framework", "surrogate_framework", "surrogate_lowcost", "surrogate_framework"],
+      "answer_claims": [
+        {
+          "claim": "GPR has strong data-fitting capabilities with small sample sizes, performing best when sample size is 600.",
+          "cited_paper": "surrogate_framework",
+          "cited_chunk_text": "Gaussian Process Regression (GPR) is noted for having strong data-fitting capabilities with small sample sizes, performing best when the sample size (S) is 600."
+        },
+        {
+          "claim": "As sample size increases to 1000 and 1600, Decision Tree Regression slightly outperforms GPR.",
+          "cited_paper": "surrogate_framework",
+          "cited_chunk_text": "As the sample size increases to S=1000 and S=1600, Decision Tree Regression (DTR) slightly outperforms GPR."
+        },
+        {
+          "claim": "The context contains no mention of policy, reinforcement learning, gradients in the context of policy updates, or reward signals.",
+          "cited_paper": null,
+          "cited_chunk_text": null
+        }
+      ]
+    },
+    {
+      "query_id": "D",
+      "retrieved_papers": ["ppo_pixel", "ppo_pixel", "ppo_pixel", "ppo_pixel", "ppo_pixel"],
+      "answer_claims": [
+        {
+          "claim": "REPLACE THIS: paste a claim from your actual Test D answer here.",
+          "cited_paper": "ppo_pixel",
+          "cited_chunk_text": "REPLACE THIS: paste the chunk text that was cited."
+        }
+      ]
+    }
+  ]
+}
