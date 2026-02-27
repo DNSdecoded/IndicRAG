@@ -14,7 +14,7 @@ Edit `relevance_judgments.json` to update ground-truth relevance labels. Edit `a
 
 ## Computed Metrics (automated)
 
-_Full per-query breakdown: [eval_report.json](eval_report.json)_
+_Full per-query breakdown: [eval_report.json](Eval/eval_report.json)_
 
 | Metric | Score |
 |---|---|
