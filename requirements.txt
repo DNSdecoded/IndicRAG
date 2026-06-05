@@ -13,7 +13,7 @@ langdetect>=1.0.9
 # fasttext-langdetect>=1.0.5  # Optional, requires C++ build tools
 
 # Google Gemini API
-google-generativeai>=0.3.0
+google-genai>=0.8.0
 
 # API Server
 fastapi>=0.104.0

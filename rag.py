@@ -9,12 +9,27 @@ import embeddings
 import vector_store
 import lang_utils
 import translation
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-if config.LLM_API_KEY:
-    genai.configure(api_key=config.LLM_API_KEY)
+# Client is initialised lazily inside llm_generate() so we can still import
+# this module even when the API key is absent (e.g. retrieval-only mode).
+_genai_client: genai.Client | None = None
+
+
+def _get_client() -> genai.Client:
+    """Return (and lazily create) the shared Google GenAI client."""
+    global _genai_client
+    if _genai_client is None:
+        if not config.LLM_API_KEY:
+            raise ValueError(
+                "Google Gemini API key not configured. "
+                "Please set LLM_API_KEY environment variable or in .env file."
+            )
+        _genai_client = genai.Client(api_key=config.LLM_API_KEY)
+    return _genai_client
 
 
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
@@ -243,82 +258,69 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
-    
-    # Check if API key is configured
-    if not config.LLM_API_KEY:
-        raise ValueError(
-            "Google Gemini API key not configured. "
-            "Please set LLM_API_KEY environment variable or in .env file."
-        )
-    
+
+    client = _get_client()
+
     # Safety settings - set to BLOCK_NONE for scientific content
     safety_settings = [
-        {
-            "category": "HARM_CATEGORY_HARASSMENT",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_HATE_SPEECH",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "threshold": "BLOCK_NONE"
-        },
-        {
-            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-            "threshold": "BLOCK_NONE"
-        },
+        types.SafetySetting(
+            category="HARM_CATEGORY_HARASSMENT",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_HATE_SPEECH",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold="BLOCK_NONE",
+        ),
+        types.SafetySetting(
+            category="HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold="BLOCK_NONE",
+        ),
     ]
-    
-    # Create model with generation config and system instruction
-    generation_config = {
-        "temperature": config.LLM_TEMPERATURE,
-        "max_output_tokens": max_tokens,
-    }
-    
-    model = genai.GenerativeModel(
-        model_name=config.LLM_MODEL_NAME,
-        generation_config=generation_config,
+
+    generate_config = types.GenerateContentConfig(
+        temperature=config.LLM_TEMPERATURE,
+        max_output_tokens=max_tokens,
         safety_settings=safety_settings,
-        system_instruction=config.SYSTEM_PROMPT
+        system_instruction=config.SYSTEM_PROMPT,
     )
-    
+
     try:
-        # Generate response
-        response = model.generate_content(prompt)
-        
+        response = client.models.generate_content(
+            model=config.LLM_MODEL_NAME,
+            contents=prompt,
+            config=generate_config,
+        )
+
         # Check if response has text
-        if hasattr(response, 'text') and response.text:
+        if response.text:
             return response.text
-        
+
         # Handle blocked or empty responses
-        if hasattr(response, 'candidates') and response.candidates:
+        if response.candidates:
             candidate = response.candidates[0]
-            
-            # Check finish reason
-            if hasattr(candidate, 'finish_reason'):
-                finish_reason = candidate.finish_reason
-                
-                # Try to get partial text if available
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    parts_text = []
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'text'):
-                            parts_text.append(part.text)
-                    
-                    if parts_text:
-                        return ''.join(parts_text)
-                
-                # If no text, raise error with finish reason
-                raise Exception(
-                    f"Response blocked or incomplete. Finish reason: {finish_reason}. "
-                    f"This may be due to safety filters or token limits."
-                )
-        
-        # If we get here, no valid response
+
+            # Try to get partial text if available
+            if candidate.content and candidate.content.parts:
+                parts_text = [
+                    part.text
+                    for part in candidate.content.parts
+                    if hasattr(part, 'text') and part.text
+                ]
+                if parts_text:
+                    return ''.join(parts_text)
+
+            finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
+            raise Exception(
+                f"Response blocked or incomplete. Finish reason: {finish_reason}. "
+                f"This may be due to safety filters or token limits."
+            )
+
         raise Exception("No response generated from Gemini API")
-    
+
     except Exception as e:
         logger.error(f"Error calling Gemini API: {e}")
         raise
