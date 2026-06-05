@@ -96,7 +96,7 @@ curl -X POST "http://localhost:8000/query" \
 LLM_API_KEY=your-gemini-api-key
 
 # Optional
-LLM_MODEL_NAME=gemini-3-flash-preview
+LLM_MODEL_NAME=gemini-3.5-flash
 LOG_LEVEL=INFO
 API_KEYS=comma,separated,keys
 ```
@@ -152,7 +152,7 @@ Choose Gemini model in `.env`:
 
 ```bash
 # Fast and cheap (recommended)
-LLM_MODEL_NAME=gemini-3-flash-preview
+LLM_MODEL_NAME=gemini-3.5-flash
 
 # Higher quality
 LLM_MODEL_NAME=gemini-2.5-pro
@@ -228,7 +228,7 @@ docker-compose restart
 # Docker Desktop: Settings → Resources → Memory
 
 # Or use smaller models
-LLM_MODEL_NAME=gemini-3-flash-preview
+LLM_MODEL_NAME=gemini-3.5-flash
 ```
 
 ### ChromaDB errors
@@ -360,7 +360,7 @@ services:
 
 ### Gemini API Costs
 
-- **gemini-3-flash-preview**: ~$0.0001 per query
+- **gemini-3.5-flash**: ~$0.0001 per query
 - **gemini-2.5-pro**: ~$0.002 per query
 
 **Monitor usage:**
@@ -399,7 +399,7 @@ docker-compose logs | grep "Generating answer"
 1. **"API key not configured"**: Check `.env` file exists and has correct key
 2. **"ChromaDB not found"**: Run `docker-compose down && docker-compose up -d`
 3. **"No documents found"**: Ingest PDFs using `/ingest` endpoint or CLI
-4. **"Out of memory"**: Use `gemini-3-flash-preview` model, increase Docker memory
+4. **"Out of memory"**: Use `gemini-3.5-flash` model, increase Docker memory
 
 ### Getting Help
 

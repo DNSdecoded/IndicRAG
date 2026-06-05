@@ -1,4 +1,4 @@
-﻿"""
+"""
 Configuration and constants for the multilingual RAG system.
 """
 
@@ -121,15 +121,15 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # Google Gemini API configuration
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))  # lower temperature for factual responses
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3-flash-preview")  # Gemini model
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
 
 # LLM API Key (required for Gemini)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
 # Note: For Gemini, you can use:
-# - gemini-3-flash-preview (recommended: fast and cost-effective)
+# - gemini-3.5-flash (recommended: stable, fast, cost-effective, agentic)
+# - gemini-3-flash-preview (preview alias for gemini-3.5-flash)
 # - gemini-2.5-pro (higher quality)
-# - gemini-flash-latest (always uses latest flash model)
 
 # ============================================================================
 # Prompt Templates
