@@ -36,7 +36,7 @@ set LLM_API_KEY=AIzaSyYourActualAPIKeyHere
 
 **Install Gemini package:**
 ```bash
-pip install google-generativeai
+pip install google-genai
 ```
 
 ✅ **Done!** The system is already configured to use Gemini in `rag.py`

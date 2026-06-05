@@ -55,7 +55,7 @@ def check_dependencies():
         ('uvicorn', 'uvicorn'),
         ('chromadb', 'chromadb'),
         ('sentence-transformers', 'sentence_transformers'),
-        ('google-generativeai', 'google.generativeai')
+        ('google-genai', 'google.genai')
     ]
     
     missing = []
