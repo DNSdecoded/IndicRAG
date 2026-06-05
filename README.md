@@ -352,6 +352,8 @@ LLM_MAX_TOKENS = 2048
 
 ## 📈 Final KPI Metrics
 
+For detailed evaluation methodology, automated metrics, and per-query qualitative reports, see [docs/evaluation.md](docs/evaluation.md).
+
 | Metric | Final Score |
 |--------|-------------|
 | Retrieval Precision | 0.93 |

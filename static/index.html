@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IndicRAG</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap"
         rel="stylesheet">
@@ -838,6 +840,27 @@
             margin-bottom: 1.75rem;
             color: var(--text-primary);
             font-weight: 300;
+        }
+
+        /* ─── KATEX MATH STYLES ───────────────────────── */
+        .answer .katex-display {
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 0.5rem 0;
+            margin: 1rem 0;
+        }
+
+        .answer .katex {
+            font-size: 1.05em;
+        }
+
+        .math-fallback {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            background: var(--bg-elevated);
+            border-radius: 6px;
+            padding: 0.2rem 0.4rem;
         }
 
         /* ─── MARKDOWN STYLES (for answer) ────────────── */
@@ -2003,8 +2026,48 @@
 
             const answerEl = document.getElementById('answer');
             if (data.answer) {
-                // Parse markdown into HTML safely 
-                answerEl.innerHTML = marked.parse(data.answer);
+                // ── Math-safe markdown rendering ───────────────────────────
+                // 1. Extract $$ and $ math blocks BEFORE marked touches the text,
+                //    replacing them with unique placeholder tokens so marked
+                //    doesn't mangle backslashes / underscores inside formulas.
+                const mathStore = [];
+                function storeMath(tex, display) {
+                    const id = `\x02MATH${mathStore.length}\x03`;
+                    mathStore.push({ id, tex, display });
+                    return id;
+                }
+
+                let text = data.answer;
+
+                // Block math: $$...$$
+                text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => storeMath(tex, true));
+
+                // Inline math: $...$ (not preceded by $ to avoid matching $$)
+                text = text.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, tex) => storeMath(tex, false));
+
+                // 2. Parse the placeholder-bearing text as markdown
+                let html = marked.parse(text);
+
+                // 3. Restore math placeholders with KaTeX-rendered HTML
+                mathStore.forEach(({ id, tex, display }) => {
+                    let rendered;
+                    try {
+                        rendered = katex.renderToString(tex.trim(), {
+                            displayMode: display,
+                            throwOnError: false,
+                            trust: false
+                        });
+                    } catch (err) {
+                        // Fallback: show the raw LaTeX
+                        rendered = display
+                            ? `<pre class="math-fallback">$$${tex}$$</pre>`
+                            : `<code class="math-fallback">$${tex}$</code>`;
+                    }
+                    // id contains regex-special \x02 / \x03 but those are safe literals here
+                    html = html.split(id).join(rendered);
+                });
+
+                answerEl.innerHTML = html;
             } else {
                 answerEl.textContent = 'No answer provided.';
             }

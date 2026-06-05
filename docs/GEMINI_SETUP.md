@@ -39,7 +39,7 @@ export LLM_API_KEY=AIzaSyYourActualAPIKeyHere
 ### Step 3: Install Gemini Package (1 min)
 
 ```bash
-pip install google-generativeai
+pip install google-genai
 ```
 
 Or install all dependencies:
@@ -50,7 +50,12 @@ pip install -r requirements.txt
 ### Step 4: Test the Setup (1 min)
 
 ```bash
-python -c "import google.generativeai as genai; import os; genai.configure(api_key=os.getenv('LLM_API_KEY')); model = genai.GenerativeModel('gemini-3-flash-preview'); print(model.generate_content('Hello!').text)"
+python -c "
+from google import genai, os
+client = genai.Client(api_key=os.getenv('LLM_API_KEY'))
+response = client.models.generate_content(model='gemini-2.0-flash', contents='Hello!')
+print(response.text)
+"
 ```
 
 If this prints a response, you're all set! ✅
@@ -134,9 +139,9 @@ LLM_TEMPERATURE = 0.3  # Lower = more factual, Higher = more creative
 - Try rephrasing your question
 - Check the prompt feedback for details
 
-### "Module 'google.generativeai' not found"
+### "Module 'google.genai' not found"
 ```bash
-pip install google-generativeai
+pip install google-genai
 ```
 
 ---
@@ -150,7 +155,14 @@ Test your setup:
 python -c "import config; print('API Key configured:', bool(config.LLM_API_KEY))"
 
 # Test 2: Test Gemini connection
-python -c "import google.generativeai as genai; import config; genai.configure(api_key=config.LLM_API_KEY); model = genai.GenerativeModel(config.LLM_MODEL_NAME); print(model.generate_content('Say hello').text)"
+# Test 2: Test Gemini connection
+python -c "
+from google import genai
+import config
+client = genai.Client(api_key=config.LLM_API_KEY)
+response = client.models.generate_content(model=config.LLM_MODEL_NAME, contents='Say hello')
+print(response.text)
+"
 
 # Test 3: Test RAG pipeline (requires ingested documents)
 python test_pipeline.py
