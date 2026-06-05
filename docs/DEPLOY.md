@@ -92,7 +92,7 @@ Edit `.env` file:
 LLM_API_KEY=your-gemini-api-key-here
 
 # Optional
-LLM_MODEL_NAME=gemini-3-flash-preview    # or gemini-2.5-pro
+LLM_MODEL_NAME=gemini-3.5-flash    # or gemini-2.5-pro
 LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
 ```
 
