@@ -523,6 +523,146 @@ def answer_question(
         raise ValueError(f"Invalid strategy: {strategy}. Must be 'A' or 'B'")
 
 
+def _build_chat_prompt(
+    user_query: str,
+    context: str,
+    history: str,
+    lang_name: str,
+) -> str:
+    """Build a prompt that includes conversation history before the retrieved context."""
+    history_section = f"## Conversation History\n{history}\n\n---\n\n" if history else ""
+    return (
+        f"{history_section}"
+        f"## Retrieved Context\n{context}\n\n---\n\n"
+        f"## Current Question\n{user_query}\n\n"
+        f"## Instructions\n"
+        f"- Answer in: {lang_name}\n"
+        f"- Cite every claim with [source_index] inline.\n"
+        f"- This is a conversation — refer to prior turns only when directly relevant.\n"
+        f"- Structure your response as:\n"
+        f"  1. **Direct Answer** — one concise paragraph\n"
+        f"  2. **Technical Detail** — mechanisms, equations, results from context; "
+        f"include gradient/convergence reasoning if relevant\n"
+        f"  3. **Cross-Paper Synthesis** — only if multiple sources materially contribute; "
+        f"skip or state \"Single-source answer\" otherwise\n"
+        f"  4. **Limitations of Available Context** — what the context cannot answer\n"
+        f"- Include a markdown comparison table only if the question requires comparing methods or approaches.\n"
+        f"- If context is insufficient, say so explicitly rather than inferring.\n"
+    )
+
+
+def answer_with_history(
+    messages: List[Dict[str, str]],
+    strategy: str = "A",
+    top_k: int = None,
+    filter_dict: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """
+    Answer the latest user message while incorporating conversation history.
+
+    Args:
+        messages: Full conversation so far as a list of
+                  ``{"role": "user"|"assistant", "content": str}`` dicts.
+                  The last element must have ``role == "user"``.
+        strategy: "A" for multilingual LLM, "B" for English + translation.
+        top_k: Number of chunks to retrieve.
+        filter_dict: Optional ChromaDB metadata filter.
+
+    Returns:
+        Same shape as ``answer_question()``.
+    """
+    if not messages or messages[-1]["role"] != "user":
+        raise ValueError("Last message must be from the user")
+
+    user_query = messages[-1]["content"]
+    prior = messages[:-1]
+
+    detected_lang = lang_utils.detect_language(user_query) or "en"
+    lang_name = lang_utils.get_language_name(detected_lang)
+
+    # For strategy B, retrieve using an English translation of the query
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            retrieval_query = translation.translate_to_english(user_query, detected_lang)
+        except Exception:
+            retrieval_query = user_query
+    else:
+        retrieval_query = user_query
+
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
+
+    if context_data["chunks_used"] == 0:
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+            try:
+                no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+            except Exception:
+                pass
+        return {
+            "answer": no_docs_msg,
+            "language": detected_lang,
+            "language_name": lang_name,
+            "chunks_used": 0,
+            "citations": [],
+        }
+
+    # Trim history to the last CHAT_HISTORY_MAX_TURNS exchanges (user + assistant each)
+    max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
+    trimmed = prior[-max_msgs:] if len(prior) > max_msgs else prior
+
+    # Build numbered history so the model can track conversational structure
+    history_lines = []
+    turn = 1
+    i = 0
+    while i < len(trimmed):
+        if trimmed[i]["role"] == "user":
+            user_line = f"[Turn {turn}] User: {trimmed[i]['content']}"
+            if i + 1 < len(trimmed) and trimmed[i + 1]["role"] == "assistant":
+                asst_line = f"[Turn {turn}] Assistant: {trimmed[i + 1]['content']}"
+                history_lines.append(f"{user_line}\n{asst_line}")
+                i += 2
+            else:
+                history_lines.append(user_line)
+                i += 1
+            turn += 1
+        else:
+            i += 1
+    history_str = "\n\n".join(history_lines)
+
+    # Always show the user's original query in the chat prompt so the model
+    # sees what the user actually typed (retrieval_query is only used for
+    # vector search in Strategy B — the answer language instruction handles output lang).
+    prompt_lang = "English" if strategy == "B" else lang_name
+    prompt = _build_chat_prompt(
+        user_query=user_query,
+        context=context_data["formatted_context"],
+        history=history_str,
+        lang_name=prompt_lang,
+    )
+
+    english_answer = llm_generate(prompt)
+    citations = extract_citations(english_answer, context_data["metadatas"], context_data.get("chunks"))
+
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            answer = translation.translate_from_english(english_answer, detected_lang)
+        except Exception:
+            answer = english_answer
+    else:
+        answer = english_answer
+
+    result: Dict[str, Any] = {
+        "answer": answer,
+        "language": detected_lang,
+        "language_name": lang_name,
+        "chunks_used": context_data["chunks_used"],
+        "citations": citations,
+    }
+    if strategy == "B" and answer != english_answer:
+        result["english_answer"] = english_answer
+    return result
+
+
 if __name__ == "__main__":
     # Test retrieval (without LLM)
     import logging
