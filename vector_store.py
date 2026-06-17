@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _chroma_client = None
 
 
-def get_chroma_client() -> chromadb.Client:
+def get_chroma_client() -> chromadb.PersistentClient:
     """
     Get or create ChromaDB client with persistence.
     
@@ -71,10 +71,8 @@ def get_or_create_collection(
     # Get or create collection
     collection = client.get_or_create_collection(
         name=collection_name,
-        metadata={
-            "hnsw:space": config.DISTANCE_METRIC,
-            "description": "Multilingual scientific papers"
-        }
+        metadata={"description": "Multilingual scientific papers"},
+        configuration={"hnsw": {"space": config.DISTANCE_METRIC}}
     )
     
     logger.info(f"Collection '{collection_name}' ready. Current size: {collection.count()}")
