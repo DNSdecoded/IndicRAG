@@ -111,12 +111,12 @@ def recursive_split(text: str, max_chars: int) -> List[str]:
 def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[str]:
     """
     Split text into overlapping chunks.
-    
+
     Args:
         text: Text to chunk
         max_chars: Maximum characters per chunk (default from config)
         overlap: Overlap between chunks in characters (default from config)
-        
+
     Returns:
         List of text chunks
     """
@@ -124,39 +124,31 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
         max_chars = config.CHUNK_SIZE
     if overlap is None:
         overlap = config.CHUNK_OVERLAP
-    
-    # Protect math formulas with placeholders (inline and display forms)
-    math_pattern = r'(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)'
-    math_blocks = []
-    
-    def math_replacer(match):
-        math_blocks.append(match.group(1))
-        return f"__MATH_{len(math_blocks)-1}__"
-    
-    text = re.sub(math_pattern, math_replacer, text)
-    
-    # Split into sentences preserving the trailing punctuation via lookbehind.
-    # - Uses (?<=[.!?]) so the punctuation stays attached to the preceding sentence.
-    # - Ignores common abbreviations using a negative lookbehind for the word part.
-    # - Requires the next character to be an uppercase Unicode letter (\p{Lu}).
-    sentence_pattern = r'(?<=[.!?])\s+(?=\p{Lu})'
+
+    # Split into sentences — includes Indic terminators (purna viram, double danda).
+    sentence_pattern = r'(?<=[.!?।॥])\s+'
     sentences = re.split(sentence_pattern, text)
-    
+
     chunks = []
     current_chunk = ""
-    
+
+    def _word_overlap(chunk_text: str) -> str:
+        """Compute overlap on whole-word boundaries to avoid slicing tokens."""
+        words = chunk_text.split()
+        overlap_words = max(1, overlap // 6)
+        tail = " ".join(words[-overlap_words:]) if len(words) > overlap_words else chunk_text
+        return tail
+
     def append_sentence_to_chunk(s: str):
         nonlocal current_chunk, chunks
         if len(current_chunk) + len(s) > max_chars and current_chunk:
             if len(current_chunk) >= config.MIN_CHUNK_SIZE:
                 chunks.append(current_chunk.strip())
                 if overlap > 0 and len(current_chunk) > overlap:
-                    current_chunk = current_chunk[-overlap:] + " " + s
+                    current_chunk = _word_overlap(current_chunk) + " " + s
                 else:
                     current_chunk = s
             else:
-                # Chunk is too small to emit — merge into the next chunk
-                # to avoid silently dropping content.
                 current_chunk = current_chunk + " " + s
         else:
             current_chunk += " " + s if current_chunk else s
@@ -165,26 +157,18 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
         sentence = sentence.strip()
         if not sentence:
             continue
-            
+
         if len(sentence) > max_chars:
-            # Recursive character splitting for oversized blocks
             sub_sentences = recursive_split(sentence, max_chars)
             for sub_s in sub_sentences:
                 append_sentence_to_chunk(sub_s)
         else:
             append_sentence_to_chunk(sentence)
-            
-    # Add the last chunk
+
     if current_chunk and len(current_chunk) >= config.MIN_CHUNK_SIZE:
         chunks.append(current_chunk.strip())
-        
-    # Restore math blocks
-    def restore_math(chunk_text):
-        for i, block in enumerate(math_blocks):
-            chunk_text = chunk_text.replace(f"__MATH_{i}__", block)
-        return chunk_text
 
-    return [restore_math(c) for c in chunks]
+    return chunks
 
 
 def extract_sections(text: str) -> List[Tuple[str, str]]:

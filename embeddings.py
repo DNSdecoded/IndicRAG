@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 from typing import List, Union
 import numpy as np
 import logging
+import threading
 import config
 import torch
 
@@ -14,43 +15,40 @@ logger = logging.getLogger(__name__)
 
 # Global model cache
 _embedding_model = None
+_lock = threading.Lock()
 
 
 def load_embedding_model(model_name: str = None) -> SentenceTransformer:
     """
-    Load the multilingual embedding model with caching.
-    
-    Args:
-        model_name: Name of the model to load (default from config)
-        
-    Returns:
-        Loaded SentenceTransformer model
+    Load the multilingual embedding model with caching (thread-safe).
     """
     global _embedding_model
-    
+
     if _embedding_model is not None:
         return _embedding_model
-    
-    if model_name is None:
-        model_name = config.EMBEDDING_MODEL_NAME
-    
-    logger.info(f"Loading embedding model: {model_name}")
-    logger.info("This may take a few minutes on first run...")
-    
-    # Set cache directory
-    cache_dir = str(config.MODELS_CACHE_DIR)
-    
-    # Load model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    _embedding_model = SentenceTransformer(
-        model_name,
-        cache_folder=cache_dir,
-        device=device
-    )
-    
-    logger.info(f"Model loaded on device: {device}")
-    logger.info(f"Embedding dimension: {_embedding_model.get_sentence_embedding_dimension()}")
-    
+
+    with _lock:
+        if _embedding_model is not None:
+            return _embedding_model
+
+        if model_name is None:
+            model_name = config.EMBEDDING_MODEL_NAME
+
+        logger.info(f"Loading embedding model: {model_name}")
+        logger.info("This may take a few minutes on first run...")
+
+        cache_dir = str(config.MODELS_CACHE_DIR)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = SentenceTransformer(
+            model_name,
+            cache_folder=cache_dir,
+            device=device
+        )
+
+        logger.info(f"Model loaded on device: {device}")
+        logger.info(f"Embedding dimension: {model.get_sentence_embedding_dimension()}")
+        _embedding_model = model
+
     return _embedding_model
 
 
@@ -91,18 +89,22 @@ def embed_texts(
     return embeddings
 
 
+_query_cache: dict = {}
+_QUERY_CACHE_MAX = 128
+
+
 def embed_query(query: str) -> np.ndarray:
     """
-    Embed a single query text.
-    
-    Args:
-        query: Query text to embed
-        
-    Returns:
-        Numpy array of shape (embedding_dim,)
+    Embed a single query text (with LRU cache).
     """
-    embeddings = embed_texts([query], batch_size=1, show_progress=False, is_query=True)
-    return embeddings[0]
+    key = query.strip().lower()
+    if key in _query_cache:
+        return _query_cache[key]
+    result = embed_texts([query], batch_size=1, show_progress=False, is_query=True)[0]
+    if len(_query_cache) >= _QUERY_CACHE_MAX:
+        _query_cache.pop(next(iter(_query_cache)))
+    _query_cache[key] = result
+    return result
 
 
 def embed_passages(passages: List[str], batch_size: int = 32) -> np.ndarray:

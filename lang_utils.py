@@ -2,6 +2,7 @@
 Language detection and mapping utilities.
 """
 
+import regex as re
 import langdetect
 from langdetect import DetectorFactory
 from typing import Optional
@@ -12,21 +13,27 @@ DetectorFactory.seed = 0  # Make detection deterministic
 
 logger = logging.getLogger(__name__)
 
+_SCRIPT_RANGES = {
+    'hi': r'\p{Devanagari}', 'ta': r'\p{Tamil}',
+    'te': r'\p{Telugu}', 'bn': r'\p{Bengali}', 'gu': r'\p{Gujarati}',
+    'kn': r'\p{Kannada}', 'ml': r'\p{Malayalam}', 'pa': r'\p{Gurmukhi}',
+    'or': r'\p{Oriya}', 'mr': r'\p{Devanagari}',
+}
+
 
 def detect_language(text: str) -> Optional[str]:
     """
     Detect the language of the input text.
-    
-    Args:
-        text: Input text to detect language for
-        
-    Returns:
-        ISO 639-1 language code (e.g., 'hi', 'en', 'ta') or None if detection fails
+
+    Uses Unicode script detection first (unambiguous for most Indic scripts),
+    then falls back to langdetect for Latin-script text.
     """
+    for code, rng in _SCRIPT_RANGES.items():
+        if re.search(rng, text):
+            return code
     if len(text.strip()) < 15:
-        return 'en'  # Too short to detect reliably
+        return 'en'
     try:
-        # langdetect returns ISO 639-1 codes
         lang_code = langdetect.detect(text)
         return lang_code
     except Exception as e:

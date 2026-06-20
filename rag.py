@@ -11,24 +11,28 @@ import lang_utils
 import translation
 from google import genai
 from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
 # Client is initialised lazily inside llm_generate() so we can still import
 # this module even when the API key is absent (e.g. retrieval-only mode).
 _genai_client: genai.Client | None = None
+_client_lock = __import__('threading').Lock()
 
 
 def _get_client() -> genai.Client:
-    """Return (and lazily create) the shared Google GenAI client."""
+    """Return (and lazily create) the shared Google GenAI client (thread-safe)."""
     global _genai_client
     if _genai_client is None:
-        if not config.LLM_API_KEY:
-            raise ValueError(
-                "Google Gemini API key not configured. "
-                "Please set LLM_API_KEY environment variable or in .env file."
-            )
-        _genai_client = genai.Client(api_key=config.LLM_API_KEY)
+        with _client_lock:
+            if _genai_client is None:
+                if not config.LLM_API_KEY:
+                    raise ValueError(
+                        "Google Gemini API key not configured. "
+                        "Please set LLM_API_KEY environment variable or in .env file."
+                    )
+                _genai_client = genai.Client(api_key=config.LLM_API_KEY)
     return _genai_client
 
 
@@ -63,10 +67,12 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         parts = raw.replace(' ', '').split(',')
         for part in parts:
             if '-' in part:
-                # Handle range like "1-3"
                 try:
                     start, end = part.split('-')
-                    for num in range(int(start), int(end) + 1):
+                    s, e = int(start), int(end)
+                    if e - s > 50:
+                        continue
+                    for num in range(s, e + 1):
                         seen_nums.add(num)
                 except ValueError:
                     pass
@@ -121,28 +127,45 @@ def retrieve_context(
     if collection is None:
         collection = vector_store.get_or_create_collection()
     
-    # Check if collection is empty
-    if collection.count() == 0:
-        logger.warning("No documents indexed in collection")
-        return {
-            'chunks': [],
-            'metadatas': [],
-            'distances': [],
-            'formatted_context': '',
-            'chunks_used': 0
-        }
-    
     # Embed the query
     query_embedding = embeddings.embed_query(user_query)
     
-    # Search vector store
+    # Search vector store (dense)
     results = vector_store.search(
         query_embedding=query_embedding,
         top_k=top_k,
         filter_dict=filter_dict,
         collection=collection
     )
-    
+
+    # Hybrid: fuse dense results with BM25 lexical search
+    if config.USE_HYBRID_SEARCH and results['documents'] and not filter_dict:
+        try:
+            import bm25_search
+            bm25_idx = bm25_search.get_or_build_index(collection)
+            if bm25_idx is not None:
+                sparse_ids, _ = bm25_idx.search(user_query, top_k=top_k)
+                fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
+                id_to_doc = dict(zip(results['ids'], results['documents']))
+                id_to_meta = dict(zip(results['ids'], results['metadatas']))
+                id_to_dist = dict(zip(results['ids'], results['distances']))
+                # Fetch any BM25-only hits that dense search missed
+                missing_ids = [i for i in fused_ids if i not in id_to_doc]
+                if missing_ids:
+                    extra = collection.get(ids=missing_ids, include=["documents", "metadatas"])
+                    for eid, edoc, emeta in zip(extra['ids'], extra['documents'], extra['metadatas']):
+                        id_to_doc[eid] = edoc
+                        id_to_meta[eid] = emeta
+                        id_to_dist[eid] = 1.0
+                results = {
+                    'ids': [i for i in fused_ids if i in id_to_doc][:top_k],
+                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:top_k],
+                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:top_k],
+                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:top_k],
+                }
+        except Exception as e:
+            logger.debug(f"Hybrid search skipped: {e}")
+
     # Check if search returned results
     if not results['documents']:
         logger.warning(f"No results found for query: {user_query[:50]}")
@@ -153,17 +176,27 @@ def retrieve_context(
             'formatted_context': '',
             'chunks_used': 0
         }
-    
+
+    docs = results['documents']
+    metas = results['metadatas']
+    dists = results['distances']
+
+    if config.USE_RERANKER and docs:
+        import rerank
+        docs, metas, scores = rerank.rerank(
+            user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        dists = scores
+
     # Format context for LLM
     formatted_context, chunks_used = format_context(
-        chunks=results['documents'],
-        metadatas=results['metadatas']
+        chunks=docs,
+        metadatas=metas
     )
-    
+
     return {
-        'chunks': results['documents'],
-        'metadatas': results['metadatas'],
-        'distances': results['distances'],
+        'chunks': docs,
+        'metadatas': metas,
+        'distances': dists,
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
@@ -289,11 +322,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     )
 
     try:
-        response = client.models.generate_content(
-            model=config.LLM_MODEL_NAME,
-            contents=prompt,
-            config=generate_config,
-        )
+        response = _call_gemini(client, config.LLM_MODEL_NAME, prompt, generate_config)
 
         # Check if response has text
         if response.text:
@@ -324,6 +353,28 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     except Exception as e:
         logger.error(f"Error calling Gemini API: {e}")
         raise
+
+
+@retry(stop=stop_after_attempt(3),
+       wait=wait_exponential(multiplier=1, min=1, max=8),
+       retry=retry_if_exception_type(Exception), reraise=True)
+def _call_gemini(client, model, contents, gen_config):
+    return client.models.generate_content(model=model, contents=contents,
+                                          config=gen_config)
+
+
+def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
+    """Run faithfulness verification if configured; log warnings for ungrounded claims."""
+    try:
+        import verify
+        results = verify.check_claims(answer, chunks)
+        for r in results:
+            if not r["grounded"]:
+                logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
+        return results
+    except Exception as e:
+        logger.debug(f"Faithfulness check skipped: {e}")
+        return []
 
 
 def answer_question_strategy_a(
@@ -396,14 +447,16 @@ def answer_question_strategy_a(
     
     # Extract citations using robust parser
     citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
-    
-    return {
+
+    result = {
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
+    result['faithfulness'] = _run_faithfulness(answer, context_data.get('chunks', []))
+    return result
 
 
 def answer_question_strategy_b(
@@ -487,14 +540,16 @@ def answer_question_strategy_b(
     else:
         answer = english_answer
     
-    return {
+    result = {
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
-        'english_answer': english_answer  # Include for debugging
+        'english_answer': english_answer
     }
+    result['faithfulness'] = _run_faithfulness(english_answer, context_data.get('chunks', []))
+    return result
 
 
 def answer_question(
@@ -533,21 +588,14 @@ def _build_chat_prompt(
     history_section = f"## Conversation History\n{history}\n\n---\n\n" if history else ""
     return (
         f"{history_section}"
-        f"## Retrieved Context\n{context}\n\n---\n\n"
+        f"## Context\n{context}\n\n---\n\n"
         f"## Current Question\n{user_query}\n\n"
         f"## Instructions\n"
-        f"- Answer in: {lang_name}\n"
-        f"- Cite every claim with [source_index] inline.\n"
+        f"- Answer in: {lang_name}.\n"
+        f"- Use only the context above; cite each claim inline as [n].\n"
         f"- This is a conversation — refer to prior turns only when directly relevant.\n"
-        f"- Structure your response as:\n"
-        f"  1. **Direct Answer** — one concise paragraph\n"
-        f"  2. **Technical Detail** — mechanisms, equations, results from context; "
-        f"include gradient/convergence reasoning if relevant\n"
-        f"  3. **Cross-Paper Synthesis** — only if multiple sources materially contribute; "
-        f"skip or state \"Single-source answer\" otherwise\n"
-        f"  4. **Limitations of Available Context** — what the context cannot answer\n"
-        f"- Include a markdown comparison table only if the question requires comparing methods or approaches.\n"
-        f"- If context is insufficient, say so explicitly rather than inferring.\n"
+        f"- Lead with a direct answer, then add technical depth only as the question requires.\n"
+        f"- If the context is insufficient, state exactly what is missing instead of inferring.\n"
     )
 
 
@@ -660,6 +708,7 @@ def answer_with_history(
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
+    result["faithfulness"] = _run_faithfulness(english_answer, context_data.get("chunks", []))
     return result
 
 

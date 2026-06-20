@@ -18,6 +18,7 @@ Usage:
 
 import json
 import argparse
+import math
 import re
 from pathlib import Path
 from datetime import datetime
@@ -74,6 +75,23 @@ def reciprocal_rank(retrieved: List[str], relevant: Set[str]) -> float:
         if doc in relevant:
             return 1.0 / rank
     return 0.0
+
+
+def dcg_at_k(retrieved: List[str], relevance: Dict[str, int], k: int) -> float:
+    """Discounted Cumulative Gain at k with graded relevance."""
+    score = 0.0
+    for i, doc in enumerate(retrieved[:k]):
+        rel = relevance.get(doc, 0)
+        score += rel / math.log2(i + 2)  # i+2 because rank starts at 1
+    return score
+
+
+def ndcg_at_k(retrieved: List[str], relevance: Dict[str, int], k: int) -> float:
+    """Normalized DCG at k. relevance maps doc_id -> grade (0-3)."""
+    actual = dcg_at_k(retrieved, relevance, k)
+    ideal_order = sorted(relevance.values(), reverse=True)[:k]
+    ideal = sum(r / math.log2(i + 2) for i, r in enumerate(ideal_order)) if ideal_order else 0.0
+    return actual / ideal if ideal > 0 else 0.0
 
 
 # ============================================================
@@ -134,6 +152,8 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
 
     retrieval_scores = []
     grounding_scores = []
+    ndcg_scores      = []
+    recall20_scores  = []
     per_query        = []
 
     for qid, q in qrels.items():
@@ -146,11 +166,18 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
         p  = precision_at_k(retrieved, relevant, k)
         r  = recall_at_k(retrieved, relevant, k)
         rr = reciprocal_rank(retrieved, relevant)
+        r20 = recall_at_k(retrieved, relevant, 20)
+
+        # Graded relevance: use explicit grades if present, else binary (relevant=3)
+        graded = q.get("relevance_grades", {doc: 3 for doc in relevant})
+        ndcg10 = ndcg_at_k(retrieved, graded, 10)
 
         grounding = citation_grounding(runs[qid]["answer_claims"])
 
         retrieval_scores.append((p, r, rr))
         grounding_scores.append(grounding["score"])
+        ndcg_scores.append(ndcg10)
+        recall20_scores.append(r20)
 
         per_query.append({
             "id":        qid,
@@ -158,6 +185,8 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
             "precision": round(p, 3),
             "recall":    round(r, 3),
             "mrr":       round(rr, 3),
+            "ndcg_10":   round(ndcg10, 3),
+            "recall_20": round(r20, 3),
             "grounding": grounding
         })
 
@@ -166,6 +195,8 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
     mean_r      = sum(x[1] for x in retrieval_scores) / n
     mean_mrr    = sum(x[2] for x in retrieval_scores) / n
     mean_ground = sum(grounding_scores) / len(grounding_scores)
+    mean_ndcg   = sum(ndcg_scores) / n
+    mean_r20    = sum(recall20_scores) / n
 
     retrieval_composite  = (mean_p + mean_r + mean_mrr) / 3
     generation_composite = mean_ground
@@ -177,6 +208,8 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
         "mean_precision":       round(mean_p, 3),
         "mean_recall":          round(mean_r, 3),
         "mrr":                  round(mean_mrr, 3),
+        "ndcg_10":              round(mean_ndcg, 3),
+        "recall_20":            round(mean_r20, 3),
         "mean_grounding":       round(mean_ground, 3),
         "retrieval_composite":  round(retrieval_composite, 3),
         "generation_composite": round(generation_composite, 3),
@@ -210,6 +243,8 @@ def markdown_report(metrics: Dict, k: int) -> str:
     lines.append(f"| Precision@{k}         | **{metrics['mean_precision']:.3f}** | `{bar(metrics['mean_precision'])}` |")
     lines.append(f"| Recall@{k}            | **{metrics['mean_recall']:.3f}** | `{bar(metrics['mean_recall'])}` |")
     lines.append(f"| MRR                   | **{metrics['mrr']:.3f}** | `{bar(metrics['mrr'])}` |")
+    lines.append(f"| nDCG@10               | **{metrics['ndcg_10']:.3f}** | `{bar(metrics['ndcg_10'])}` |")
+    lines.append(f"| Recall@20             | **{metrics['recall_20']:.3f}** | `{bar(metrics['recall_20'])}` |")
     lines.append(f"| Citation Grounding    | **{metrics['mean_grounding']:.3f}** | `{bar(metrics['mean_grounding'])}` |")
     lines.append(f"| **Retrieval Score**   | **{metrics['retrieval_composite']:.3f}** | `{bar(metrics['retrieval_composite'])}` |")
     lines.append(f"| **Generation Score**  | **{metrics['generation_composite']:.3f}** | `{bar(metrics['generation_composite'])}` |")
@@ -226,6 +261,8 @@ def markdown_report(metrics: Dict, k: int) -> str:
         lines.append(f"| Precision@{k}      | {q['precision']:.3f} |")
         lines.append(f"| Recall@{k}         | {q['recall']:.3f} |")
         lines.append(f"| Reciprocal Rank    | {q['mrr']:.3f} |")
+        lines.append(f"| nDCG@10            | {q['ndcg_10']:.3f} |")
+        lines.append(f"| Recall@20          | {q['recall_20']:.3f} |")
         g = q["grounding"]
         lines.append(f"| Citation Grounding | {g['score']:.3f} ({g['grounded']}/{g['total']} claims) |")
 
@@ -252,8 +289,11 @@ def markdown_report(metrics: Dict, k: int) -> str:
                  "(correct epistemic behavior, labeled 'absent').\n")
     lines.append("**Retrieval Score** — mean of Precision, Recall, MRR.\n")
     lines.append("**Generation Score** — mean citation grounding across queries.\n")
+    lines.append("**nDCG@10** — Normalized Discounted Cumulative Gain at 10. Uses graded relevance "
+                 "(0-3) when `relevance_grades` is present in judgments; defaults to binary (3 for relevant).\n")
+    lines.append("**Recall@20** — fraction of relevant documents retrieved in top 20.\n")
     lines.append("**Limitations** — Jaccard similarity undercounts grounding for paraphrased claims. "
-                 "Single annotator for relevance judgments. 4-query evaluation set is small.\n")
+                 "Single annotator for relevance judgments.\n")
 
     return "\n".join(lines)
 
@@ -269,6 +309,8 @@ def main():
     parser.add_argument("--k",         type=int, default=5)
     parser.add_argument("--output",    default=None, help="Path to write markdown report")
     parser.add_argument("--json",      default=None, help="Path to write JSON metrics")
+    parser.add_argument("--ci",        action="store_true", help="CI mode: exit 1 if overall < --threshold")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Minimum overall score for CI pass")
     args = parser.parse_args()
 
     for path in [Path(args.judgments), Path(args.results)]:
@@ -291,6 +333,8 @@ def main():
     print(f"  Precision@{args.k}      {metrics['mean_precision']:.3f}  {bar(metrics['mean_precision'], 15)}")
     print(f"  Recall@{args.k}         {metrics['mean_recall']:.3f}  {bar(metrics['mean_recall'], 15)}")
     print(f"  MRR              {metrics['mrr']:.3f}  {bar(metrics['mrr'], 15)}")
+    print(f"  nDCG@10          {metrics['ndcg_10']:.3f}  {bar(metrics['ndcg_10'], 15)}")
+    print(f"  Recall@20        {metrics['recall_20']:.3f}  {bar(metrics['recall_20'], 15)}")
     print(f"  Grounding        {metrics['mean_grounding']:.3f}  {bar(metrics['mean_grounding'], 15)}")
     print("-" * 42)
     print(f"  Retrieval Score  {metrics['retrieval_composite']:.3f}  {bar(metrics['retrieval_composite'], 15)}")
@@ -309,6 +353,13 @@ def main():
         with open(args.json, "w") as f:
             json.dump(metrics, f, indent=2)
         print(f"  JSON metrics    -> {args.json}")
+
+    if args.ci:
+        if metrics["overall"] < args.threshold:
+            print(f"\n  CI FAIL: overall {metrics['overall']:.3f} < threshold {args.threshold:.3f}")
+            raise SystemExit(1)
+        else:
+            print(f"\n  CI PASS: overall {metrics['overall']:.3f} >= threshold {args.threshold:.3f}")
 
     print()
 

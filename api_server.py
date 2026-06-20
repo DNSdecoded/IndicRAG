@@ -3,6 +3,7 @@ FastAPI server for the Multilingual Scientific RAG system.
 Production-ready REST API with authentication, validation, and monitoring.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
@@ -14,7 +15,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import uuid
 import threading
@@ -42,9 +43,18 @@ _sessions: Dict[str, Dict[str, Any]] = {}
 _sessions_lock = threading.Lock()
 
 
+def _evict_stale_sessions():
+    """Remove sessions older than SESSION_MAX_AGE_HOURS. Must be called under _sessions_lock."""
+    cutoff = datetime.utcnow() - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
+    for sid in [s for s, v in _sessions.items()
+                if datetime.fromisoformat(v["created_at"]) < cutoff]:
+        del _sessions[sid]
+
+
 def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
     """Return (session_id, messages_list). Creates a new session when id is None."""
     with _sessions_lock:
+        _evict_stale_sessions()
         if session_id and session_id in _sessions:
             return session_id, _sessions[session_id]["messages"]
         new_id = session_id or str(uuid.uuid4())
@@ -69,13 +79,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app):
+    import embeddings, vector_store
+    embeddings.load_embedding_model()
+    vector_store.get_or_create_collection()
+    if config.USE_RERANKER:
+        import rerank
+        rerank._load()
+    yield
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Multilingual Scientific RAG API",
     description="Retrieval-Augmented Generation system for multilingual scientific Q&A",
     version=config.VERSION,
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
+    lifespan=lifespan,
 )
 
 # Prometheus Monitoring
@@ -87,15 +108,21 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080", 
+# CORS configuration — env-driven for deployment flexibility
+_cors_origins_env = os.getenv("CORS_ORIGINS")
+_cors_origins = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else [
+        "http://localhost:8080",
         "http://localhost:8000",
         "http://127.0.0.1:8080",
-        "http://127.0.0.1:8000"
-    ],  # Explicit origins instead of '*' when credentials=True
+        "http://127.0.0.1:8000",
+    ]
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -116,11 +143,13 @@ else:
     VALID_API_KEYS = None
 
 
+_admin_key = os.getenv("ADMIN_API_KEY")
+
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     """Verify API key if authentication is enabled."""
     if VALID_API_KEYS is None:
         return True  # No authentication required
-    
+
     if not api_key or api_key not in VALID_API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -130,6 +159,19 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
             }
         )
     return True
+
+
+async def verify_admin_key(api_key: str = Security(API_KEY_HEADER)):
+    """Verify admin API key for destructive operations."""
+    if _admin_key:
+        if not api_key or api_key != _admin_key:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin API key required for destructive operations",
+                        "code": "ADMIN_KEY_REQUIRED"}
+            )
+        return True
+    return await verify_api_key(api_key)
 
 
 # Request/Response models
@@ -510,6 +552,12 @@ async def ingest_document(
             paper_id=safe_pdf_path.stem
         )
 
+        try:
+            import bm25_search
+            bm25_search.invalidate()
+        except Exception:
+            pass
+
         processing_time = time.time() - start_time
 
         return IngestResponse(
@@ -537,6 +585,11 @@ def _run_bulk_ingest(job_id: str):
     _update_job(job_id, status="running")
     try:
         stats = ingest_module.ingest_directory(pdf_dir=str(config.PAPERS_DIR))
+        try:
+            import bm25_search
+            bm25_search.invalidate()
+        except Exception:
+            pass
         processing_time = time.time() - start_time
         status_value = "partial" if stats.get("failed", 0) > 0 else "success"
         _update_job(
@@ -748,7 +801,7 @@ async def list_papers(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
-async def purge_papers(authenticated: bool = Depends(verify_api_key)):
+async def purge_papers(authenticated: bool = Depends(verify_admin_key)):
     """
     Delete all PDF files from the papers directory.
     
@@ -781,7 +834,7 @@ async def purge_papers(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.delete("/purge/database", response_model=PurgeResponse, tags=["Management"])
-async def purge_database(authenticated: bool = Depends(verify_api_key)):
+async def purge_database(authenticated: bool = Depends(verify_admin_key)):
     """
     Clear the vector database (delete all indexed chunks).
     

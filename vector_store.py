@@ -7,37 +7,39 @@ from chromadb.config import Settings
 from typing import List, Dict, Optional, Any
 import numpy as np
 import logging
+import threading
 import config
 
 logger = logging.getLogger(__name__)
 
 # Global client cache
 _chroma_client = None
+_lock = threading.Lock()
 
 
 def get_chroma_client() -> chromadb.PersistentClient:
     """
-    Get or create ChromaDB client with persistence.
-    
-    Returns:
-        ChromaDB client instance
+    Get or create ChromaDB client with persistence (thread-safe).
     """
     global _chroma_client
-    
+
     if _chroma_client is not None:
         return _chroma_client
-    
-    logger.info(f"Initializing ChromaDB at: {config.CHROMA_DB_DIR}")
-    
-    # Create persistent client
-    _chroma_client = chromadb.PersistentClient(
-        path=str(config.CHROMA_DB_DIR),
-        settings=Settings(
-            anonymized_telemetry=False,
-            allow_reset=True
+
+    with _lock:
+        if _chroma_client is not None:
+            return _chroma_client
+
+        logger.info(f"Initializing ChromaDB at: {config.CHROMA_DB_DIR}")
+
+        _chroma_client = chromadb.PersistentClient(
+            path=str(config.CHROMA_DB_DIR),
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
         )
-    )
-    
+
     return _chroma_client
 
 
