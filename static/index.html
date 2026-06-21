@@ -1,2258 +1,780 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
-
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IndicRAG</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap"
-        rel="stylesheet">
+    <title>IndicRAG — Research Assistant</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked@18.0.5/lib/marked.umd.min.js"
+            integrity="sha384-MU0bL51BF1u980ujv+Pk0Z0qCjhzfBIEHIFPkUq81289nkiAr+q1jSxEkdlIeHLJ"
+            crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+          integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+"
+          crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
+            integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
+            crossorigin="anonymous"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        /* ── THEME VARIABLES ───────────────────────────────── */
         :root {
-            --transition-theme: background 0.4s ease, color 0.4s ease, border-color 0.4s ease;
+            --bg:               #F5F7FA;
+            --sidebar-bg:       #FFFFFF;
+            --surface:          #FFFFFF;
+            --surface-up:       #F8FAFC;
+            --surface-2:        #EEF2F7;
+            --border:           #E2E8F0;
+            --border-muted:     #CBD5E1;
+            --border-accent:    #94A3B8;
+            --primary:          #334155;
+            --primary-hover:    #0F172A;
+            --primary-bg:       #F1F5F9;
+            --primary-bg2:      #E2E8F0;
+            --primary-border:   #CBD5E1;
+            --text-1:           #0F172A;
+            --text-2:           #334155;
+            --text-3:           #64748B;
+            --text-4:           #94A3B8;
+            --user-bubble-bg:   #334155;
+            --user-bubble-text: #FFFFFF;
+            --code-bg:          #0F172A;
+            --code-text:        #F8FAFC;
+            --chip-lang-bg:     #EEF2F7; --chip-lang-c:  #334155;
+            --chip-cite-bg:     #F1F5F9; --chip-cite-c:  #334155;
+            --chip-time-bg:     #F8FAFC; --chip-time-c:  #64748B;
+            --cite-bar:         #334155;
+            --ts-bg: #F0FDF4; --ts-c: #166534; --ts-br: #BBF7D0;
+            --te-bg: #FEF2F2; --te-c: #991B1B; --te-br: #FECACA;
+            --ti-bg: #F8FAFC; --ti-c: #334155; --ti-br: #E2E8F0;
+            --shadow: 0 1px 4px rgba(0,0,0,.05);
+            --shadow-lg: 0 20px 60px rgba(0,0,0,.08);
+            --transition: background .25s, color .25s, border-color .25s;
         }
-
         [data-theme="dark"] {
-            --bg-base: #0A0A0C;
-            --bg-surface: #111117;
-            --bg-elevated: #18181F;
-            --bg-glass: rgba(24, 24, 31, 0.7);
-            --bg-glass-hover: rgba(30, 30, 40, 0.88);
-            --text-primary: #F0EEF8;
-            --text-secondary: #9A96B0;
-            --text-muted: #5A5672;
-            --text-disabled: #3A3850;
-            --border: rgba(255, 255, 255, 0.07);
-            --border-hover: rgba(139, 92, 246, 0.4);
-            --border-focus: rgba(139, 92, 246, 0.7);
-            --primary: #8B5CF6;
-            --primary-glow: rgba(139, 92, 246, 0.25);
-            --primary-light: #A78BFA;
-            --secondary: #38BDF8;
-            --secondary-glow: rgba(56, 189, 248, 0.2);
-            --accent: #F472B6;
-            --accent-glow: rgba(244, 114, 182, 0.2);
-            --mint: #34D399;
-            --success: #34D399;
-            --warning: #FBBF24;
-            --error: #F87171;
-            --error-bg: rgba(248, 113, 113, 0.08);
-            --shadow-card: 0 20px 60px rgba(0, 0, 0, 0.5), 0 4px 20px rgba(0, 0, 0, 0.3);
+            --bg:               #0B1220;
+            --sidebar-bg:       #111827;
+            --surface:          #172033;
+            --surface-up:       #1E293B;
+            --surface-2:        #1E293B;
+            --border:           #334155;
+            --border-muted:     #475569;
+            --border-accent:    #64748B;
+            --primary:          #E2E8F0;
+            --primary-hover:    #FFFFFF;
+            --primary-bg:       #1E293B;
+            --primary-bg2:      #334155;
+            --primary-border:   #475569;
+            --text-1:           #F8FAFC;
+            --text-2:           #CBD5E1;
+            --text-3:           #94A3B8;
+            --text-4:           #475569;
+            --user-bubble-bg:   #334155;
+            --user-bubble-text: #FFFFFF;
+            --code-bg:          #0B1220;
+            --code-text:        #E2E8F0;
+            --chip-lang-bg:     #1E293B; --chip-lang-c:  #94A3B8;
+            --chip-cite-bg:     #1E293B; --chip-cite-c:  #E2E8F0;
+            --chip-time-bg:     #111827; --chip-time-c:  #64748B;
+            --cite-bar:         #E2E8F0;
+            --ts-bg: #052E16; --ts-c: #4ADE80; --ts-br: #14532D;
+            --te-bg: #450A0A; --te-c: #FCA5A5; --te-br: #7F1D1D;
+            --ti-bg: #1E293B; --ti-c: #E2E8F0; --ti-br: #475569;
+            --shadow: 0 1px 6px rgba(0,0,0,.3);
+            --shadow-lg: 0 20px 60px rgba(0,0,0,.45);
         }
 
-        [data-theme="light"] {
-            --bg-base: #F4F2FB;
-            --bg-surface: #FFFFFF;
-            --bg-elevated: #ECEAF6;
-            --bg-glass: rgba(255, 255, 255, 0.78);
-            --bg-glass-hover: rgba(255, 255, 255, 0.95);
-            --text-primary: #1A1830;
-            --text-secondary: #5B5480;
-            --text-muted: #8E88AE;
-            --text-disabled: #BDB9D8;
-            --border: rgba(0, 0, 0, 0.08);
-            --border-hover: rgba(124, 58, 237, 0.35);
-            --border-focus: rgba(124, 58, 237, 0.6);
-            --primary: #7C3AED;
-            --primary-glow: rgba(124, 58, 237, 0.18);
-            --primary-light: #8B5CF6;
-            --secondary: #0EA5E9;
-            --secondary-glow: rgba(14, 165, 233, 0.15);
-            --accent: #EC4899;
-            --accent-glow: rgba(236, 72, 153, 0.15);
-            --mint: #10B981;
-            --success: #10B981;
-            --warning: #F59E0B;
-            --error: #EF4444;
-            --error-bg: rgba(239, 68, 68, 0.06);
-            --shadow-card: 0 8px 40px rgba(100, 80, 200, 0.08), 0 2px 12px rgba(0, 0, 0, 0.05);
-        }
-
-        *,
-        *::before,
-        *::after {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html {
-            scroll-behavior: smooth;
-        }
+        /* ── RESET ─────────────────────────────────────────── */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
 
         body {
-            font-family: 'DM Sans', sans-serif;
-            background: var(--bg-base);
-            color: var(--text-primary);
-            line-height: 1.6;
-            min-height: 100vh;
-            overflow-x: hidden;
-            transition: var(--transition-theme);
-        }
-
-        /* ─── BACKGROUND ─────────────────────────────── */
-        #sci-canvas {
-            position: fixed;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        /* Radial vignette to anchor content */
-        .bg-vignette {
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 0;
-            background: radial-gradient(ellipse 70% 60% at 50% 40%, transparent 0%, var(--bg-base) 100%);
-            opacity: 0.55;
-            transition: opacity 0.4s;
-        }
-
-        [data-theme="light"] .bg-vignette {
-            opacity: 0.45;
-        }
-
-        /* ─── THEME TOGGLE ───────────────────────────── */
-        .theme-toggle {
-            position: fixed;
-            top: 1.25rem;
-            right: 1.5rem;
-            z-index: 100;
-            width: 54px;
-            height: 30px;
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: 50px;
-            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text-1);
             display: flex;
-            align-items: center;
-            padding: 3px;
-            transition: background 0.3s, border-color 0.3s;
+            height: 100vh;
+            transition: var(--transition);
         }
 
-        .theme-toggle:hover {
-            border-color: var(--primary);
+        /* ── SIDEBAR ──────────────────────────────────────── */
+        .sidebar {
+            width: 288px; min-width: 288px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border);
+            display: flex; flex-direction: column;
+            height: 100vh; overflow: hidden;
+            transition: var(--transition);
         }
-
-        .toggle-thumb {
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            background: var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 11px;
-            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.3s;
-            box-shadow: 0 2px 8px var(--primary-glow);
-        }
-
-        [data-theme="light"] .toggle-thumb {
-            transform: translateX(24px);
-        }
-
-        /* ─── LAYOUT ─────────────────────────────────── */
-        .container {
-            position: relative;
-            z-index: 1;
-            max-width: 1100px;
-            margin: 0 auto;
-            padding: 2rem 1.5rem;
-        }
-
-        /* ─── HEADER ─────────────────────────────────── */
-        header {
-            text-align: center;
-            margin-bottom: 3rem;
-            padding: 3rem 0 1rem;
-        }
-
-        .logo-icon {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 56px;
-            height: 56px;
-            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-            border-radius: 16px;
-            font-size: 26px;
-            box-shadow: 0 8px 24px var(--primary-glow), 0 0 0 1px rgba(139, 92, 246, 0.3);
-            margin-bottom: 1rem;
-            animation: iconPulse 4s ease-in-out infinite;
-        }
-
-        @keyframes iconPulse {
-
-            0%,
-            100% {
-                box-shadow: 0 8px 24px var(--primary-glow), 0 0 0 1px rgba(139, 92, 246, 0.3);
-            }
-
-            50% {
-                box-shadow: 0 12px 36px var(--primary-glow), 0 0 0 4px rgba(139, 92, 246, 0.12);
-            }
-        }
-
-        h1 {
-            font-family: 'Syne', sans-serif;
-            font-size: clamp(2.2rem, 5vw, 3.5rem);
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--primary-light) 0%, var(--secondary) 50%, var(--accent) 100%);
-            background-size: 200% 200%;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            letter-spacing: -1.5px;
-            line-height: 1.1;
-            animation: gradShift 6s ease infinite;
-        }
-
-        @keyframes gradShift {
-
-            0%,
-            100% {
-                background-position: 0% 50%;
-            }
-
-            50% {
-                background-position: 100% 50%;
-            }
-        }
-
-        .subtitle {
-            color: var(--text-secondary);
-            font-size: 1rem;
-            font-weight: 300;
-            margin-top: 0.5rem;
-        }
-
-        .badge-row {
-            display: flex;
-            justify-content: center;
-            gap: 0.5rem;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.3rem 0.8rem;
-            background: var(--bg-glass);
-            border: 1px solid var(--border);
-            border-radius: 50px;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            backdrop-filter: blur(8px);
-            font-weight: 500;
-        }
-
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--mint);
-            box-shadow: 0 0 6px var(--mint);
-            animation: blink 2s ease-in-out infinite;
-        }
-
-        @keyframes blink {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.3;
-            }
-        }
-
-        /* ─── GLASS CARD ─────────────────────────────── */
-        .glass-card {
-            background: var(--bg-glass);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            box-shadow: var(--shadow-card);
-            transition: border-color 0.3s, box-shadow 0.3s, var(--transition-theme);
-        }
-
-        .glass-card:hover {
-            border-color: var(--border-hover);
-        }
-
-        /* ─── MANAGEMENT PANEL ───────────────────────── */
-        .management-panel {
-            margin-bottom: 1.5rem;
-            overflow: hidden;
-        }
-
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1rem 1.5rem;
-            cursor: pointer;
-            user-select: none;
-            transition: background 0.25s;
-            border-radius: 16px;
-        }
-
-        .management-panel.open .panel-header {
-            border-radius: 16px 16px 0 0;
+        .sidebar-logo {
+            display: flex; align-items: center; gap: .65rem;
+            padding: 1.1rem 1.25rem;
             border-bottom: 1px solid var(--border);
+            font-size: 1.05rem; font-weight: 700;
+            color: var(--text-1); letter-spacing: -.3px; flex-shrink: 0;
+            transition: var(--transition);
         }
-
-        .panel-header:hover {
-            background: var(--bg-glass-hover);
+        .logo-wrap {
+            width: 30px; height: 30px;
+            background: var(--primary);
+            border-radius: 7px; display: flex; align-items: center;
+            justify-content: center; font-size: 15px; color: var(--surface); font-weight: 700;
+            font-family: 'Noto Sans Devanagari', 'Inter', sans-serif;
         }
-
-        .panel-header h2 {
-            font-family: 'Syne', sans-serif;
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 0.6rem;
+        .sidebar-scroll {
+            flex: 1; overflow-y: auto; padding: 1.1rem 1rem .75rem;
         }
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: var(--border-muted); border-radius: 2px; }
 
-        .panel-toggle {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-elevated);
-            border-radius: 50%;
-            border: 1px solid var(--border);
+        .section-label {
+            font-size: .67rem; font-weight: 600; letter-spacing: 1.2px;
+            color: var(--text-4); text-transform: uppercase;
+            margin-bottom: .65rem; display: flex; align-items: center; gap: .4rem;
+            transition: var(--transition);
         }
+        .section-label svg { width: 12px; height: 12px; flex-shrink: 0; }
+        .sidebar-section { margin-bottom: 1.5rem; }
 
-        .management-panel.open .panel-toggle {
-            transform: rotate(180deg);
+        /* Strategy cards */
+        .strategy-card {
+            border: 1.5px solid var(--border); border-radius: 10px;
+            padding: .85rem .9rem; margin-bottom: .5rem; cursor: pointer;
+            transition: var(--transition), border-color .2s;
         }
+        .strategy-card:hover { border-color: var(--border-accent); background: var(--primary-bg); }
+        .strategy-card.selected { border-color: var(--primary); background: var(--primary-bg); }
+        .strategy-card label { display: flex; align-items: flex-start; gap: .6rem; cursor: pointer; pointer-events: none; }
+        .strategy-card input[type="radio"] { width: 15px; height: 15px; accent-color: var(--primary); margin-top: 2px; flex-shrink: 0; }
+        .strategy-card-body { flex: 1; }
+        .strategy-title { display: block; font-size: .875rem; font-weight: 600; color: var(--text-1); margin-bottom: .15rem; transition: var(--transition); }
+        .strategy-desc { display: block; font-size: .75rem; color: var(--primary); line-height: 1.4; transition: var(--transition); }
+        .strategy-card:not(.selected) .strategy-desc { color: var(--text-3); }
 
-        .panel-content {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        .management-panel.open .panel-content {
-            max-height: 5000px;
-        }
-
-        .panel-inner {
-            padding: 1.5rem;
-        }
-
-        .panel-section {
-            margin-bottom: 2rem;
-        }
-
-        .panel-section:last-child {
-            margin-bottom: 0;
-        }
-
-        .panel-section h3 {
-            font-family: 'Syne', sans-serif;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            margin-bottom: 1rem;
-        }
-
-        /* Stats Bar */
-        .stats-bar {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .stat-pill {
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1rem 1.25rem;
-            text-align: center;
-            transition: var(--transition-theme), border-color 0.3s;
-        }
-
-        .stat-pill:hover {
-            border-color: var(--border-hover);
-        }
-
-        .stat-label {
-            font-size: 0.72rem;
-            color: var(--text-muted);
-            font-weight: 600;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
-            margin-bottom: 0.4rem;
-        }
-
-        .stat-value {
-            font-family: 'Syne', sans-serif;
-            font-size: 1.75rem;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--primary-light), var(--secondary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        /* Upload Zone */
+        /* Upload zone */
         .upload-zone {
-            border: 2px dashed var(--border);
-            border-radius: 12px;
-            padding: 2.5rem 2rem;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: var(--bg-elevated);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .upload-zone::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: radial-gradient(circle at center, var(--primary-glow), transparent 70%);
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-
-        .upload-zone:hover,
-        .upload-zone.dragover {
-            border-color: var(--primary);
-            background: var(--bg-glass-hover);
-        }
-
-        .upload-zone:hover::before,
-        .upload-zone.dragover::before {
-            opacity: 1;
-        }
-
-        .upload-zone.dragover {
-            transform: scale(1.01);
-        }
-
-        .upload-icon {
-            font-size: 2.5rem;
-            margin-bottom: 0.75rem;
-            display: block;
-            position: relative;
-        }
-
-        .upload-text {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
-            margin-bottom: 0.4rem;
-            position: relative;
-        }
-
-        .upload-hint {
-            font-size: 0.78rem;
-            color: var(--text-muted);
-            position: relative;
-        }
-
-        .upload-input {
-            display: none;
-        }
-
-        /* Table */
-        .table-wrap {
-            border-radius: 10px;
-            overflow: hidden;
-            border: 1px solid var(--border);
-        }
-
-        .papers-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.875rem;
-        }
-
-        .papers-table th {
-            text-align: left;
-            padding: 0.7rem 1rem;
-            background: var(--bg-elevated);
-            color: var(--text-muted);
-            font-weight: 700;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .papers-table td {
-            padding: 0.85rem 1rem;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-primary);
-            transition: background 0.2s;
-        }
-
-        .papers-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .papers-table tbody tr:hover td {
-            background: var(--bg-elevated);
-        }
-
-        .papers-empty {
-            text-align: center;
-            padding: 2rem;
-            color: var(--text-muted);
-            font-style: italic;
-        }
-
-        /* Danger Zone */
-        .danger-zone {
-            background: var(--error-bg);
-            border: 1px solid rgba(248, 113, 113, 0.2);
-            border-radius: 12px;
-            padding: 1.25rem;
-        }
-
-        .danger-zone h4 {
-            color: var(--error);
-            font-family: 'Syne', sans-serif;
-            font-size: 0.85rem;
-            font-weight: 700;
-            margin-bottom: 1rem;
-        }
-
-        .danger-actions {
-            display: flex;
-            gap: 0.75rem;
-            flex-wrap: wrap;
-        }
-
-        /* ─── MAIN CARD ───────────────────────────────── */
-        .main-card {
-            padding: 2rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .input-group {
-            margin-bottom: 1.25rem;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        textarea {
-            width: 100%;
-            padding: 1rem 1.1rem;
-            background: var(--bg-elevated);
-            border: 1.5px solid var(--border);
-            border-radius: 10px;
-            color: var(--text-primary);
-            font-family: 'DM Sans', sans-serif;
-            font-size: 1rem;
-            font-weight: 400;
-            resize: vertical;
-            min-height: 110px;
-            transition: border-color 0.25s, box-shadow 0.25s, var(--transition-theme);
-        }
-
-        textarea::placeholder {
-            color: var(--text-muted);
-        }
-
-        textarea:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px var(--primary-glow), 0 0 20px var(--primary-glow);
-        }
-
-        .controls {
-            display: flex;
-            gap: 0.75rem;
-            align-items: stretch;
-            flex-wrap: wrap;
-        }
-
-        select {
-            flex: 1;
-            padding: 0.8rem 1rem;
-            background: var(--bg-elevated);
-            border: 1.5px solid var(--border);
-            border-radius: 10px;
-            color: var(--text-primary);
-            font-family: 'DM Sans', sans-serif;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: border-color 0.25s, var(--transition-theme);
-            min-width: 200px;
-        }
-
-        select:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        /* ─── BUTTONS ─────────────────────────────────── */
-        button {
-            font-family: 'DM Sans', sans-serif;
-            cursor: pointer;
-            border: none;
-            transition: all 0.25s;
-        }
-
-        .btn-primary {
-            padding: 0.8rem 2rem;
-            background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-            color: #fff;
-            border-radius: 10px;
-            font-size: 0.95rem;
-            font-weight: 700;
-            box-shadow: 0 4px 20px var(--primary-glow);
-            letter-spacing: 0.3px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .btn-primary::after {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), transparent);
-            opacity: 0;
-            transition: opacity 0.25s;
-        }
-
-        .btn-primary:hover:not(:disabled)::after {
-            opacity: 1;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 28px var(--primary-glow), 0 4px 12px var(--accent-glow);
-        }
-
-        .btn-primary:disabled {
-            background: var(--bg-elevated);
-            color: var(--text-disabled);
-            box-shadow: none;
-            cursor: not-allowed;
-        }
-
-        .btn-small {
-            padding: 0.4rem 0.9rem;
-            font-size: 0.78rem;
-            border-radius: 7px;
-            font-weight: 600;
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, var(--mint), #059669);
-            color: #fff;
-            box-shadow: 0 4px 15px rgba(52, 211, 153, 0.3);
-        }
-
-        .btn-success:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 20px rgba(52, 211, 153, 0.4);
-        }
-
-        .btn-danger {
-            background: linear-gradient(135deg, var(--error), #dc2626);
-            color: #fff;
-            box-shadow: 0 4px 15px rgba(248, 113, 113, 0.3);
-        }
-
-        .btn-danger:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 20px rgba(248, 113, 113, 0.4);
-        }
-
-        .btn-secondary {
-            background: var(--bg-elevated);
-            color: var(--text-secondary);
-            border: 1px solid var(--border);
-            box-shadow: none;
-        }
-
-        .btn-secondary:hover:not(:disabled) {
-            background: var(--bg-glass-hover);
-            color: var(--text-primary);
-            border-color: var(--border-hover);
-        }
-
-        /* ─── LOADING ─────────────────────────────────── */
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 3rem 2rem;
-        }
-
-        .loading.active {
-            display: block;
-        }
-
-        .spinner-wrap {
-            position: relative;
-            width: 64px;
-            height: 64px;
-            margin: 0 auto 1.25rem;
-        }
-
-        .spinner-outer {
-            position: absolute;
-            inset: 0;
-            border: 3px solid var(--border);
-            border-top-color: var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        .spinner-inner {
-            position: absolute;
-            inset: 10px;
-            border: 2px solid var(--border);
-            border-bottom-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 0.7s linear infinite reverse;
-        }
-
-        .spinner-dot {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 10px;
-            height: 10px;
-            background: var(--primary);
-            border-radius: 50%;
-            box-shadow: 0 0 10px var(--primary);
-            animation: dotPulse 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        @keyframes dotPulse {
-
-            0%,
-            100% {
-                transform: translate(-50%, -50%) scale(1);
-                opacity: 1;
-            }
-
-            50% {
-                transform: translate(-50%, -50%) scale(1.4);
-                opacity: 0.6;
-            }
-        }
-
-        .loading p {
-            color: var(--text-muted);
-            font-size: 0.9rem;
-            font-weight: 300;
-        }
-
-        /* ─── RESULT ──────────────────────────────────── */
-        .result {
-            display: none;
-            padding: 2rem;
-            margin-top: 1.5rem;
-        }
-
-        .result.active {
-            display: block;
-            animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(24px)
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0)
-            }
-        }
-
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .result-header h3 {
-            font-family: 'Syne', sans-serif;
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-
-        .language-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.4rem 0.9rem;
-            background: var(--primary-glow);
-            color: var(--primary-light);
-            border: 1px solid rgba(139, 92, 246, 0.3);
-            border-radius: 50px;
-            font-size: 0.8rem;
-            font-weight: 700;
-        }
-
-        .answer {
-            font-size: 1.05rem;
-            line-height: 1.85;
-            margin-bottom: 1.75rem;
-            color: var(--text-primary);
-            font-weight: 300;
-        }
-
-        /* ─── KATEX MATH STYLES ───────────────────────── */
-        .answer .katex-display {
-            overflow-x: auto;
-            overflow-y: hidden;
-            padding: 0.5rem 0;
-            margin: 1rem 0;
-        }
-
-        .answer .katex {
-            font-size: 1.05em;
-        }
-
-        .math-fallback {
-            font-family: monospace;
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            background: var(--bg-elevated);
-            border-radius: 6px;
-            padding: 0.2rem 0.4rem;
-        }
-
-        /* ─── MARKDOWN STYLES (for answer) ────────────── */
-        .markdown-body table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 1.5rem 0;
-            font-size: 0.9rem;
-            border-radius: 10px;
-            overflow: hidden;
-            border: 1px solid var(--border);
-            background: var(--bg-elevated);
-        }
-
-        .markdown-body th {
-            text-align: left;
-            padding: 0.8rem 1.2rem;
-            background: var(--bg-glass);
-            color: var(--text-primary);
-            font-weight: 700;
-            border-bottom: 2px solid var(--border);
-        }
-
-        .markdown-body td {
-            padding: 0.8rem 1.2rem;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-secondary);
-        }
-
-        .markdown-body tr:last-child td {
-            border-bottom: none;
-        }
-
-        .markdown-body tr:hover td {
-            background: var(--bg-glass-hover);
-        }
-
-        .markdown-body p {
-            margin-bottom: 1rem;
-        }
-
-        .markdown-body strong {
-            color: var(--primary-light);
-            font-weight: 700;
-        }
-
-        .markdown-body hr {
-            border: 0;
-            height: 1px;
-            background: var(--border);
-            margin: 1.5rem 0;
-        }
-
-        .citations {
-            background: var(--bg-elevated);
-            border-radius: 10px;
-            padding: 1.25rem;
-            border: 1px solid var(--border);
-        }
-
-        .citations h3 {
-            font-family: 'Syne', sans-serif;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            margin-bottom: 0.75rem;
-        }
-
-        .citation {
-            padding: 0.75rem 1rem;
-            margin-bottom: 0.5rem;
-            background: var(--bg-glass);
-            border-radius: 8px;
-            font-size: 0.875rem;
-            border-left: 3px solid var(--primary);
-            color: var(--text-secondary);
-        }
-
-        .citation:last-child {
-            margin-bottom: 0;
-        }
-
-        .citation-number {
-            font-weight: 700;
-            color: var(--primary);
-            margin-right: 0.5rem;
-        }
-
-        .result-stats {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            margin-top: 1.5rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid var(--border);
-        }
-
-        /* ─── ERROR ───────────────────────────────────── */
-        .error {
-            display: none;
-            background: var(--error-bg);
-            border: 1px solid rgba(248, 113, 113, 0.3);
-            color: var(--error);
-            padding: 0.9rem 1rem;
-            border-radius: 10px;
-            margin-bottom: 1rem;
-            font-size: 0.9rem;
-        }
-
-        .error.active {
-            display: block;
-            animation: shake 0.4s ease-out;
-        }
-
-        @keyframes shake {
-
-            0%,
-            100% {
-                transform: translateX(0)
-            }
-
-            20% {
-                transform: translateX(-8px)
-            }
-
-            60% {
-                transform: translateX(6px)
-            }
-
-            80% {
-                transform: translateX(-4px)
-            }
-        }
-
-        /* ─── EXAMPLES ────────────────────────────────── */
-        .examples {
-            margin-top: 2.5rem;
-        }
-
-        .examples-title {
-            font-family: 'Syne', sans-serif;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            text-align: center;
-            margin-bottom: 1.25rem;
-        }
-
-        .example-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-            gap: 0.75rem;
-        }
-
-        .example-card {
-            background: var(--bg-glass);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1rem 1.15rem;
-            cursor: pointer;
-            transition: all 0.25s;
-            backdrop-filter: blur(10px);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .example-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 2px;
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            opacity: 0;
-            transition: opacity 0.25s;
-        }
-
-        .example-card:hover {
-            border-color: var(--border-hover);
-            background: var(--bg-glass-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px var(--primary-glow);
-        }
-
-        .example-card:hover::before {
-            opacity: 1;
-        }
-
-        .example-card:focus {
-            outline: none;
-            border-color: var(--border-focus);
-        }
-
-        .example-lang {
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--primary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 0.4rem;
-        }
-
-        .example-text {
-            font-size: 0.9rem;
-            color: var(--text-primary);
-            line-height: 1.5;
-        }
-
-        /* ─── FOOTER ──────────────────────────────────── */
-        footer {
-            text-align: center;
-            margin-top: 4rem;
-            padding: 2rem;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            font-weight: 300;
-        }
-
-        .footer-links {
-            display: flex;
-            justify-content: center;
-            gap: 0.75rem;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .icon-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 0.85rem;
-            font-weight: 500;
-            border: 1px solid var(--border);
-            padding: 0.45rem 1rem;
-            border-radius: 50px;
-            background: var(--bg-glass);
-            cursor: pointer;
-            backdrop-filter: blur(8px);
-            transition: all 0.25s;
-            font-family: 'DM Sans', sans-serif;
-        }
-
-        .icon-link:hover {
-            color: var(--primary-light);
-            border-color: var(--border-hover);
-            background: var(--bg-glass-hover);
-            transform: translateY(-1px);
-        }
-
-        /* ─── TOAST ───────────────────────────────────── */
-        .toast-container {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            z-index: 2000;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .toast {
-            padding: 0.85rem 1.25rem;
-            border-radius: 10px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            max-width: 340px;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
-            border: 1px solid var(--border);
-            backdrop-filter: blur(12px);
-        }
-
-        .toast-success {
-            background: rgba(52, 211, 153, 0.1);
-            color: var(--mint);
-            border-color: rgba(52, 211, 153, 0.3);
-        }
-
-        .toast-error {
-            background: var(--error-bg);
-            color: var(--error);
-            border-color: rgba(248, 113, 113, 0.3);
-        }
-
-        @keyframes toastIn {
-            from {
-                opacity: 0;
-                transform: translateX(60px)
-            }
-
-            to {
-                opacity: 1;
-                transform: translateX(0)
-            }
-        }
-
-        /* ─── MODALS ──────────────────────────────────── */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(10, 10, 12, 0.75);
-            z-index: 3000;
-            align-items: center;
-            justify-content: center;
-            backdrop-filter: blur(6px);
-        }
-
-        .modal-overlay.active {
-            display: flex;
-        }
-
-        .modal {
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 2rem;
-            max-width: 500px;
-            width: 90%;
-            animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-            box-shadow: var(--shadow-card);
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-
-        .modal h3 {
-            font-family: 'Syne', sans-serif;
-            color: var(--text-primary);
-            margin-bottom: 0.75rem;
-            font-size: 1.15rem;
-            font-weight: 700;
-        }
-
-        .modal p {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            font-weight: 300;
-        }
-
-        .modal-actions {
-            display: flex;
-            gap: 0.75rem;
-            justify-content: flex-end;
-            margin-top: 1.75rem;
-        }
-
-        .modal::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .modal::-webkit-scrollbar-track {
-            background: var(--bg-elevated);
-            border-radius: 3px;
-        }
-
-        .modal::-webkit-scrollbar-thumb {
-            background: var(--border-hover);
-            border-radius: 3px;
-        }
-
-        .lang-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 1rem;
-        }
-
-        .lang-table th {
-            text-align: left;
-            padding: 0.6rem 0.75rem;
-            border-bottom: 2px solid var(--border);
-            color: var(--primary);
-            font-size: 0.75rem;
-            font-weight: 700;
-            font-family: 'Syne', sans-serif;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .lang-table td {
-            padding: 0.65rem 0.75rem;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-primary);
-            font-size: 0.875rem;
-        }
-
-        .lang-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .lang-table tbody tr:hover td {
-            background: var(--bg-elevated);
-        }
-
-        /* ─── RESPONSIVE ──────────────────────────────── */
-        @media (max-width:768px) {
-            .container {
-                padding: 1rem;
-            }
-
-            .controls {
-                flex-direction: column;
-            }
-
-            .btn-primary,
-            select {
-                width: 100%;
-            }
-
-            .result-stats {
-                grid-template-columns: 1fr;
-            }
-
-            .stats-bar {
-                grid-template-columns: 1fr 1fr;
-            }
-
-            .theme-toggle {
-                top: 1rem;
-                right: 1rem;
-            }
-        }
+            border: 1.5px dashed var(--border-muted); border-radius: 10px;
+            padding: 1.4rem 1rem; text-align: center; cursor: pointer;
+            background: var(--surface-up); margin-bottom: .6rem;
+            transition: var(--transition), border-color .2s;
+        }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: var(--primary-bg); }
+        .upload-zone .up-icon { color: var(--text-4); margin: 0 auto .45rem; display: block; transition: color .2s; }
+        .upload-zone:hover .up-icon, .upload-zone.dragover .up-icon { color: var(--primary); }
+        .upload-label { font-size: .8rem; font-weight: 500; color: var(--text-2); display: block; margin-bottom: .2rem; transition: var(--transition); }
+        .upload-hint  { font-size: .7rem; color: var(--text-4); transition: var(--transition); }
+        input[type="file"] { display: none; }
+
+        .ingest-all-btn {
+            width: 100%; padding: .5rem;
+            font-size: .75rem; font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            background: var(--primary-bg); color: var(--primary);
+            border: 1.5px solid var(--primary-border); border-radius: 7px;
+            cursor: pointer; margin-bottom: .55rem; transition: var(--transition), background .15s;
+        }
+        .ingest-all-btn:hover:not(:disabled) { background: var(--primary-bg2); border-color: var(--primary); }
+        .ingest-all-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+        /* Papers list */
+        .papers-empty { font-size: .75rem; color: var(--text-4); text-align: center; line-height: 1.6; padding: .5rem 0; transition: var(--transition); }
+        .paper-item {
+            display: flex; align-items: center; gap: .45rem;
+            padding: .5rem .6rem; border-radius: 7px;
+            border: 1px solid var(--border); margin-bottom: .35rem;
+            background: var(--surface-up); transition: var(--transition);
+        }
+        .paper-item:hover { background: var(--primary-bg); border-color: var(--primary-border); }
+        .paper-icon { font-size: 13px; flex-shrink: 0; }
+        .paper-name { flex: 1; font-size: .75rem; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: var(--transition); }
+        .paper-ingest-btn {
+            font-size: .65rem; padding: .2rem .5rem;
+            background: var(--primary); color: var(--surface);
+            border: none; border-radius: 4px; cursor: pointer;
+            font-weight: 500; flex-shrink: 0; transition: background .15s;
+        }
+        .paper-ingest-btn:hover:not(:disabled) { background: var(--primary-hover); }
+        .paper-ingest-btn:disabled { background: var(--border-muted); cursor: not-allowed; }
+
+        /* KB stats */
+        .kb-stats { display: flex; gap: .5rem; margin-top: .65rem; }
+        .kb-stat { flex: 1; background: var(--surface-up); border: 1px solid var(--border); border-radius: 7px; padding: .5rem; text-align: center; transition: var(--transition); }
+        .kb-stat-value { font-family: 'JetBrains Mono', monospace; font-size: .95rem; font-weight: 600; color: var(--primary); display: block; }
+        .kb-stat-label { font-size: .6rem; color: var(--text-4); text-transform: uppercase; letter-spacing: .5px; transition: var(--transition); margin-top: 2px;}
+
+        /* Sidebar footer */
+        .sidebar-footer { padding: .7rem 1rem; border-top: 1px solid var(--border); flex-shrink: 0; display: flex; flex-direction: column; gap: .35rem; transition: var(--transition); }
+        .sfooter-btn {
+            width: 100%; padding: .45rem .7rem; font-size: .75rem; font-weight: 500;
+            border-radius: 6px; cursor: pointer; font-family: 'Inter', sans-serif;
+            border: 1px solid var(--border); background: var(--surface); color: var(--text-3);
+            text-align: left; transition: var(--transition); display: flex; align-items: center; gap: .4rem;
+        }
+        .sfooter-btn:hover { background: var(--surface-up); color: var(--text-2); border-color: var(--border-muted); }
+        .sfooter-btn.danger { color: #ef4444; border-color: #fca5a5; }
+        .sfooter-btn.danger:hover { background: var(--te-bg); }
+
+        /* ── MAIN PANEL ─────────────────────────────────── */
+        .main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg); transition: var(--transition); }
+
+        /* Header */
+        .main-header {
+            display: flex; align-items: center; gap: .75rem;
+            padding: .85rem 1.5rem;
+            background: color-mix(in srgb, var(--sidebar-bg) 85%, transparent);
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border); flex-shrink: 0;
+            transition: var(--transition); z-index: 10;
+        }
+        .icon-btn {
+            width: 32px; height: 32px; background: var(--surface-up);
+            border: 1px solid var(--border); border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; color: var(--text-3); transition: var(--transition);
+            flex-shrink: 0;
+        }
+        .icon-btn:hover { background: var(--primary-bg); border-color: var(--border-accent); color: var(--primary); }
+        .header-info { flex: 1; }
+        .header-title { font-size: .95rem; font-weight: 700; color: var(--text-1); letter-spacing: -.2px; transition: var(--transition); }
+        .header-sub { font-size: .7rem; color: var(--text-4); display: flex; align-items: center; gap: .3rem; margin-top: 1px; transition: var(--transition); }
+        .header-sub svg { width: 12px; height: 12px; }
+        .header-actions { display: flex; gap: .5rem; align-items: center; }
+        .session-badge { font-size: .7rem; font-weight: 500; color: var(--text-4); padding: .25rem .6rem; border: 1px solid var(--border); border-radius: 50px; background: var(--surface-up); transition: var(--transition); }
+        .new-chat-btn { padding: .4rem .8rem; font-size: .75rem; font-weight: 500; font-family: 'Inter', sans-serif; border-radius: 6px; cursor: pointer; border: 1px solid var(--primary); background: var(--primary); color: var(--surface); transition: background .15s, border-color .15s; }
+        .new-chat-btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+
+        /* Theme toggle */
+        .theme-toggle {
+            width: 32px; height: 32px;
+            background: var(--surface-up); border: 1px solid var(--border);
+            border-radius: 8px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; font-size: 15px; transition: var(--transition);
+            flex-shrink: 0; color: var(--text-3);
+        }
+        .theme-toggle:hover { background: var(--primary-bg); border-color: var(--border-accent); color: var(--primary); }
+
+        /* Chat area */
+        .chat-area { flex: 1; overflow-y: auto; padding: 1.5rem 2rem; display: flex; flex-direction: column; gap: 1.1rem; }
+        .chat-area::-webkit-scrollbar { width: 5px; }
+        .chat-area::-webkit-scrollbar-thumb { background: var(--border-muted); border-radius: 3px; }
+
+        /* Welcome */
+        .welcome-row { display: flex; gap: .8rem; align-items: flex-start; animation: fadeUp .4s ease; }
+        .bot-avatar { width: 36px; height: 36px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: var(--shadow); color: var(--text-1); }
+        .welcome-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: 1rem 1.25rem; font-size: .875rem; line-height: 1.6; color: var(--text-2); max-width: 520px; box-shadow: var(--shadow); transition: var(--transition); }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+        /* Messages */
+        .msg-row { display: flex; gap: .75rem; align-items: flex-start; animation: fadeUp .3s ease; }
+        .msg-row.user { justify-content: flex-end; }
+        .user-bubble { background: var(--user-bubble-bg); color: var(--user-bubble-text); border-radius: 12px 12px 0 12px; padding: .8rem 1.1rem; font-size: .875rem; line-height: 1.6; max-width: 65%; box-shadow: var(--shadow); transition: var(--transition); }
+        .asst-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: 1rem 1.25rem; max-width: 78%; box-shadow: var(--shadow); transition: var(--transition); }
+
+        /* Chips */
+        .asst-meta { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex-wrap: wrap; }
+        .meta-chip { font-family: 'JetBrains Mono', monospace; font-size: .65rem; padding: .15rem .5rem; border-radius: 50px; font-weight: 500; }
+        .chip-lang { background: var(--chip-lang-bg); color: var(--chip-lang-c); border: 1px solid var(--border); }
+        .chip-cite { background: var(--chip-cite-bg); color: var(--chip-cite-c); border: 1px solid var(--border-accent); }
+        .chip-time { background: var(--chip-time-bg); color: var(--chip-time-c); border: 1px solid var(--border); }
+
+        /* Answer text */
+        .asst-text { font-size: .875rem; line-height: 1.7; color: var(--text-2); transition: var(--transition); }
+        .asst-text p { margin-bottom: .75rem; }
+        .asst-text p:last-child { margin-bottom: 0; }
+        .asst-text strong { color: var(--text-1); font-weight: 600; }
+        .asst-text em { font-style: italic; }
+        .asst-text h1,.asst-text h2,.asst-text h3 { font-family: 'Inter', sans-serif; font-weight: 700; color: var(--text-1); margin: 1rem 0 .5rem; transition: var(--transition); }
+        .asst-text h1{font-size:1.1rem} .asst-text h2{font-size:1rem} .asst-text h3{font-size:.9rem}
+        .asst-text code { background: var(--surface-2); padding: .15rem .4rem; border-radius: 4px; font-size: .85em; font-family: 'JetBrains Mono', monospace; color: var(--primary); transition: var(--transition); }
+        .asst-text pre { background: var(--code-bg); color: var(--code-text); padding: 1rem; border-radius: 8px; overflow-x: auto; margin: .75rem 0; font-size: .8rem; border: 1px solid var(--border); }
+        .asst-text pre code { background: none; color: inherit; padding: 0; }
+        .asst-text ul,.asst-text ol { padding-left: 1.5rem; margin-bottom: .75rem; }
+        .asst-text li { margin-bottom: .25rem; }
+        .asst-text table { width: 100%; border-collapse: collapse; margin: .75rem 0; font-size: .8rem; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+        .asst-text th { background: var(--surface-2); padding: .5rem .75rem; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); color: var(--text-1); transition: var(--transition); }
+        .asst-text td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); color: var(--text-2); transition: var(--transition); }
+        .asst-text blockquote { border-left: 3px solid var(--primary); padding-left: .85rem; color: var(--text-3); margin: .75rem 0; font-style: italic; }
+        .asst-text hr { border: 0; height: 1px; background: var(--border); margin: 1rem 0; }
+        .asst-text .katex-display { overflow-x: auto; padding: .5rem 0; }
+
+        /* Citations */
+        .asst-citations { margin-top: 1rem; padding-top: .85rem; border-top: 1px solid var(--border); }
+        .citations-label { font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-4); margin-bottom: .5rem; transition: var(--transition); }
+        .cite-row { font-family: 'JetBrains Mono', monospace; font-size: .7rem; color: var(--text-3); padding: .35rem .6rem; background: var(--surface-up); border-radius: 5px; margin-bottom: .3rem; border-left: 2px solid var(--cite-bar); transition: var(--transition); border: 1px solid var(--border); }
+        .cite-row:last-child { margin-bottom: 0; }
+        .cite-num { font-weight: 600; color: var(--primary); margin-right: .35rem; }
+
+        /* Typing */
+        .typing-row { display: flex; gap: .75rem; align-items: flex-start; }
+        .typing-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: .85rem 1.1rem; display: flex; align-items: center; gap: 5px; box-shadow: var(--shadow); transition: var(--transition); }
+        .typing-bubble span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); animation: tdot 1.2s ease-in-out infinite; }
+        .typing-bubble span:nth-child(2){animation-delay:.2s} .typing-bubble span:nth-child(3){animation-delay:.4s}
+        @keyframes tdot{0%,80%,100%{transform:scale(.65);opacity:.45}40%{transform:scale(1);opacity:1}}
+
+        /* ── INPUT BAR ──────────────────────────────────── */
+        .input-area { padding: .85rem 1.5rem .85rem; background: var(--bg); flex-shrink: 0; transition: var(--transition); }
+        .input-bar { display: flex; align-items: flex-end; gap: .5rem; background: var(--surface); border: 1.5px solid var(--border); border-radius: 12px; padding: .5rem .6rem .5rem .75rem; transition: var(--transition), border-color .2s, box-shadow .2s; box-shadow: var(--shadow); }
+        .input-bar:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(51,65,85,.12); }
+        .attach-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: none; border: none; cursor: pointer; color: var(--text-4); border-radius: 6px; transition: color .15s, background .15s; flex-shrink: 0; }
+        .attach-btn:hover { color: var(--primary); background: var(--primary-bg); }
+        #chatInput { flex: 1; background: none; border: none; outline: none; font-size: .875rem; color: var(--text-1); resize: none; min-height: 24px; max-height: 140px; line-height: 1.6; padding: .2rem 0; transition: color .25s; }
+        #chatInput::placeholder { color: var(--text-4); }
+        .send-btn { width: 36px; height: 36px; background: var(--primary); border: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background .15s; color: var(--surface); }
+        .send-btn:hover:not(:disabled) { background: var(--primary-hover); }
+        .send-btn:disabled { background: var(--border-muted); color: var(--surface-2); cursor: not-allowed; }
+        .send-btn svg { width: 16px; height: 16px; }
+        .input-error { font-size: .75rem; font-weight: 500; color: #ef4444; margin-top: .4rem; display: none; }
+        .input-error.show { display: block; }
+        .input-disclaimer { font-size: .65rem; color: var(--text-4); text-align: center; margin-top: .5rem; letter-spacing: .2px; display: flex; align-items: center; justify-content: center; gap: .35rem; transition: var(--transition); }
+        .input-disclaimer svg { width: 12px; height: 12px; }
+
+        /* ── MODALS ─────────────────────────────────────── */
+        .overlay { display: none; position: fixed; inset: 0; background: rgba(11,18,32,.5); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .overlay.active { display: flex; }
+        .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.5rem; max-width: 420px; width: 90%; box-shadow: var(--shadow-lg); animation: fadeUp .25s ease; max-height: 90vh; overflow-y: auto; transition: var(--transition); }
+        .modal h3 { font-size: 1rem; font-weight: 700; color: var(--text-1); margin-bottom: .5rem; transition: var(--transition); }
+        .modal p  { font-size: .875rem; color: var(--text-3); line-height: 1.6; transition: var(--transition); }
+        .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.25rem; }
+        .modal-btn { padding: .45rem 1rem; border-radius: 7px; font-size: .85rem; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--surface-up); color: var(--text-2); transition: var(--transition); font-family: 'Inter', sans-serif; }
+        .modal-btn:hover { background: var(--surface-2); }
+        .modal-btn.danger { background: #ef4444; color: #fff; border-color: #ef4444; }
+        .modal-btn.danger:hover { background: #dc2626; }
+        .lang-table { width: 100%; border-collapse: collapse; margin-top: .75rem; }
+        .lang-table th { text-align: left; padding: .5rem .6rem; border-bottom: 2px solid var(--border); color: var(--primary); font-size: .75rem; text-transform: uppercase; letter-spacing: .5px; transition: var(--transition); }
+        .lang-table td { padding: .5rem .6rem; border-bottom: 1px solid var(--border); color: var(--text-2); font-family: 'JetBrains Mono', monospace; font-size: .8rem; transition: var(--transition); }
+        .lang-table tbody tr:hover td { background: var(--surface-up); }
+
+        /* ── TOASTS ─────────────────────────────────────── */
+        .toast-wrap { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 2000; display: flex; flex-direction: column; gap: .4rem; }
+        .toast { padding: .6rem 1rem; border-radius: 8px; font-size: .8rem; font-weight: 500; animation: fadeUp .25s ease; max-width: 320px; box-shadow: var(--shadow-lg); border: 1px solid; }
+        .toast-success { background: var(--ts-bg); color: var(--ts-c); border-color: var(--ts-br); }
+        .toast-error   { background: var(--te-bg); color: var(--te-c); border-color: var(--te-br); }
+        .toast-info    { background: var(--ti-bg); color: var(--ti-c); border-color: var(--ti-br); }
+
+        @media (max-width: 640px) { .sidebar{display:none} .chat-area{padding:1rem} .input-area{padding:.75rem 1rem} }
     </style>
 </head>
-
 <body>
-    <!-- Scientific Background -->
-    <canvas id="sci-canvas"></canvas>
-    <div class="bg-vignette"></div>
 
-    <!-- Theme toggle -->
-    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark mode">
-        <div class="toggle-thumb"><span id="themeIcon">🌙</span></div>
-    </button>
-
-    <div class="container">
-        <header>
-            <div class="logo-icon">🌐</div>
-            <h1>IndicRAG</h1>
-            <p class="subtitle">Multilingual Scientific Q&A — Ask in any Indic language</p>
-            <div class="badge-row">
-                <span class="badge"><span class="badge-dot"></span> Live</span>
-                <span class="badge">12 Languages</span>
-                <span class="badge">LLM Powered</span>
-            </div>
-        </header>
-
-        <!-- Stats Bar -->
-        <div class="stats-bar">
-            <div class="stat-pill glass-card">
-                <div class="stat-label">Papers Uploaded</div>
-                <div class="stat-value" id="paperCount">—</div>
-            </div>
-            <div class="stat-pill glass-card">
-                <div class="stat-label">Chunks Indexed</div>
-                <div class="stat-value" id="chunkCount">—</div>
-            </div>
-        </div>
-
-        <!-- Management Panel -->
-        <div class="glass-card management-panel" id="managementPanel">
-            <div class="panel-header" onclick="toggleManagementPanel()">
-                <h2>📁 Knowledge Base Management</h2>
-                <span class="panel-toggle">▼</span>
-            </div>
-            <div class="panel-content">
-                <div class="panel-inner">
-
-                    <div class="panel-section">
-                        <h3>Upload Scientific Papers</h3>
-                        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-                            <span class="upload-icon">📄</span>
-                            <div class="upload-text">Drag & drop PDF files here, or click to browse</div>
-                            <div class="upload-hint">Only PDF files are accepted</div>
-                        </div>
-                        <input type="file" id="fileInput" class="upload-input" accept=".pdf" multiple
-                            onchange="handleFileSelect(event)">
-                    </div>
-
-                    <div class="panel-section">
-                        <div
-                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                            <h3 style="margin-bottom: 0;">Uploaded Papers</h3>
-                            <button class="btn-success btn-small" onclick="ingestAllPapers()" id="ingestAllBtn">Ingest
-                                All PDFs</button>
-                        </div>
-                        <div class="table-wrap">
-                            <table class="papers-table">
-                                <thead>
-                                    <tr>
-                                        <th>Filename</th>
-                                        <th>Size</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="papersTableBody">
-                                    <tr>
-                                        <td colspan="3" class="papers-empty">Loading…</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="panel-section">
-                        <div class="danger-zone">
-                            <h4>⚠️ Danger Zone</h4>
-                            <div class="danger-actions">
-                                <button class="btn-danger btn-small" id="purgePapersBtn">Delete All Papers</button>
-                                <button class="btn-danger btn-small" id="purgeDatabaseBtn">Clear Vector
-                                    Database</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Main Query Card -->
-        <div class="glass-card main-card">
-            <div class="error" id="error"></div>
-            <div class="input-group">
-                <label for="question">Your Question</label>
-                <textarea id="question" aria-label="Enter your research question in any language"
-                    placeholder="Example: What is the treatment for diabetes?"></textarea>
-            </div>
-            <div class="controls">
-                <select id="strategy" aria-label="Select query strategy">
-                    <option value="A">Strategy A: Multilingual LLM (Recommended)</option>
-                    <option value="B">Strategy B: Translate to English First</option>
-                </select>
-                <button class="btn-primary" id="askBtn" onclick="askQuestion()">Ask Question</button>
-            </div>
-        </div>
-
-        <!-- Loading -->
-        <div class="loading" id="loading">
-            <div class="spinner-wrap">
-                <div class="spinner-outer"></div>
-                <div class="spinner-inner"></div>
-                <div class="spinner-dot"></div>
-            </div>
-            <p>Searching scientific databases, translating, synthesizing…</p>
-        </div>
-
-        <!-- Result -->
-        <div class="glass-card result" id="result">
-            <div class="result-header">
-                <h3>Answer</h3>
-                <span class="language-badge" id="languageBadge">English</span>
-            </div>
-            <div class="answer markdown-body" id="answer"></div>
-            <div class="citations" id="citationsSection" style="display:none;">
-                <h3>Source Citations</h3>
-                <div id="citations"></div>
-            </div>
-            <div class="result-stats">
-                <div class="stat-pill">
-                    <div class="stat-label">Processing Time</div>
-                    <div class="stat-value" id="processingTime">0.00s</div>
-                </div>
-                <div class="stat-pill">
-                    <div class="stat-label">Chunks Analyzed</div>
-                    <div class="stat-value" id="chunksUsed">0</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Examples -->
-        <div class="examples">
-            <div class="examples-title">Try an example</div>
-            <div class="example-grid">
-                <div class="example-card"
-                    onclick="setExample('What are the effects of climate change on biodiversity?')" role="button"
-                    tabindex="0"
-                    onkeypress="handleExampleKey(event,'What are the effects of climate change on biodiversity?')">
-                    <div class="example-lang">English</div>
-                    <div class="example-text">What are the effects of climate change on biodiversity?</div>
-                </div>
-                <div class="example-card" onclick="setExample('मधुमेह का इलाज क्या है?')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event,'मधुमेह का इलाज क्या है?')">
-                    <div class="example-lang">Hindi</div>
-                    <div class="example-text">मधुमेह का इलाज क्या है?</div>
-                </div>
-                <div class="example-card" onclick="setExample('நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')" role="button"
-                    tabindex="0" onkeypress="handleExampleKey(event,'நீரிழிவு நோய்க்கான சிகிச்சை என்ன?')">
-                    <div class="example-lang">Tamil</div>
-                    <div class="example-text">நீரிழிவு நோய்க்கான சிகிச்சை என்ன?</div>
-                </div>
-                <div class="example-card" onclick="setExample('কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')" role="button"
-                    tabindex="0" onkeypress="handleExampleKey(event,'কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?')">
-                    <div class="example-lang">Bengali</div>
-                    <div class="example-text">কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে?</div>
-                </div>
-                <div class="example-card" onclick="setExample('డయాబెటిస్ చికిత్స ఏమిటి?')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event,'డయాబెటిస్ చికిత్స ఏమిటి?')">
-                    <div class="example-lang">Telugu</div>
-                    <div class="example-text">డయాబెటిస్ చికిత్స ఏమిటి?</div>
-                </div>
-                <div class="example-card" onclick="setExample('हवामान बदलाचे काय परिणाम आहेत?')" role="button"
-                    tabindex="0" onkeypress="handleExampleKey(event,'हवामान बदलाचे काय परिणाम आहेत?')">
-                    <div class="example-lang">Marathi</div>
-                    <div class="example-text">हवामान बदलाचे काय परिणाम आहेत?</div>
-                </div>
-                <div class="example-card" onclick="setExample('مصنوعی ذہانت کیا ہے؟')" role="button" tabindex="0"
-                    onkeypress="handleExampleKey(event,'مصنوعی ذہانت کیا ہے؟')">
-                    <div class="example-lang">Urdu</div>
-                    <div class="example-text">مصنوعی ذہانت کیا ہے؟</div>
-                </div>
-            </div>
-        </div>
-
-        <footer>
-            <p>Powered by LLMs & RAG • Scientific Knowledge Graph</p>
-            <div class="footer-links">
-                <button onclick="showLangModal()" class="icon-link">🌐 Supported Languages</button>
-                <a href="https://github.com/DNSdecoded/IndicRAG" target="_blank" class="icon-link">
-                    <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
-                        <path
-                            d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-                    </svg>
-                    GitHub
-                </a>
-            </div>
-        </footer>
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <div class="logo-wrap">ज्ञ</div>
+        IndicRAG
     </div>
+    <div class="sidebar-scroll">
+        <div class="sidebar-section">
+            <div class="section-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+                RAG Strategy
+            </div>
+            <div class="strategy-card selected" id="cardA" onclick="selectStrategy('A')">
+                <label>
+                    <input type="radio" name="strategy" id="radioA" value="A" checked>
+                    <div class="strategy-card-body">
+                        <span class="strategy-title">Direct Multilingual</span>
+                        <span class="strategy-desc">Native language reasoning</span>
+                    </div>
+                </label>
+            </div>
+            <div class="strategy-card" id="cardB" onclick="selectStrategy('B')">
+                <label>
+                    <input type="radio" name="strategy" id="radioB" value="B">
+                    <div class="strategy-card-body">
+                        <span class="strategy-title">English Pivot</span>
+                        <span class="strategy-desc">Translate → Reason → Translate</span>
+                    </div>
+                </label>
+            </div>
+        </div>
 
-    <div class="toast-container" id="toastContainer"></div>
+        <div class="sidebar-section">
+            <div class="section-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                Knowledge Base
+            </div>
+            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                <svg class="up-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+                    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+                </svg>
+                <span class="upload-label">Drop PDFs here or click</span>
+                <span class="upload-hint">Preserves math formulas</span>
+            </div>
+            <input type="file" id="fileInput" accept=".pdf" multiple onchange="handleFiles(event)">
+            <button class="ingest-all-btn" id="ingestAllBtn" onclick="ingestAll()">⚡ Ingest All PDFs</button>
+            <div id="papersList">
+                <div class="papers-empty" id="papersEmpty">No documents ingested yet.<br>ChromaDB is empty.</div>
+            </div>
+            <div class="kb-stats">
+                <div class="kb-stat"><span class="kb-stat-value" id="paperCount">—</span><span class="kb-stat-label">Papers</span></div>
+                <div class="kb-stat"><span class="kb-stat-value" id="chunkCount">—</span><span class="kb-stat-label">Chunks</span></div>
+            </div>
+        </div>
+    </div>
+    <div class="sidebar-footer">
+        <button class="sfooter-btn" onclick="showLangModal()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Supported Languages
+        </button>
+        <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
+        <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
+    </div>
+</aside>
 
-    <!-- Purge Modal -->
-    <div class="modal-overlay" id="purgeModal">
-        <div class="modal">
-            <h3>Confirm Action</h3>
-            <p>Are you sure you want to proceed? This action cannot be undone.</p>
-            <div class="modal-actions">
-                <button class="btn-secondary" onclick="hidePurgeModal()">Cancel</button>
-                <button class="btn-danger" onclick="confirmPurge()">Delete</button>
+<main class="main">
+    <header class="main-header">
+        <button class="icon-btn" onclick="newConversation()" title="New conversation">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="header-info">
+            <div class="header-title">Research Assistant</div>
+            <div class="header-sub">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+                Using multilingual-e5-base & IndicTrans2
+            </div>
+        </div>
+        <div class="header-actions">
+            <span class="session-badge" id="sessionBadge">No session</span>
+            <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle dark mode">🌙</button>
+            <button class="new-chat-btn" onclick="newConversation()">+ New Chat</button>
+        </div>
+    </header>
+
+    <div class="chat-area" id="chatArea">
+        <div class="welcome-row" id="welcomeMsg">
+            <div class="bot-avatar">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><line x1="10" y1="21" x2="14" y2="21"/></svg>
+            </div>
+            <div class="welcome-bubble">
+                Welcome to the IndicRAG Interface. Upload your scientific PDFs and ask questions in English or your preferred Indic language.
             </div>
         </div>
     </div>
 
-    <!-- Language Modal -->
-    <div class="modal-overlay" id="langModal">
-        <div class="modal">
-            <h3>Supported Languages</h3>
-            <table class="lang-table">
-                <thead>
-                    <tr>
-                        <th>Language</th>
-                        <th>Code</th>
-                        <th>Native</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>English</td>
-                        <td>en</td>
-                        <td>English</td>
-                    </tr>
-                    <tr>
-                        <td>Hindi</td>
-                        <td>hi</td>
-                        <td>हिंदी</td>
-                    </tr>
-                    <tr>
-                        <td>Telugu</td>
-                        <td>te</td>
-                        <td>తెలుగు</td>
-                    </tr>
-                    <tr>
-                        <td>Tamil</td>
-                        <td>ta</td>
-                        <td>தமிழ்</td>
-                    </tr>
-                    <tr>
-                        <td>Bengali</td>
-                        <td>bn</td>
-                        <td>বাংলা</td>
-                    </tr>
-                    <tr>
-                        <td>Marathi</td>
-                        <td>mr</td>
-                        <td>मराठी</td>
-                    </tr>
-                    <tr>
-                        <td>Gujarati</td>
-                        <td>gu</td>
-                        <td>ગુજરાતી</td>
-                    </tr>
-                    <tr>
-                        <td>Kannada</td>
-                        <td>kn</td>
-                        <td>ಕನ್ನಡ</td>
-                    </tr>
-                    <tr>
-                        <td>Malayalam</td>
-                        <td>ml</td>
-                        <td>മലയാളം</td>
-                    </tr>
-                    <tr>
-                        <td>Punjabi</td>
-                        <td>pa</td>
-                        <td>ਪੰਜਾਬੀ</td>
-                    </tr>
-                    <tr>
-                        <td>Odia</td>
-                        <td>or</td>
-                        <td>ଓଡ଼ିଆ</td>
-                    </tr>
-                    <tr>
-                        <td>Urdu</td>
-                        <td>ur</td>
-                        <td>اردو</td>
-                    </tr>
-                </tbody>
-            </table>
-            <div class="modal-actions">
-                <button class="btn-secondary" onclick="hideLangModal()">Close</button>
-            </div>
+    <div class="input-area">
+        <div class="input-bar">
+            <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Attach PDF">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <textarea id="chatInput" rows="1" placeholder="Ask a question in English or an Indic language (using Direct Multilingual)..."></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+            </button>
+        </div>
+        <div class="input-error" id="inputError"></div>
+        <div class="input-disclaimer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            ANSWERS ARE GENERATED BASED ON UPLOADED DOCUMENTS
         </div>
     </div>
+</main>
 
-    <script>
-        // ═══════════════════════════════════════════════════════════════
-        // SCIENTIFIC BACKGROUND ANIMATION ENGINE
-        // Layers: Neural graph · DNA helix · Atoms · Wave equations ·
-        //         Floating formulae · Constellation field · Data pulses
-        // ═══════════════════════════════════════════════════════════════
-        const sciCanvas = document.getElementById('sci-canvas');
-        const sciCtx = sciCanvas.getContext('2d');
-        let W, H, tick = 0;
+<div class="overlay" id="purgeOverlay">
+    <div class="modal">
+        <h3>Confirm Action</h3>
+        <p id="purgeText">This action cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hidePurgeModal()">Cancel</button>
+            <button class="modal-btn danger" onclick="confirmPurge()">Delete</button>
+        </div>
+    </div>
+</div>
 
-        function resize() {
-            W = sciCanvas.width = window.innerWidth;
-            H = sciCanvas.height = window.innerHeight;
-        }
-        resize();
-        window.addEventListener('resize', () => { resize(); initAll(); });
+<div class="overlay" id="langOverlay">
+    <div class="modal" style="max-width:490px">
+        <h3>Supported Languages</h3>
+        <table class="lang-table">
+            <thead><tr><th>Language</th><th>Code</th><th>Native</th></tr></thead>
+            <tbody>
+                <tr><td>English</td><td>en</td><td>English</td></tr>
+                <tr><td>Hindi</td><td>hi</td><td>हिंदी</td></tr>
+                <tr><td>Telugu</td><td>te</td><td>తెలుగు</td></tr>
+                <tr><td>Tamil</td><td>ta</td><td>தமிழ்</td></tr>
+                <tr><td>Bengali</td><td>bn</td><td>বাংলা</td></tr>
+                <tr><td>Marathi</td><td>mr</td><td>मराठी</td></tr>
+                <tr><td>Gujarati</td><td>gu</td><td>ગુજરાતી</td></tr>
+                <tr><td>Kannada</td><td>kn</td><td>ಕನ್ನಡ</td></tr>
+                <tr><td>Malayalam</td><td>ml</td><td>മലയാളം</td></tr>
+                <tr><td>Punjabi</td><td>pa</td><td>ਪੰਜਾਬੀ</td></tr>
+                <tr><td>Odia</td><td>or</td><td>ଓଡ଼ିଆ</td></tr>
+                <tr><td>Urdu</td><td>ur</td><td>اردو</td></tr>
+            </tbody>
+        </table>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hideLangModal()">Close</button>
+        </div>
+    </div>
+</div>
 
-        // ── Colour helpers ──────────────────────────────────────────────
-        function isDark() { return document.documentElement.getAttribute('data-theme') !== 'light'; }
+<div class="toast-wrap" id="toastWrap"></div>
 
-        const PALETTE = {
-            dark: { primary: [139, 92, 246], secondary: [56, 189, 248], accent: [244, 114, 182], mint: [52, 211, 153], warn: [251, 191, 36] },
-            light: { primary: [124, 58, 237], secondary: [14, 165, 233], accent: [236, 72, 153], mint: [16, 185, 129], warn: [245, 158, 11] }
-        };
-        function pal(key, a = 1) {
-            const theme = isDark() ? PALETTE.dark : PALETTE.light;
-            const [r, g, b] = theme[key];
-            return `rgba(${r},${g},${b},${a})`;
-        }
-        function baseAlpha(a) { return isDark() ? a : a * 0.55; }
+<script>
+// ── STATE ──────────────────────────────────────────────────────
+const API       = window.location.origin;
+let sessionId   = null;
+let strategy    = 'A';
+let isLoading   = false;
+let pendingPurge = null;
 
-        // ── 1. NEURAL NETWORK NODES ─────────────────────────────────────
-        let nodes = [];
-        function initNodes() {
-            nodes = [];
-            const count = Math.min(40, Math.floor(W * H / 28000));
-            for (let i = 0; i < count; i++) {
-                nodes.push({
-                    x: Math.random() * W, y: Math.random() * H,
-                    vx: (Math.random() - 0.5) * 0.22, vy: (Math.random() - 0.5) * 0.22,
-                    r: Math.random() * 2.2 + 0.8,
-                    phase: Math.random() * Math.PI * 2,
-                    phaseSpeed: 0.008 + Math.random() * 0.012,
-                    colorKey: ['primary', 'secondary', 'accent', 'mint'][Math.floor(Math.random() * 4)],
-                    type: Math.random() < 0.15 ? 'hub' : 'node'   // hubs are bigger
-                });
-            }
-        }
+const botAvatarSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><line x1="10" y1="21" x2="14" y2="21"/></svg>`;
 
-        function drawNodes() {
-            // move
-            nodes.forEach(n => {
-                n.x += n.vx; n.y += n.vy; n.phase += n.phaseSpeed;
-                if (n.x < 0) n.x = W; if (n.x > W) n.x = 0;
-                if (n.y < 0) n.y = H; if (n.y > H) n.y = 0;
-            });
+// ── THEME ──────────────────────────────────────────────────────
+function applyTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.getElementById('themeToggle').textContent = dark ? '☀️' : '🌙';
+}
+function toggleTheme() {
+    const dark = document.documentElement.getAttribute('data-theme') !== 'dark';
+    applyTheme(dark);
+    localStorage.setItem('indicrag-theme', dark ? 'dark' : 'light');
+}
+// Restore saved preference; default to dark
+(function() {
+    const saved = localStorage.getItem('indicrag-theme') || 'dark';
+    applyTheme(saved === 'dark');
+})();
 
-            // connections
-            for (let i = 0; i < nodes.length; i++) {
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    const threshold = nodes[i].type === 'hub' || nodes[j].type === 'hub' ? 200 : 130;
-                    if (dist < threshold) {
-                        const alpha = baseAlpha((1 - dist / threshold) * 0.12);
-                        sciCtx.beginPath();
-                        sciCtx.moveTo(nodes[i].x, nodes[i].y);
-                        sciCtx.lineTo(nodes[j].x, nodes[j].y);
-                        sciCtx.strokeStyle = pal('primary', alpha);
-                        sciCtx.lineWidth = 0.5;
-                        sciCtx.stroke();
+// ── STRATEGY ───────────────────────────────────────────────────
+function selectStrategy(s) {
+    strategy = s;
+    document.getElementById('radioA').checked = s === 'A';
+    document.getElementById('radioB').checked = s === 'B';
+    document.getElementById('cardA').classList.toggle('selected', s === 'A');
+    document.getElementById('cardB').classList.toggle('selected', s === 'B');
+    const stratName = s === 'A' ? 'Direct Multilingual' : 'English Pivot';
+    document.getElementById('chatInput').placeholder =
+        `Ask a question in English or an Indic language (using ${stratName})...`;
+}
 
-                        // data pulse travelling along edge
-                        if (Math.random() < 0.002) {
-                            pulses.push({ x1: nodes[i].x, y1: nodes[i].y, x2: nodes[j].x, y2: nodes[j].y, t: 0, speed: 0.008 + Math.random() * 0.012, colorKey: nodes[i].colorKey });
-                        }
-                    }
-                }
-            }
+// ── RENDER ─────────────────────────────────────────────────────
+function renderContent(text) {
+    const store = [];
+    const stash = (tex, display) => {
+        const id = `\x02K${store.length}\x03`;
+        store.push({ id, tex, display });
+        return id;
+    };
+    text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => stash(t, true));
+    text = text.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, t) => stash(t, false));
+    let html = marked.parse(text);
+    store.forEach(({ id, tex, display }) => {
+        let r;
+        try { r = katex.renderToString(tex.trim(), { displayMode: display, throwOnError: false }); }
+        catch { r = display ? `<pre>$$${tex}$$</pre>` : `<code>$${tex}$</code>`; }
+        html = html.split(id).join(r);
+    });
+    return html;
+}
+function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
 
-            // draw nodes
-            nodes.forEach(n => {
-                const a = baseAlpha(0.5 + 0.3 * Math.sin(n.phase));
-                const r = n.type === 'hub' ? n.r * 2.5 : n.r;
-                // glow
-                const grd = sciCtx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r * 3.5);
-                grd.addColorStop(0, pal(n.colorKey, a * 0.8));
-                grd.addColorStop(1, pal(n.colorKey, 0));
-                sciCtx.beginPath(); sciCtx.arc(n.x, n.y, r * 3.5, 0, Math.PI * 2);
-                sciCtx.fillStyle = grd; sciCtx.fill();
-                // core
-                sciCtx.beginPath(); sciCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
-                sciCtx.fillStyle = pal(n.colorKey, a); sciCtx.fill();
-            });
-        }
+// ── SESSION ────────────────────────────────────────────────────
+function updateSessionBadge() {
+    document.getElementById('sessionBadge').textContent =
+        sessionId ? `Session: ${sessionId.slice(0,8)}…` : 'No session';
+}
+function newConversation() {
+    sessionId = null;
+    updateSessionBadge();
+    document.getElementById('chatArea').innerHTML = `
+        <div class="welcome-row" id="welcomeMsg">
+            <div class="bot-avatar">${botAvatarSvg}</div>
+            <div class="welcome-bubble">
+                Welcome to the IndicRAG Interface. Upload your scientific PDFs and ask questions in English or your preferred Indic language.
+            </div>
+        </div>`;
+}
 
-        // ── 2. DATA PULSES along edges ──────────────────────────────────
-        let pulses = [];
-        function drawPulses() {
-            pulses = pulses.filter(p => p.t <= 1);
-            pulses.forEach(p => {
-                p.t += p.speed;
-                const x = p.x1 + (p.x2 - p.x1) * p.t;
-                const y = p.y1 + (p.y2 - p.y1) * p.t;
-                sciCtx.beginPath(); sciCtx.arc(x, y, 2.2, 0, Math.PI * 2);
-                sciCtx.fillStyle = pal(p.colorKey, baseAlpha(0.75));
-                sciCtx.fill();
-            });
-        }
+// ── BUBBLES ────────────────────────────────────────────────────
+function removeWelcome() { const w=document.getElementById('welcomeMsg'); if(w)w.remove(); }
 
-        // ── 3. DNA DOUBLE HELIX ─────────────────────────────────────────
-        let dnaHelices = [];
-        function initDNA() {
-            dnaHelices = [];
-            // 2 helices scattered around the canvas
-            const positions = [
-                { x: W * 0.08, y: H * 0.1, len: Math.min(H * 0.7, 500) },
-                { x: W * 0.92, y: H * 0.2, len: Math.min(H * 0.6, 450) }
-            ];
-            positions.forEach(p => dnaHelices.push(p));
-        }
+function appendUserBubble(text) {
+    removeWelcome();
+    const row = document.createElement('div');
+    row.className = 'msg-row user';
+    row.innerHTML = `<div class="user-bubble">${esc(text)}</div>`;
+    document.getElementById('chatArea').appendChild(row);
+    scrollBottom();
+}
+function appendTyping() {
+    removeWelcome();
+    const row = document.createElement('div');
+    row.id = 'typingRow'; row.className = 'typing-row';
+    row.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="typing-bubble"><span></span><span></span><span></span></div>`;
+    document.getElementById('chatArea').appendChild(row);
+    scrollBottom();
+}
+function removeTyping() { const t=document.getElementById('typingRow'); if(t)t.remove(); }
 
-        function drawDNA() {
-            dnaHelices.forEach(h => {
-                const amplitude = 22, period = 60, steps = Math.floor(h.len / 3);
-                const phase = tick * 0.018;
-                for (let i = 0; i < steps; i++) {
-                    const t = i / steps;
-                    const y = h.y + t * h.len;
-                    const x1 = h.x + Math.sin(t * Math.PI * 2 * (h.len / period) + phase) * amplitude;
-                    const x2 = h.x + Math.sin(t * Math.PI * 2 * (h.len / period) + phase + Math.PI) * amplitude;
+function appendAssistantBubble(data) {
+    const cites = data.citations || [];
+    const metaHtml =
+        `<span class="meta-chip chip-lang">${esc(data.language_name||'Unknown')}</span>` +
+        (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
+        `<span class="meta-chip chip-time">${(data.processing_time||0).toFixed(1)}s · ${data.chunks_used||0} chunks</span>`;
+    const citesHtml = cites.length ? `
+        <div class="asst-citations">
+            <div class="citations-label">Sources</div>
+            ${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}
+        </div>` : '';
+    const row = document.createElement('div');
+    row.className = 'msg-row assistant';
+    row.innerHTML = `
+        <div class="bot-avatar">${botAvatarSvg}</div>
+        <div class="asst-bubble">
+            <div class="asst-meta">${metaHtml}</div>
+            <div class="asst-text">${renderContent(data.answer||'')}</div>
+            ${citesHtml}
+        </div>`;
+    document.getElementById('chatArea').appendChild(row);
+    scrollBottom();
+}
+function scrollBottom() { const a=document.getElementById('chatArea'); a.scrollTop=a.scrollHeight; }
 
-                    // strand dots
-                    if (i % 2 === 0) {
-                        sciCtx.beginPath(); sciCtx.arc(x1, y, 1.2, 0, Math.PI * 2);
-                        sciCtx.fillStyle = pal('secondary', baseAlpha(0.55)); sciCtx.fill();
-                        sciCtx.beginPath(); sciCtx.arc(x2, y, 1.2, 0, Math.PI * 2);
-                        sciCtx.fillStyle = pal('accent', baseAlpha(0.55)); sciCtx.fill();
-                    }
-
-                    // base pair rungs (every ~10 steps)
-                    if (i % 10 === 0) {
-                        sciCtx.beginPath();
-                        sciCtx.moveTo(x1, y); sciCtx.lineTo(x2, y);
-                        sciCtx.strokeStyle = pal('mint', baseAlpha(0.2));
-                        sciCtx.lineWidth = 0.8; sciCtx.stroke();
-                        // rung endpoints
-                        [x1, x2].forEach(xd => {
-                            sciCtx.beginPath(); sciCtx.arc(xd, y, 2.2, 0, Math.PI * 2);
-                            sciCtx.fillStyle = pal('mint', baseAlpha(0.55)); sciCtx.fill();
-                        });
-                    }
-                }
-            });
-        }
-
-        // ── 4. ORBITING ATOMS ──────────────────────────────────────────
-        let atoms = [];
-        function initAtoms() {
-            atoms = [];
-            const count = 4;
-            for (let i = 0; i < count; i++) {
-                atoms.push({
-                    x: Math.random() * W, y: Math.random() * H * 0.8 + H * 0.1,
-                    nucleusR: 4 + Math.random() * 4,
-                    orbits: Array.from({ length: 2 + Math.floor(Math.random() * 2) }, (_, oi) => ({
-                        rx: 28 + oi * 18 + Math.random() * 12,
-                        ry: 14 + oi * 10 + Math.random() * 8,
-                        angle: Math.random() * Math.PI, tilt: Math.random() * Math.PI,
-                        speed: (0.012 + Math.random() * 0.018) * (Math.random() < 0.5 ? 1 : -1),
-                        electronAngle: Math.random() * Math.PI * 2,
-                        colorKey: ['primary', 'secondary', 'accent', 'mint'][oi % 4]
-                    })),
-                    phase: Math.random() * Math.PI * 2,
-                    drift: { x: (Math.random() - 0.5) * 0.08, y: (Math.random() - 0.5) * 0.05 }
-                });
-            }
-        }
-
-        function drawAtoms() {
-            atoms.forEach(a => {
-                a.x += a.drift.x; a.y += a.drift.y; a.phase += 0.005;
-                if (a.x < -80) a.x = W + 80; if (a.x > W + 80) a.x = -80;
-                if (a.y < -80) a.y = H + 80; if (a.y > H + 80) a.y = -80;
-
-                // nucleus glow
-                const grd = sciCtx.createRadialGradient(a.x, a.y, 0, a.x, a.y, a.nucleusR * 3.5);
-                grd.addColorStop(0, pal('warn', baseAlpha(0.45 + 0.2 * Math.sin(a.phase))));
-                grd.addColorStop(1, pal('warn', 0));
-                sciCtx.beginPath(); sciCtx.arc(a.x, a.y, a.nucleusR * 3.5, 0, Math.PI * 2);
-                sciCtx.fillStyle = grd; sciCtx.fill();
-                // nucleus core
-                sciCtx.beginPath(); sciCtx.arc(a.x, a.y, a.nucleusR, 0, Math.PI * 2);
-                sciCtx.fillStyle = pal('warn', baseAlpha(0.6)); sciCtx.fill();
-
-                // orbits & electrons
-                a.orbits.forEach(o => {
-                    o.electronAngle += o.speed;
-                    // orbit ellipse
-                    sciCtx.save();
-                    sciCtx.translate(a.x, a.y);
-                    sciCtx.rotate(o.tilt);
-                    sciCtx.beginPath();
-                    sciCtx.ellipse(0, 0, o.rx, o.ry, 0, 0, Math.PI * 2);
-                    sciCtx.strokeStyle = pal(o.colorKey, baseAlpha(0.14));
-                    sciCtx.lineWidth = 0.8; sciCtx.stroke();
-
-                    // electron
-                    const ex = Math.cos(o.electronAngle) * o.rx;
-                    const ey = Math.sin(o.electronAngle) * o.ry;
-                    // electron glow
-                    const eg = sciCtx.createRadialGradient(ex, ey, 0, ex, ey, 6);
-                    eg.addColorStop(0, pal(o.colorKey, baseAlpha(0.9)));
-                    eg.addColorStop(1, pal(o.colorKey, 0));
-                    sciCtx.beginPath(); sciCtx.arc(ex, ey, 6, 0, Math.PI * 2);
-                    sciCtx.fillStyle = eg; sciCtx.fill();
-                    sciCtx.beginPath(); sciCtx.arc(ex, ey, 2, 0, Math.PI * 2);
-                    sciCtx.fillStyle = pal(o.colorKey, baseAlpha(1)); sciCtx.fill();
-
-                    // electron trail
-                    for (let tr = 1; tr <= 5; tr++) {
-                        const ta = o.electronAngle - o.speed * tr * 3;
-                        sciCtx.beginPath();
-                        sciCtx.arc(Math.cos(ta) * o.rx, Math.sin(ta) * o.ry, 1.2 - tr * 0.18, 0, Math.PI * 2);
-                        sciCtx.fillStyle = pal(o.colorKey, baseAlpha((0.5 - tr * 0.08)));
-                        sciCtx.fill();
-                    }
-                    sciCtx.restore();
-                });
-            });
-        }
-
-        // ── 5. WAVE EQUATIONS (sine/cosine pulses) ──────────────────────
-        function drawWaves() {
-            const waves = [
-                { yBase: H * 0.15, amplitude: 18, freq: 0.018, speed: 0.025, colorKey: 'secondary', alpha: 0.13 },
-                { yBase: H * 0.82, amplitude: 14, freq: 0.022, speed: -0.03, colorKey: 'accent', alpha: 0.11 },
-                { yBase: H * 0.5, amplitude: 10, freq: 0.03, speed: 0.02, colorKey: 'mint', alpha: 0.09 }
-            ];
-            waves.forEach(w => {
-                sciCtx.beginPath();
-                for (let x = 0; x < W; x += 3) {
-                    const y = w.yBase + Math.sin(x * w.freq + tick * w.speed) * w.amplitude
-                        + Math.sin(x * w.freq * 1.7 + tick * w.speed * 0.6 + 1.2) * w.amplitude * 0.4;
-                    x === 0 ? sciCtx.moveTo(x, y) : sciCtx.lineTo(x, y);
-                }
-                sciCtx.strokeStyle = pal(w.colorKey, baseAlpha(w.alpha));
-                sciCtx.lineWidth = 1.2; sciCtx.stroke();
-            });
-        }
-
-        // ── 6. FLOATING SCIENTIFIC FORMULAE ────────────────────────────
-        const FORMULAE = [
-            'E = mc²', 'F = ma', 'PV = nRT', 'ΔG = ΔH − TΔS',
-            'λ = h/p', '∇²ψ', 'i℃ℏ ∂ψ/∂t', 'H₂O', 'DNA', 'RNA',
-            'σ = √variance', '∑ xᵢ/n', 'lim δ→0', 'pH = −log[H⁺]',
-            'ATP', 'v = λf', 'E = hf', '∮ B·dA = 0', 'NAD⁺'
-        ];
-        let formulae = [];
-        function initFormulae() {
-            formulae = FORMULAE.map(f => ({
-                text: f,
-                x: Math.random() * W, y: Math.random() * H,
-                vx: (Math.random() - 0.5) * 0.18, vy: -0.06 - Math.random() * 0.1,
-                alpha: Math.random() * 0.18 + 0.06,
-                size: 10 + Math.random() * 7,
-                colorKey: ['primary', 'secondary', 'accent', 'mint'][Math.floor(Math.random() * 4)],
-                rotate: (Math.random() - 0.5) * 0.3,
-                currentRotate: Math.random() * Math.PI * 2
-            }));
-        }
-
-        function drawFormulae() {
-            formulae.forEach(f => {
-                f.x += f.vx; f.y += f.vy; f.currentRotate += f.rotate * 0.005;
-                if (f.y < -30) { f.y = H + 30; f.x = Math.random() * W; }
-                if (f.x < -60) f.x = W + 60; if (f.x > W + 60) f.x = -60;
-                sciCtx.save();
-                sciCtx.translate(f.x, f.y);
-                sciCtx.rotate(f.currentRotate * 0.04);
-                sciCtx.font = `${f.size}px 'DM Sans', monospace`;
-                sciCtx.fillStyle = pal(f.colorKey, baseAlpha(f.alpha));
-                sciCtx.fillText(f.text, 0, 0);
-                sciCtx.restore();
-            });
-        }
-
-        // ── 7. HEXAGONAL GRID (chemistry / protein structure) ──────────
-        function drawHexGrid() {
-            const hexR = 28, hexH = hexR * Math.sqrt(3);
-            const cols = Math.ceil(W / (hexR * 1.5)) + 2;
-            const rows = Math.ceil(H / hexH) + 2;
-            const pulseFreq = 0.0006;
-
-            for (let row = -1; row < rows; row++) {
-                for (let col = -1; col < cols; col++) {
-                    const cx = col * hexR * 1.5 - 14;
-                    const cy = row * hexH + (col % 2 === 0 ? 0 : hexH / 2) - 14;
-
-                    // distance from center for fade
-                    const distCenter = Math.sqrt((cx - W / 2) ** 2 + (cy - H / 2) ** 2);
-                    const fadeR = Math.min(W, H) * 0.65;
-                    if (distCenter > fadeR) continue;
-
-                    const alphaMod = (1 - distCenter / fadeR) * 0.07
-                        + 0.02 * Math.sin(cx * pulseFreq + tick * 0.008)
-                        * Math.sin(cy * pulseFreq + tick * 0.006);
-
-                    sciCtx.beginPath();
-                    for (let i = 0; i < 6; i++) {
-                        const angle = (Math.PI / 3) * i - Math.PI / 6;
-                        const px = cx + hexR * Math.cos(angle);
-                        const py = cy + hexR * Math.sin(angle);
-                        i === 0 ? sciCtx.moveTo(px, py) : sciCtx.lineTo(px, py);
-                    }
-                    sciCtx.closePath();
-                    sciCtx.strokeStyle = pal('primary', baseAlpha(Math.max(0, alphaMod)));
-                    sciCtx.lineWidth = 0.5; sciCtx.stroke();
-                }
-            }
-        }
-
-        // ── 8. SCANNING BEAMS ───────────────────────────────────────────
-        let beams = [];
-        function initBeams() {
-            beams = [
-                { angle: -Math.PI / 4, speed: 0.0015, length: Math.max(W, H) * 1.4, colorKey: 'secondary' },
-                { angle: Math.PI / 3, speed: -0.001, length: Math.max(W, H) * 1.2, colorKey: 'primary' }
-            ];
-        }
-
-        function drawBeams() {
-            beams.forEach(b => {
-                b.angle += b.speed;
-                const cx = W * 0.5, cy = H * 0.5;
-                const ex = cx + Math.cos(b.angle) * b.length;
-                const ey = cy + Math.sin(b.angle) * b.length;
-                const grd = sciCtx.createLinearGradient(cx, cy, ex, ey);
-                grd.addColorStop(0, pal(b.colorKey, baseAlpha(0.06)));
-                grd.addColorStop(0.5, pal(b.colorKey, baseAlpha(0.02)));
-                grd.addColorStop(1, pal(b.colorKey, 0));
-                sciCtx.beginPath();
-                sciCtx.moveTo(cx, cy);
-                sciCtx.lineTo(cx + Math.cos(b.angle - 0.04) * b.length, cy + Math.sin(b.angle - 0.04) * b.length);
-                sciCtx.lineTo(ex, ey);
-                sciCtx.closePath();
-                sciCtx.fillStyle = grd; sciCtx.fill();
-            });
-        }
-
-        // ── MASTER INIT & LOOP ──────────────────────────────────────────
-        function initAll() {
-            initNodes();
-            initDNA();
-            initAtoms();
-            initFormulae();
-            initBeams();
-        }
-        initAll();
-
-        function sciLoop() {
-            sciCtx.clearRect(0, 0, W, H);
-            tick++;
-
-            // fill base colour
-            sciCtx.fillStyle = isDark() ? '#0A0A0C' : '#F4F2FB';
-            sciCtx.fillRect(0, 0, W, H);
-
-            drawHexGrid();
-            drawWaves();
-            drawBeams();
-            drawDNA();
-            drawAtoms();
-            drawNodes();
-            drawPulses();
-            drawFormulae();
-
-            requestAnimationFrame(sciLoop);
-        }
-        sciLoop();
-
-        // ─── THEME ──────────────────────────────────────
-        function toggleTheme() {
-            const html = document.documentElement;
-            const currentDark = html.getAttribute('data-theme') === 'dark';
-            html.setAttribute('data-theme', currentDark ? 'light' : 'dark');
-            document.getElementById('themeIcon').textContent = currentDark ? '☀️' : '🌙';
-            localStorage.setItem('indicrag-theme', currentDark ? 'light' : 'dark');
-        }
-        const saved = localStorage.getItem('indicrag-theme');
-        if (saved) {
-            document.documentElement.setAttribute('data-theme', saved);
-            document.getElementById('themeIcon').textContent = saved === 'light' ? '☀️' : '🌙';
-        }
-
-        // ─── API ─────────────────────────────────────────
-        const API_URL = window.location.origin;
-
-        function setExample(text) {
-            document.getElementById('question').value = text;
-            document.getElementById('question').focus();
-        }
-
-        function handleExampleKey(event, text) {
-            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setExample(text); }
-        }
-
-        async function askQuestion() {
-            const question = document.getElementById('question').value.trim();
-            const strategy = document.getElementById('strategy').value;
-            if (!question) { showError('Please enter a question'); return; }
-
-            document.getElementById('error').classList.remove('active');
-            document.getElementById('result').classList.remove('active');
-            document.getElementById('loading').classList.add('active');
-            document.getElementById('askBtn').disabled = true;
-
-            try {
-                const res = await fetch(`${API_URL}/query`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, strategy, top_k: 5 })
-                });
-                if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Failed'); }
-                displayResult(await res.json());
-            } catch (e) {
-                showError(e.message);
-            } finally {
-                document.getElementById('loading').classList.remove('active');
-                document.getElementById('askBtn').disabled = false;
-            }
-        }
-
-        function displayResult(data) {
-            document.getElementById('languageBadge').textContent = data.language_name || 'Unknown';
-
-            const answerEl = document.getElementById('answer');
-            if (data.answer) {
-                // ── Math-safe markdown rendering ───────────────────────────
-                // 1. Extract $$ and $ math blocks BEFORE marked touches the text,
-                //    replacing them with unique placeholder tokens so marked
-                //    doesn't mangle backslashes / underscores inside formulas.
-                const mathStore = [];
-                function storeMath(tex, display) {
-                    const id = `\x02MATH${mathStore.length}\x03`;
-                    mathStore.push({ id, tex, display });
-                    return id;
-                }
-
-                let text = data.answer;
-
-                // Block math: $$...$$
-                text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => storeMath(tex, true));
-
-                // Inline math: $...$ (not preceded by $ to avoid matching $$)
-                text = text.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, tex) => storeMath(tex, false));
-
-                // 2. Parse the placeholder-bearing text as markdown
-                let html = marked.parse(text);
-
-                // 3. Restore math placeholders with KaTeX-rendered HTML
-                mathStore.forEach(({ id, tex, display }) => {
-                    let rendered;
-                    try {
-                        rendered = katex.renderToString(tex.trim(), {
-                            displayMode: display,
-                            throwOnError: false,
-                            trust: false
-                        });
-                    } catch (err) {
-                        // Fallback: show the raw LaTeX
-                        rendered = display
-                            ? `<pre class="math-fallback">$$${tex}$$</pre>`
-                            : `<code class="math-fallback">$${tex}$</code>`;
-                    }
-                    // id contains regex-special \x02 / \x03 but those are safe literals here
-                    html = html.split(id).join(rendered);
-                });
-
-                answerEl.innerHTML = html;
-            } else {
-                answerEl.textContent = 'No answer provided.';
-            }
-
-            if (data.citations && data.citations.length > 0) {
-                document.getElementById('citations').innerHTML = data.citations.map(c =>
-                    `<div class="citation"><span class="citation-number">[${c.number || '?'}]</span>${escapeHtml(c.title)} — ${escapeHtml(c.section)}</div>`
-                ).join('');
-                document.getElementById('citationsSection').style.display = 'block';
-            } else {
-                document.getElementById('citationsSection').style.display = 'none';
-            }
-
-            document.getElementById('processingTime').textContent = `${(data.processing_time || 0).toFixed(2)}s`;
-            document.getElementById('chunksUsed').textContent = data.chunks_used || 0;
-            document.getElementById('result').classList.add('active');
-            document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function showError(msg) {
-            const el = document.getElementById('error');
-            el.textContent = msg; el.classList.add('active');
-            setTimeout(() => el.classList.remove('active'), 5000);
-        }
-
-        document.getElementById('question').addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askQuestion(); }
+// ── SEND ───────────────────────────────────────────────────────
+async function sendMessage() {
+    if (isLoading) return;
+    const input = document.getElementById('chatInput');
+    const text  = input.value.trim();
+    if (!text) { showInputError('Please enter a question.'); return; }
+    hideInputError();
+    isLoading = true; input.value = ''; autoResize();
+    document.getElementById('sendBtn').disabled = true;
+    appendUserBubble(text); appendTyping();
+    try {
+        const res = await fetch(`${API}/chat`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
         });
+        if (!res.ok) { const e=await res.json(); throw new Error(e.detail?.error||e.detail||'Request failed'); }
+        const data = await res.json();
+        sessionId = data.session_id; updateSessionBadge();
+        removeTyping(); appendAssistantBubble(data);
+    } catch(e) { removeTyping(); showInputError(e.message); }
+    finally { isLoading=false; document.getElementById('sendBtn').disabled=false; input.focus(); }
+}
 
-        // ─── DOCUMENT MANAGEMENT ─────────────────────────
-        let pendingPurgeType = null;
+// ── INPUT ──────────────────────────────────────────────────────
+function autoResize() { const el=document.getElementById('chatInput'); el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }
+function showInputError(msg) { const el=document.getElementById('inputError'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),5000); }
+function hideInputError() { document.getElementById('inputError').classList.remove('show'); }
+document.getElementById('chatInput').addEventListener('input', autoResize);
+document.getElementById('chatInput').addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} });
 
-        function toggleManagementPanel() {
-            const p = document.getElementById('managementPanel');
-            p.classList.toggle('open');
-            if (p.classList.contains('open')) { loadDocumentStats(); loadPapersList(); }
-        }
+// ── FILE UPLOAD ────────────────────────────────────────────────
+const uz = document.getElementById('uploadZone');
+uz.addEventListener('dragover', e=>{e.preventDefault();uz.classList.add('dragover');});
+uz.addEventListener('dragleave', ()=>uz.classList.remove('dragover'));
+uz.addEventListener('drop', e=>{
+    e.preventDefault(); uz.classList.remove('dragover');
+    const files=Array.from(e.dataTransfer.files).filter(f=>f.name.toLowerCase().endsWith('.pdf'));
+    if(!files.length){showToast('Only PDF files accepted','error');return;}
+    uploadFiles(files);
+});
+function handleFiles(e) { const f=Array.from(e.target.files); if(f.length)uploadFiles(f); e.target.value=''; }
+async function uploadFiles(files) {
+    for(const file of files){
+        try {
+            const fd=new FormData(); fd.append('file',file);
+            const r=await fetch(`${API}/upload`,{method:'POST',body:fd});
+            if(!r.ok){const e=await r.json();throw new Error(e.detail||'Upload failed');}
+            showToast(`✓ Uploaded: ${(await r.json()).filename}`,'success');
+        } catch(e){showToast(`✗ ${file.name}: ${e.message}`,'error');}
+    }
+    refreshKB();
+}
 
-        async function loadDocumentStats() {
+// ── KNOWLEDGE BASE ─────────────────────────────────────────────
+async function refreshKB() {
+    try {
+        const [rp,rs]=await Promise.all([fetch(`${API}/papers`),fetch(`${API}/stats`)]);
+        const papers=rp.ok?await rp.json():[];
+        const stats =rs.ok?await rs.json():{};
+        document.getElementById('paperCount').textContent=papers.length||'0';
+        document.getElementById('chunkCount').textContent=stats.document_count??'0';
+        const list=document.getElementById('papersList');
+        if(!papers.length){list.innerHTML='<div class="papers-empty">No documents ingested yet.<br>ChromaDB is empty.</div>';return;}
+        list.innerHTML=papers.map(p=>{
+            const sid=p.filename.replace(/[^a-zA-Z0-9]/g,'_');
+            return `<div class="paper-item" id="pi-${sid}">
+                <span class="paper-icon">📄</span>
+                <span class="paper-name" title="${esc(p.filename)}">${esc(p.filename)}</span>
+                <button class="paper-ingest-btn" id="ib-${sid}" onclick="ingestOne('${esc(p.filename).replace(/'/g,"\\'")}','${sid}')">Ingest</button>
+            </div>`;
+        }).join('');
+    } catch{}
+}
+async function ingestOne(filename,sid) {
+    const btn=document.getElementById(`ib-${sid}`); if(!btn)return;
+    const orig=btn.textContent; btn.disabled=true; btn.textContent='…';
+    try {
+        const r=await fetch(`${API}/ingest`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pdf_path:filename})});
+        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Ingest failed');}
+        const d=await r.json();
+        showToast(`✓ Ingested ${d.chunks_ingested} chunks`,'success');
+        btn.textContent='✓'; btn.style.background='#16a34a'; refreshKB();
+    } catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent=orig;}
+}
+async function ingestAll() {
+    const btn=document.getElementById('ingestAllBtn');
+    btn.disabled=true; btn.textContent='⏳ Starting…';
+    try {
+        const r=await fetch(`${API}/ingest/all`,{method:'POST',headers:{'Content-Type':'application/json'}});
+        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Failed');}
+        const d=await r.json();
+        showToast('Job started — polling for completion…','info');
+        const poll=setInterval(async()=>{
             try {
-                const r1 = await fetch(`${API_URL}/papers`);
-                if (r1.ok) document.getElementById('paperCount').textContent = (await r1.json()).length;
-                const r2 = await fetch(`${API_URL}/stats`);
-                if (r2.ok) document.getElementById('chunkCount').textContent = (await r2.json()).document_count;
-            } catch (e) { }
-        }
-
-        async function loadPapersList() {
-            const tbody = document.getElementById('papersTableBody');
-            try {
-                const r = await fetch(`${API_URL}/papers`);
-                if (!r.ok) throw new Error();
-                const papers = await r.json();
-                if (!papers.length) {
-                    tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">No papers yet. Upload PDFs to get started!</td></tr>';
-                    return;
+                const s=await fetch(`${API}/ingest/status/${d.job_id}`); if(!s.ok)return;
+                const st=await s.json();
+                if(['success','partial','failed'].includes(st.status)){
+                    clearInterval(poll); btn.disabled=false; btn.textContent='⚡ Ingest All PDFs';
+                    if(st.status==='failed')showToast(`Ingest failed: ${st.error||'unknown'}`,'error');
+                    else showToast(`✓ ${st.chunks_ingested||0} chunks from ${st.successful||0}/${st.total_files||0} files`,'success');
+                    refreshKB();
                 }
-                tbody.innerHTML = papers.map(p => {
-                    const sid = p.filename.replace(/[^a-zA-Z0-9]/g, '_');
-                    return `<tr>
-                    <td>${escapeHtml(p.filename)}</td>
-                    <td>${p.size_mb ? p.size_mb.toFixed(2) : '?'} MB</td>
-                    <td><button class="btn-success btn-small" data-filename="${escapeHtmlAttr(p.filename)}" onclick="triggerIngest(this)" id="ingest-${sid}">Ingest</button></td>
-                </tr>`;
-                }).join('');
-            } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="3" class="papers-empty">Error loading papers or connecting to API</td></tr>';
-            }
-        }
+            }catch{}
+        },2000);
+    }catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent='⚡ Ingest All PDFs';}
+}
 
-        function escapeHtml(t) {
-            if (!t) return '';
-            const d = document.createElement('div'); d.textContent = t; return d.innerHTML;
-        }
-        function escapeHtmlAttr(t) { return t ? t.replace(/"/g, '&quot;') : ''; }
+// ── PURGE ──────────────────────────────────────────────────────
+function showPurgeModal(type) {
+    pendingPurge=type;
+    document.getElementById('purgeText').textContent=type==='papers'
+        ?'Delete all uploaded PDF files? This cannot be undone.'
+        :'Clear the entire vector database? All indexed chunks will be lost.';
+    document.getElementById('purgeOverlay').classList.add('active');
+}
+function hidePurgeModal(){document.getElementById('purgeOverlay').classList.remove('active');pendingPurge=null;}
+async function confirmPurge(){
+    if(!pendingPurge)return;
+    const ep=pendingPurge==='papers'?'/purge/papers':'/purge/database';
+    try{
+        const r=await fetch(`${API}${ep}`,{method:'DELETE'});
+        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Purge failed');}
+        showToast((await r.json()).message,'success'); refreshKB();
+    }catch(e){showToast(`Purge failed: ${e.message}`,'error');}
+    hidePurgeModal();
+}
 
-        const uploadZone = document.getElementById('uploadZone');
-        uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
-        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
-        uploadZone.addEventListener('drop', e => {
-            e.preventDefault(); uploadZone.classList.remove('dragover');
-            const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-            files.length ? uploadFiles(files) : showToast('Only PDF files are allowed', 'error');
-        });
+// ── LANGUAGE MODAL ─────────────────────────────────────────────
+function showLangModal(){document.getElementById('langOverlay').classList.add('active');}
+function hideLangModal(){document.getElementById('langOverlay').classList.remove('active');}
+document.querySelectorAll('.overlay').forEach(o=>{
+    o.addEventListener('click',e=>{if(e.target===o){o.classList.remove('active');if(o.id==='purgeOverlay')pendingPurge=null;}});
+});
 
-        function handleFileSelect(e) {
-            const files = Array.from(e.target.files);
-            if (files.length) uploadFiles(files);
-            e.target.value = '';
-        }
+// ── TOAST ──────────────────────────────────────────────────────
+function showToast(msg,type='info'){
+    const wrap=document.getElementById('toastWrap');
+    const t=document.createElement('div'); t.className=`toast toast-${type}`; t.textContent=msg;
+    wrap.appendChild(t);
+    setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},4000);
+}
 
-        async function uploadFiles(files) {
-            for (const file of files) {
-                try {
-                    const fd = new FormData(); fd.append('file', file);
-                    const r = await fetch(`${API_URL}/upload`, { method: 'POST', body: fd });
-                    if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Upload failed'); }
-                    showToast(`✓ Uploaded: ${(await r.json()).filename}`, 'success');
-                } catch (e) { showToast(`✗ ${file.name}: ${e.message}`, 'error'); }
-            }
-            loadDocumentStats(); loadPapersList();
-        }
-
-        function triggerIngest(btn) { ingestPaper(btn.getAttribute('data-filename'), btn); }
-
-        async function ingestPaper(filename, btn) {
-            const orig = btn.textContent;
-            btn.disabled = true; btn.textContent = 'Processing…';
-            try {
-                const r = await fetch(`${API_URL}/ingest`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pdf_path: filename })
-                });
-                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Ingestion failed'); }
-                const res = await r.json();
-                showToast(`✓ Ingested ${res.chunks_ingested} chunks`, 'success');
-                btn.textContent = '✓ Done';
-                btn.style.cssText = 'background:var(--bg-elevated);color:var(--text-muted);cursor:default;';
-                loadDocumentStats();
-            } catch (e) {
-                showToast(`✗ ${e.message}`, 'error');
-                btn.disabled = false; btn.textContent = orig;
-            }
-        }
-
-        async function ingestAllPapers() {
-            const btn = document.getElementById('ingestAllBtn');
-            if (!btn) return;
-            const orig = btn.textContent;
-            btn.disabled = true; btn.textContent = 'Processing All…';
-            showToast('Starting bulk ingestion...', 'success');
-            try {
-                const r = await fetch(`${API_URL}/ingest/all`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }
-                });
-                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Bulk ingestion failed'); }
-                const res = await r.json();
-                showToast(`✓ ${res.title} (${res.chunks_ingested} chunks)`, 'success');
-                loadDocumentStats();
-                loadPapersList();
-            } catch (e) {
-                showToast(`✗ ${e.message}`, 'error');
-            } finally {
-                btn.disabled = false; btn.textContent = orig;
-            }
-        }
-
-        function showPurgeModal(type) { pendingPurgeType = type; document.getElementById('purgeModal').classList.add('active'); }
-        function hidePurgeModal() { document.getElementById('purgeModal').classList.remove('active'); pendingPurgeType = null; }
-
-        async function confirmPurge() {
-            if (!pendingPurgeType) return;
-            const ep = pendingPurgeType === 'papers' ? '/purge/papers' : '/purge/database';
-            try {
-                const r = await fetch(`${API_URL}${ep}`, { method: 'DELETE' });
-                if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Purge failed'); }
-                showToast((await r.json()).message, 'success');
-                loadDocumentStats(); loadPapersList();
-            } catch (e) { showToast(`Purge failed: ${e.message}`, 'error'); }
-            hidePurgeModal();
-        }
-
-        function showLangModal() { document.getElementById('langModal').classList.add('active'); }
-        function hideLangModal() { document.getElementById('langModal').classList.remove('active'); }
-
-        document.querySelectorAll('.modal-overlay').forEach(o => {
-            o.addEventListener('click', e => {
-                if (e.target === o) { o.classList.remove('active'); if (o.id === 'purgeModal') pendingPurgeType = null; }
-            });
-        });
-
-        function showToast(msg, type = 'success') {
-            const c = document.getElementById('toastContainer');
-            const t = document.createElement('div');
-            t.className = `toast toast-${type}`; t.textContent = msg;
-            c.appendChild(t);
-            setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 4000);
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDocumentStats(); loadPapersList();
-            document.getElementById('purgePapersBtn').addEventListener('click', () => showPurgeModal('papers'));
-            document.getElementById('purgeDatabaseBtn').addEventListener('click', () => showPurgeModal('database'));
-        });
-    </script>
+// ── INIT ───────────────────────────────────────────────────────
+updateSessionBadge();
+refreshKB();
+</script>
 </body>
-
 </html>

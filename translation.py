@@ -5,6 +5,8 @@ Uses IndicTrans2 models for high-quality Indic language translation.
 
 from typing import Optional
 import logging
+import re
+import threading
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import config
@@ -15,35 +17,42 @@ logger = logging.getLogger(__name__)
 # Global model caches
 _translation_model = None
 _translation_tokenizer = None
+_lock = threading.Lock()
 
 def load_translation_model():
     """
-    Load translation model.
+    Load translation model (thread-safe, double-checked locking).
     """
     global _translation_model, _translation_tokenizer
-    
+
     if _translation_model is not None:
         return _translation_model, _translation_tokenizer
-        
-    model_name = config.TRANSLATION_MODEL_EN_TO_INDIC
-    logger.info(f"Loading translation model: {model_name}")
-    logger.info("This may take several minutes on first run (model is ~2.5GB)...")
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    _translation_tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        cache_dir=str(config.MODELS_CACHE_DIR),
-        trust_remote_code=True
-    )
-    
-    _translation_model = AutoModelForSeq2SeqLM.from_pretrained(
-        model_name,
-        cache_dir=str(config.MODELS_CACHE_DIR),
-        trust_remote_code=True
-    ).to(device).eval()  # Set to eval mode for inference
-    
-    logger.info(f"Model loaded on device: {device}")
+
+    with _lock:
+        if _translation_model is not None:
+            return _translation_model, _translation_tokenizer
+
+        model_name = config.TRANSLATION_MODEL_EN_TO_INDIC
+        logger.info(f"Loading translation model: {model_name}")
+        logger.info("This may take several minutes on first run (model is ~2.5GB)...")
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            cache_dir=str(config.MODELS_CACHE_DIR),
+            trust_remote_code=True
+        )
+
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name,
+            cache_dir=str(config.MODELS_CACHE_DIR),
+            trust_remote_code=True
+        ).to(device).eval()
+
+        _translation_tokenizer = tokenizer
+        _translation_model = model
+        logger.info(f"Model loaded on device: {device}")
     return _translation_model, _translation_tokenizer
 
 
@@ -62,61 +71,40 @@ def translate_text(
 ) -> str:
     """
     Translate text between English and Indic languages.
-    
-    Args:
-        text: Text to translate
-        source_lang: Source language code (e.g., 'en', 'hi', 'ta')
-        target_lang: Target language code (e.g., 'en', 'hi', 'ta')
-        max_length: Maximum length of generated translation
-        
-    Returns:
-        Translated text
+
+    Splits into sentences and translates in micro-batches so that long answers
+    are never silently truncated by the model's max_length cap.
     """
     if source_lang == target_lang:
         return text
-        
+
     if source_lang not in NLLB_LANG_MAP or target_lang not in NLLB_LANG_MAP:
         raise ValueError(
             f"Unsupported translation: {source_lang} -> {target_lang}. "
             f"Only English and supported Indic languages are allowed."
         )
-    
-    # Load model
+
     model, tokenizer = load_translation_model()
-    
-    # Set source language for the tokenizer
     tokenizer.src_lang = NLLB_LANG_MAP[source_lang]
-    
-    # Tokenize
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=max_length
-    )
-    
-    # Move to same device as model
-    device = next(model.parameters()).device
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    # Target language ID
     target_id = tokenizer.convert_tokens_to_ids(NLLB_LANG_MAP[target_lang])
-    
-    # Generate translation
-    with torch.inference_mode():
-        outputs = model.generate(
-            **inputs,
-            forced_bos_token_id=target_id,
-            max_length=max_length,
-            num_beams=5,
-            early_stopping=True
-        )
-    
-    # Decode
-    translation = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    return translation
+    device = next(model.parameters()).device
+
+    segments = [s for s in re.split(r'(?<=[.!?।॥])\s+', text) if s.strip()]
+    if not segments:
+        segments = [text]
+
+    out = []
+    for i in range(0, len(segments), 8):
+        batch = segments[i:i + 8]
+        inputs = tokenizer(batch, return_tensors="pt", padding=True,
+                           truncation=True, max_length=max_length)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        with torch.inference_mode():
+            gen = model.generate(**inputs, forced_bos_token_id=target_id,
+                                 max_length=max_length, num_beams=2,
+                                 early_stopping=True)
+        out.extend(tokenizer.batch_decode(gen, skip_special_tokens=True))
+    return " ".join(out)
 
 
 def translate_to_english(text: str, source_lang: str) -> str:

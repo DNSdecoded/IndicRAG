@@ -60,27 +60,46 @@ def ensure_directories():
 # ============================================================================
 # Embedding Model
 # ============================================================================
-# Multilingual embedding model supporting Indic languages
-EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-base"
-EMBEDDING_DIMENSION = 768  # multilingual-e5-base dimension
+# bge-m3: dense + sparse + ColBERT, strong on Indic scripts
+# NOTE: switching from e5-base (768d) requires re-ingesting all documents
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+EMBEDDING_DIMENSION = 1024  # bge-m3 dimension
 
 # E5 models require specific prefixes for queries and passages
+# (Only applied when model name contains 'e5')
 E5_QUERY_PREFIX = "query: "
 E5_PASSAGE_PREFIX = "passage: "
+
+# Hybrid search: fuse dense vector search with BM25 lexical search
+USE_HYBRID_SEARCH = os.getenv("USE_HYBRID_SEARCH", "true").lower() == "true"
+RRF_K = 60  # Reciprocal Rank Fusion constant
 
 # ============================================================================
 # Chunking Parameters
 # ============================================================================
 CHUNK_SIZE = 1000  # characters per chunk
-CHUNK_OVERLAP = 300  # overlap between chunks
+CHUNK_OVERLAP = 200  # overlap between chunks (~20%, was 300/30%)
 MIN_CHUNK_SIZE = 200  # minimum chunk size to keep
+
+# ============================================================================
+# Reranking
+# ============================================================================
+USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
+RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 
 # ============================================================================
 # Retrieval Parameters
 # ============================================================================
-DEFAULT_TOP_K = 12  # number of chunks to retrieve
-MAX_CONTEXT_CHUNKS = 8  # maximum chunks to include in LLM context
-MAX_CONTEXT_LENGTH = 8000  # maximum total characters in context
+RETRIEVE_CANDIDATES = 30  # wide net before rerank
+DEFAULT_TOP_K = 30  # retrieve wide, rerank narrow
+MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
+MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
+
+# ============================================================================
+# Faithfulness Verification
+# ============================================================================
+FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.5"))
+FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
 # ============================================================================
 # Vector Store
@@ -120,78 +139,54 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # ============================================================================
 # Google Gemini API configuration
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))  # lower temperature for factual responses
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
 
 # LLM API Key (required for Gemini)
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
-# Note: For Gemini, you can use:
-# - gemini-3.5-flash (recommended: stable, fast, cost-effective, agentic)
-# - gemini-3-flash-preview (preview alias for gemini-3.5-flash)
-# - gemini-2.5-pro (higher quality)
+# gemini-3.5-flash is the recommended model (stable, fast, cost-effective)
 
 # ============================================================================
 # Prompt Templates
 # ============================================================================
-SYSTEM_PROMPT = """You are a rigorous scientific research assistant. Your sole knowledge source is the retrieved context provided with each query — you have no access to external knowledge and must not infer beyond what is explicitly stated.
+SYSTEM_PROMPT = """You are a scientific research assistant. Answer strictly from the \
+retrieved context provided with each query. You have no outside knowledge.
 
-## Core Directives
+Rules:
+1. Ground every factual claim in the context and mark it with an inline citation — \
+[1], [1, 2], or [1-3] — using the source numbers exactly as given.
+2. If the context does not support an answer, state what is missing. Never fill gaps \
+with outside knowledge, guesses, or invented data, numbers, authors, or results.
+3. Separate what the authors claim, what they demonstrate empirically, and what they \
+speculate.
+4. Report equations, hyperparameters, algorithm steps, and statistics exactly as \
+written; do not simplify unless asked.
+5. Use only the structure the question needs: a direct answer first, then detail. Omit \
+sections that do not apply rather than padding them. Add a comparison table only when \
+the question compares methods or approaches.
+6. Flag partial, ambiguous, or conflicting context explicitly. Hedge ("the authors \
+report…", "based only on this excerpt…") rather than overstating the evidence.
+7. If — and only if — the context contains clinical, diagnostic, or biomedical \
+decision-making content, end with exactly:
+   "⚠️ This is not medical advice. Consult a qualified healthcare professional."
 
-**Grounding (non-negotiable)**
-- Every factual claim must be followed by an inline citation: [1], [2], etc.
-- If the context does not contain sufficient information to answer, state exactly what is missing — do not approximate or extrapolate.
-- Never fabricate data, numbers, author claims, or experimental results.
-- Distinguish clearly between what authors claim, what they demonstrate empirically, and what they speculate.
-
-**Technical Fidelity**
-- Preserve technical precision: report equations, algorithm steps, hyperparameters, and statistical results as written in the source.
-- Do not simplify mechanisms unless the user explicitly requests a summary.
-
-**Mechanistic Rigor**
-- When the question involves convergence, differentiability, optimization, or training behavior:
-  - Explicitly explain gradient flow, loss surface behavior, or update dynamics if present in the context.
-  - Distinguish between descriptive outcomes and underlying algorithmic mechanisms.
-  - Avoid high-level summaries when deeper mechanistic reasoning is available in context.
-- When asked about convergence or sample efficiency, compare: update rules, evaluation cost per iteration, and exploration-exploitation strategies — if the context supports it.
-
-**Synthesis Discipline**
-- Cross-reference multiple sources only when the question explicitly requires comparison or synthesis, or when multiple sources materially contribute to the answer.
-- If a single source fully answers the question, focus narrowly on that source. Do not force cross-paper connections.
-
-**Structured Output**
-- Use markdown headers, tables, and code blocks where they improve clarity.
-- For comparisons: always use a structured table covering relevant axes (e.g., method, dataset, metric, complexity, assumptions).
-- Lead with a direct answer, then provide depth.
-
-**Epistemic Honesty**
-- Explicitly flag when context is partial, ambiguous, or contradictory.
-- Use hedged language ("the authors suggest...", "based solely on the provided excerpt...") rather than asserting beyond the evidence.
-
-**Medical / Clinical Content**
-- Append the following disclaimer ONLY if the retrieved context contains clinical, diagnostic, therapeutic, or biomedical decision-making content:
-  "⚠️ This is not medical advice. Consult a qualified healthcare professional for clinical decisions."
-- Do not append this disclaimer for unrelated domains (engineering, physics, CS, etc.).
+When the question concerns optimization, convergence, differentiability, or training \
+dynamics, explain the underlying mechanism (gradient flow, update rules, loss-surface \
+behavior) when the context supports it; otherwise stay at the level the context allows.
 """
 
-QUERY_PROMPT_TEMPLATE = """## Retrieved Context
+QUERY_PROMPT_TEMPLATE = """## Context
 {context}
-
----
 
 ## Question
 {question}
 
 ## Instructions
-- Answer in: {language}
-- Cite every claim with [source_index] inline.
-- Structure your response as:
-  1. **Direct Answer** — one concise paragraph
-  2. **Technical Detail** — mechanisms, equations, results from context; include gradient/convergence reasoning if relevant
-  3. **Cross-Paper Synthesis** — only if multiple sources materially contribute; skip or explicitly state "Single-source answer" otherwise
-  4. **Limitations of Available Context** — what the context cannot answer
-- Include a markdown comparison table only if the question requires comparing methods or approaches.
-- If context is insufficient for any sub-question, say so explicitly rather than inferring.
+- Answer in: {language}.
+- Use only the context above; cite each claim inline as [n].
+- Lead with a direct answer, then add technical depth only as the question requires.
+- If the context is insufficient, state exactly what is missing instead of inferring.
 """
 
 NO_DOCUMENTS_RESPONSE = (
@@ -241,3 +236,14 @@ SECTION_HEADERS = _patterns.get("SECTION_HEADERS", [
 # Logging
 # ============================================================================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# ============================================================================
+# Version
+# ============================================================================
+VERSION = "1.5.0"
+
+# ============================================================================
+# Chat / Session
+# ============================================================================
+CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "10"))
+SESSION_MAX_AGE_HOURS = int(os.getenv("SESSION_MAX_AGE_HOURS", "24"))

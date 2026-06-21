@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3%20Flash-blueviolet.svg)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash-blueviolet.svg)](https://ai.google.dev/)
 ![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
@@ -17,38 +17,42 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 ### 🧠 **Advanced Document Processing**
 * PDF extraction with PyMuPDF (context managers for resource safety)
 * Intelligent text cleaning (preserves structure, removes noise)
-* Semantic chunking with configurable overlap
+* Semantic chunking with Indic script-aware sentence splitting
 * Persistent vector storage via ChromaDB
+
+### 🔍 **Hybrid Retrieval Pipeline**
+* **Dense + sparse search** — BGE-M3 dense vectors fused with BM25 lexical search via Reciprocal Rank Fusion (RRF)
+* **Cross-encoder reranking** — BAAI/bge-reranker-v2-m3 scores the top candidates for precision
+* **Faithfulness verification** — NLI-based claim-level grounding check flags unsupported assertions
+* Retrieves 30 candidates, reranks to top 12, verifies citations against source chunks
 
 ### 🌍 **True Multilingual Support**
 * **10+ Indian languages** + English (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Odia)
-* Automatic language detection
+* Unicode script-based language detection (no misclassification of short Indic queries)
 * **Two RAG strategies:**
   * **Strategy A:** Direct multilingual reasoning (recommended)
-  * **Strategy B:** Translation-enhanced reasoning with NLLB-200
-* Cross-lingual semantic search with E5 embeddings
+  * **Strategy B:** Translation-enhanced reasoning with NLLB-200 (sentence-batched to prevent truncation)
+* Cross-lingual semantic search with BGE-M3 embeddings (1024d, strong on Indic scripts)
 
 ### 🤖 **LLM Integration**
-* Google Gemini 3 Flash Preview integration
-* Configurable safety settings and generation parameters
-* Smart citation extraction from retrieved context
-* Empty collection handling with graceful degradation
+* Google Gemini 3.5 Flash integration with automatic retry (tenacity, 3 attempts with exponential backoff)
+* Optimized system prompt — grounding-first, no mandatory section padding
+* Smart citation extraction with range validation
+* Low temperature (0.1) for deterministic grounded responses
 
 ### 🛡️ **Production-Ready Infrastructure**
-* Structured logging throughout (no `print()` statements)
-* Robust error handling with detailed error shapes
-* API key authentication with secure parsing
-* Health checks and **Prometheus metrics monitoring** (`/metrics`)
-* Ready for **HTTPS reverse proxy** (Nginx) and **Windows Service** deployment
+* **Thread-safe model initialization** — double-checked locking on all singletons
+* **Warm-up at startup** — models loaded via FastAPI lifespan, first request is never cold
+* **Session TTL eviction** — stale chat sessions cleaned automatically
+* **Admin-gated destructive ops** — purge endpoints require `ADMIN_API_KEY`
+* API key authentication, Prometheus metrics, env-driven CORS
 * Pydantic v2 validation and type safety
-* Safe directory creation with permission checks
 
 ### 🧹 **Operational Tools**
 * **`purge.py`** - CLI utility to safely clear PDFs, database, or model cache
 * **Web-based document management** - Upload, ingest, and purge via UI
 * Comprehensive ingestion pipeline with progress tracking
-* Pre-flight checks before server startup
-* Test suite for pipeline validation
+* Evaluation framework with nDCG@10, Recall@20, and CI gating
 
 ---
 
@@ -262,37 +266,32 @@ python examples/example_query.py
 ## 📁 Project Structure
 
 ```
-multilingual-rag/
-├── api_server.py          # FastAPI app with authentication
-├── config.py              # Configuration with ensure_directories()
-├── embeddings.py          # E5 multilingual embeddings
+IndicRAG/
+├── api_server.py          # FastAPI app with auth, lifespan warm-up, session TTL
+├── config.py              # All configuration constants and prompts
+├── rag.py                 # Core RAG pipeline (retrieval, rerank, generate, verify)
+├── embeddings.py          # BGE-M3 multilingual embeddings (thread-safe)
+├── rerank.py              # Cross-encoder reranker (bge-reranker-v2-m3)
+├── bm25_search.py         # BM25 lexical index + RRF fusion
+├── verify.py              # NLI-based faithfulness verification
+├── vector_store.py        # ChromaDB wrapper (thread-safe)
+├── translation.py         # NLLB-200 translation, sentence-batched
+├── lang_utils.py          # Unicode script + langdetect detection
+├── pdf_utils.py           # PDF extraction, Indic-aware chunking
 ├── ingest.py              # PDF ingestion pipeline
-├── lang_utils.py          # Language detection
-├── pdf_utils.py           # PDF processing
-├── rag.py                 # Core RAG logic
-├── translation.py         # NLLB-200 translation (Strategy B)
-├── vector_store.py        # ChromaDB wrapper
 ├── start_server.py        # Server launcher with pre-flight checks
-├── purge.py               # Cleanup utility (NEW!)
-│
-├── deploy/                # Deployment configurations
-│   └── nginx.example.conf # Nginx reverse proxy template
+├── purge.py               # CLI cleanup utility
 │
 ├── static/                # Web frontend
-│   └── index.html         # Modern Ocean UI
+│   └── index.html
 │
 ├── docs/                  # Documentation
+│   ├── Eval/              # Evaluation framework (nDCG, Recall@20, CI gate)
 │   ├── QUICKSTART.md
-│   ├── DEPLOY.md
 │   ├── ARCHITECTURE.md
-│   └── CONTRIBUTING.md
-│
-├── PRODUCTION.md          # Production deployment guide
+│   └── ...
 │
 ├── examples/              # Example scripts
-│   ├── example_ingest.py
-│   └── example_query.py
-│
 ├── papers/                # Your PDF documents
 ├── chroma_db/             # Vector database
 └── models/                # Cached ML models
@@ -302,31 +301,42 @@ multilingual-rag/
 
 ## ⚙️ Configuration
 
-Key settings in `config.py`:
+Key settings in `config.py` (all overridable via environment variables):
 
 ```python
-# Embedding model (multilingual E5)
-EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-base"
-EMBEDDING_DIMENSION = 768
+# Embedding model (BGE-M3: dense + sparse, Indic-strong)
+EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
+EMBEDDING_DIMENSION = 1024
 
-# Translation models (Strategy B)
-TRANSLATION_MODEL_EN_TO_INDIC = "facebook/nllb-200-distilled-600M"
-TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
+# Retrieval pipeline
+USE_RERANKER = True                 # cross-encoder reranking
+USE_HYBRID_SEARCH = True            # dense + BM25 fusion
+DEFAULT_TOP_K = 30                  # retrieve wide
+MAX_CONTEXT_CHUNKS = 12             # keep after rerank
+MAX_CONTEXT_LENGTH = 48000          # ~12k tokens
 
-# Chunking
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 300
-
-# RAG
-DEFAULT_TOP_K = 12
-MAX_CONTEXT_CHUNKS = 8
-MAX_CONTEXT_LENGTH = 8000
+# Faithfulness verification
+FAITHFULNESS_THRESHOLD = 0.5
+FAITHFULNESS_ENFORCE = "warn"       # warn | strip | regen
 
 # LLM
 LLM_MODEL_NAME = "gemini-3.5-flash"
-LLM_TEMPERATURE = 0.3
+LLM_TEMPERATURE = 0.1              # low for grounded citation tasks
 LLM_MAX_TOKENS = 2048
 ```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_API_KEY` | (required) | Google Gemini API key |
+| `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
+| `API_KEYS` | (none) | Comma-separated keys for general auth |
+| `CORS_ORIGINS` | localhost | Comma-separated allowed origins |
+| `USE_RERANKER` | `true` | Enable cross-encoder reranking |
+| `USE_HYBRID_SEARCH` | `true` | Enable BM25 + dense fusion |
+| `FAITHFULNESS_ENFORCE` | `warn` | `warn`, `strip`, or `regen` |
+| `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | Sentence-transformers model |
 
 ---
 
@@ -378,8 +388,9 @@ ChromaDB retrieval: <100ms for 1000s of documents
 
 Memory usage:
 * Base system: ~500MB
-* With E5 embeddings: ~2GB
-* With NLLB translation: ~4.5GB
+* With BGE-M3 embeddings: ~2.5GB
+* With reranker: ~3.5GB
+* With NLLB translation: ~6GB (Strategy B only)
 
 ---
 
@@ -387,27 +398,29 @@ Memory usage:
 
 ### Security
 * API key authentication with secure parsing
+* Admin key gating for destructive operations (`ADMIN_API_KEY`)
 * Input validation with Pydantic v2
-* CORS configuration
-* Environment-based secrets
+* Env-driven CORS (`CORS_ORIGINS`)
+* Path traversal protection on ingest endpoints
 
 ### Observability
 * Structured logging across all modules
-* Request/response logging in API
+* Prometheus metrics at `/metrics`
 * Processing time tracking
-* Health check endpoint
+* Faithfulness warnings logged for ungrounded claims
 
 ### Robustness
+* Thread-safe model singletons (double-checked locking)
+* Warm-up at startup via FastAPI lifespan
+* LLM retry with exponential backoff (tenacity)
+* Session TTL eviction
 * Graceful empty collection handling
-* Resource safety (context managers)
-* Permission-aware directory creation
-* Comprehensive error responses
 
 ### Quality
-* Citation extraction from English answers (Strategy B)
-* Context length enforcement
-* Top-k bounds validation
-* Newline preservation in PDF processing
+* Cross-encoder reranking + faithfulness verification
+* Hybrid dense+lexical retrieval
+* Citation range validation (caps [2020-2023] false positives)
+* Sentence-batched translation prevents truncation
 
 ---
 
@@ -444,21 +457,18 @@ MAX_CONTEXT_CHUNKS = 3  # Fewer chunks in context
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
 **Recent improvements:**
-* ✅ Complete UI/UX revamp with dark/light themes and robust markdown support
-* ✅ Parallel PDF ingestion pipeline with MD5 hash caching
-* ✅ Bulk extraction endpoint (`/ingest/all`)
-* ✅ Enhanced math-aware sentence chunking via `regex` library
-* ✅ Stricter system prompts enforcing epistemic honesty and mechanistic rigor
-* ✅ Resilient lock-free vector database pruning
-* ✅ Production logging migration
-* ✅ Robust error handling
-* ✅ Pydantic v2 compatibility
-* ✅ Resource safety improvements
-* ✅ Empty collection handling
-* ✅ Citation extraction fixes
-* ✅ Purge utility addition
-* ✅ Web UI document management (upload, ingest, purge)
-* ✅ Server concurrency fix with threadpool
+* ✅ Hybrid retrieval pipeline (BGE-M3 dense + BM25 lexical + RRF fusion)
+* ✅ Cross-encoder reranking (bge-reranker-v2-m3)
+* ✅ NLI-based faithfulness verification with configurable enforcement
+* ✅ Thread-safe model initialization across all modules
+* ✅ Sentence-batched translation (fixes Strategy B truncation)
+* ✅ Unicode script-based language detection for short Indic queries
+* ✅ LLM retry with exponential backoff (tenacity)
+* ✅ Optimized system prompt — grounding-first, no section padding
+* ✅ Expanded evaluation framework (nDCG@10, Recall@20, CI gating)
+* ✅ Admin key gating for destructive purge endpoints
+* ✅ Env-driven CORS, warm-up at startup, session TTL eviction
+* ✅ Query embedding LRU cache, Indic-aware chunking
 
 ---
 
@@ -467,11 +477,12 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 Built with excellent open-source tools:
 
 * [Google Gemini](https://ai.google.dev/) - Multilingual LLM
-* [Sentence Transformers](https://www.sbert.net/) - E5 embeddings
+* [Sentence Transformers](https://www.sbert.net/) - BGE-M3 embeddings & reranking
 * [Facebook NLLB](https://github.com/facebookresearch/fairseq/tree/nllb) - Translation
 * [ChromaDB](https://www.trychroma.com/) - Vector database
 * [FastAPI](https://fastapi.tiangolo.com/) - API framework
 * [PyMuPDF](https://pymupdf.readthedocs.io/) - PDF processing
+* [Tenacity](https://github.com/jd/tenacity) - Retry logic
 
 ---
 

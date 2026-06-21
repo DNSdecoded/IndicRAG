@@ -3,6 +3,7 @@ FastAPI server for the Multilingual Scientific RAG system.
 Production-ready REST API with authentication, validation, and monitoring.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
@@ -14,7 +15,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import uuid
 import threading
@@ -34,6 +35,43 @@ def _update_job(job_id: str, **kwargs):
     with _jobs_lock:
         _jobs[job_id].update(kwargs)
 
+
+# ---------------------------------------------------------------------------
+# In-memory chat session store
+# ---------------------------------------------------------------------------
+_sessions: Dict[str, Dict[str, Any]] = {}
+_sessions_lock = threading.Lock()
+
+
+def _evict_stale_sessions():
+    """Remove sessions older than SESSION_MAX_AGE_HOURS. Must be called under _sessions_lock."""
+    cutoff = datetime.utcnow() - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
+    for sid in [s for s, v in _sessions.items()
+                if datetime.fromisoformat(v["created_at"]) < cutoff]:
+        del _sessions[sid]
+
+
+def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
+    """Return (session_id, messages_list). Creates a new session when id is None."""
+    with _sessions_lock:
+        _evict_stale_sessions()
+        if session_id and session_id in _sessions:
+            return session_id, _sessions[session_id]["messages"]
+        new_id = session_id or str(uuid.uuid4())
+        _sessions[new_id] = {
+            "id": new_id,
+            "messages": [],
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        return new_id, _sessions[new_id]["messages"]
+
+
+def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:
+    with _sessions_lock:
+        msgs = _sessions[session_id]["messages"]
+        msgs.append({"role": "user", "content": user_text})
+        msgs.append({"role": "assistant", "content": assistant_text})
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -41,13 +79,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app):
+    import embeddings, vector_store
+    embeddings.load_embedding_model()
+    vector_store.get_or_create_collection()
+    if config.USE_RERANKER:
+        import rerank
+        rerank._load()
+    yield
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Multilingual Scientific RAG API",
     description="Retrieval-Augmented Generation system for multilingual scientific Q&A",
-    version="1.0.0",
+    version=config.VERSION,
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
+    lifespan=lifespan,
 )
 
 # Prometheus Monitoring
@@ -59,15 +108,21 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080", 
+# CORS configuration — env-driven for deployment flexibility
+_cors_origins_env = os.getenv("CORS_ORIGINS")
+_cors_origins = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else [
+        "http://localhost:8080",
         "http://localhost:8000",
         "http://127.0.0.1:8080",
-        "http://127.0.0.1:8000"
-    ],  # Explicit origins instead of '*' when credentials=True
+        "http://127.0.0.1:8000",
+    ]
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,11 +143,13 @@ else:
     VALID_API_KEYS = None
 
 
+_admin_key = os.getenv("ADMIN_API_KEY")
+
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     """Verify API key if authentication is enabled."""
     if VALID_API_KEYS is None:
         return True  # No authentication required
-    
+
     if not api_key or api_key not in VALID_API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -102,6 +159,19 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
             }
         )
     return True
+
+
+async def verify_admin_key(api_key: str = Security(API_KEY_HEADER)):
+    """Verify admin API key for destructive operations."""
+    if _admin_key:
+        if not api_key or api_key != _admin_key:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin API key required for destructive operations",
+                        "code": "ADMIN_KEY_REQUIRED"}
+            )
+        return True
+    return await verify_api_key(api_key)
 
 
 # Request/Response models
@@ -217,6 +287,34 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[str] = None
 
 
+class ChatRequest(BaseModel):
+    """Request model for a single chat turn."""
+    message: str = Field(..., min_length=1, max_length=2000, description="User message in any language")
+    session_id: Optional[str] = Field(None, description="Existing session ID; omit to start a new conversation")
+    strategy: str = Field("A", description="Strategy: 'A' for multilingual LLM, 'B' for English + translation")
+    top_k: Optional[int] = Field(None, ge=1, le=20, description="Number of chunks to retrieve")
+
+    @field_validator("strategy")
+    @classmethod
+    def validate_strategy(cls, v: str) -> str:
+        if v not in ("A", "B"):
+            raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+
+class ChatResponse(BaseModel):
+    """Response model for a single chat turn."""
+    session_id: str
+    turn_index: int
+    answer: str
+    language: str
+    language_name: str
+    chunks_used: int
+    citations: List[Citation]
+    processing_time: float
+    timestamp: str
+
+
 # Routes
 
 @app.get("/", tags=["General"])
@@ -227,7 +325,7 @@ async def root():
     else:
         return {
             "name": "Multilingual Scientific RAG API",
-            "version": "1.0.0",
+            "version": config.VERSION,
             "description": "Ask scientific questions in any Indian language",
             "endpoints": {
                 "docs": "/api/docs",
@@ -245,7 +343,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow().isoformat(),
-        version="1.0.0",
+        version=config.VERSION,
         gemini_configured=bool(config.LLM_API_KEY)
     )
 
@@ -327,6 +425,78 @@ async def query_question(
         )
 
 
+@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+async def chat(
+    request: ChatRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """
+    Send a message in a multi-turn conversation.
+
+    Pass ``session_id`` from a previous response to continue that conversation.
+    Omit it (or pass ``null``) to start a fresh session.
+    History is kept server-side; only the new ``message`` is required each turn.
+    """
+    start_time = time.time()
+
+    top_k = request.top_k
+    if top_k is not None:
+        top_k = max(1, min(top_k, 20))
+
+    session_id, messages = _get_or_create_session(request.session_id)
+    turn_index = len(messages) // 2  # number of completed user+assistant pairs
+
+    # Build the full message list the RAG function expects
+    full_messages = list(messages) + [{"role": "user", "content": request.message}]
+
+    try:
+        result = await run_in_threadpool(
+            rag.answer_with_history,
+            messages=full_messages,
+            strategy=request.strategy,
+            top_k=top_k,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
+    except Exception as e:
+        logger.error(f"Error in /chat: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": str(e), "code": "INTERNAL_ERROR"})
+
+    # Persist both turns in session history
+    _append_session_messages(session_id, request.message, result["answer"])
+
+    processing_time = time.time() - start_time
+    logger.info(
+        f"Chat turn {turn_index + 1} session={session_id[:8]}… "
+        f"lang={result['language']} chunks={result['chunks_used']} time={processing_time:.2f}s"
+    )
+
+    return ChatResponse(
+        session_id=session_id,
+        turn_index=turn_index + 1,
+        answer=result["answer"],
+        language=result["language"],
+        language_name=result["language_name"],
+        chunks_used=result["chunks_used"],
+        citations=[Citation(**c) for c in result["citations"]],
+        processing_time=processing_time,
+        timestamp=datetime.utcnow().isoformat(),
+    )
+
+
+@app.delete("/chat/{session_id}", tags=["Chat"])
+async def delete_session(
+    session_id: str,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Delete a chat session and its history."""
+    with _sessions_lock:
+        if session_id not in _sessions:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
+        del _sessions[session_id]
+    return {"status": "deleted", "session_id": session_id}
+
+
 @app.post("/ingest", response_model=IngestResponse, tags=["Management"])
 async def ingest_document(
     request: IngestRequest,
@@ -382,6 +552,12 @@ async def ingest_document(
             paper_id=safe_pdf_path.stem
         )
 
+        try:
+            import bm25_search
+            bm25_search.invalidate()
+        except Exception:
+            pass
+
         processing_time = time.time() - start_time
 
         return IngestResponse(
@@ -409,6 +585,11 @@ def _run_bulk_ingest(job_id: str):
     _update_job(job_id, status="running")
     try:
         stats = ingest_module.ingest_directory(pdf_dir=str(config.PAPERS_DIR))
+        try:
+            import bm25_search
+            bm25_search.invalidate()
+        except Exception:
+            pass
         processing_time = time.time() - start_time
         status_value = "partial" if stats.get("failed", 0) > 0 else "success"
         _update_job(
@@ -620,7 +801,7 @@ async def list_papers(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
-async def purge_papers(authenticated: bool = Depends(verify_api_key)):
+async def purge_papers(authenticated: bool = Depends(verify_admin_key)):
     """
     Delete all PDF files from the papers directory.
     
@@ -653,7 +834,7 @@ async def purge_papers(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.delete("/purge/database", response_model=PurgeResponse, tags=["Management"])
-async def purge_database(authenticated: bool = Depends(verify_api_key)):
+async def purge_database(authenticated: bool = Depends(verify_admin_key)):
     """
     Clear the vector database (delete all indexed chunks).
     

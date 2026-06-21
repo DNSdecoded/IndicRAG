@@ -11,24 +11,28 @@ import lang_utils
 import translation
 from google import genai
 from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
 # Client is initialised lazily inside llm_generate() so we can still import
 # this module even when the API key is absent (e.g. retrieval-only mode).
 _genai_client: genai.Client | None = None
+_client_lock = __import__('threading').Lock()
 
 
 def _get_client() -> genai.Client:
-    """Return (and lazily create) the shared Google GenAI client."""
+    """Return (and lazily create) the shared Google GenAI client (thread-safe)."""
     global _genai_client
     if _genai_client is None:
-        if not config.LLM_API_KEY:
-            raise ValueError(
-                "Google Gemini API key not configured. "
-                "Please set LLM_API_KEY environment variable or in .env file."
-            )
-        _genai_client = genai.Client(api_key=config.LLM_API_KEY)
+        with _client_lock:
+            if _genai_client is None:
+                if not config.LLM_API_KEY:
+                    raise ValueError(
+                        "Google Gemini API key not configured. "
+                        "Please set LLM_API_KEY environment variable or in .env file."
+                    )
+                _genai_client = genai.Client(api_key=config.LLM_API_KEY)
     return _genai_client
 
 
@@ -63,10 +67,12 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         parts = raw.replace(' ', '').split(',')
         for part in parts:
             if '-' in part:
-                # Handle range like "1-3"
                 try:
                     start, end = part.split('-')
-                    for num in range(int(start), int(end) + 1):
+                    s, e = int(start), int(end)
+                    if e - s > 50:
+                        continue
+                    for num in range(s, e + 1):
                         seen_nums.add(num)
                 except ValueError:
                     pass
@@ -121,28 +127,45 @@ def retrieve_context(
     if collection is None:
         collection = vector_store.get_or_create_collection()
     
-    # Check if collection is empty
-    if collection.count() == 0:
-        logger.warning("No documents indexed in collection")
-        return {
-            'chunks': [],
-            'metadatas': [],
-            'distances': [],
-            'formatted_context': '',
-            'chunks_used': 0
-        }
-    
     # Embed the query
     query_embedding = embeddings.embed_query(user_query)
     
-    # Search vector store
+    # Search vector store (dense)
     results = vector_store.search(
         query_embedding=query_embedding,
         top_k=top_k,
         filter_dict=filter_dict,
         collection=collection
     )
-    
+
+    # Hybrid: fuse dense results with BM25 lexical search
+    if config.USE_HYBRID_SEARCH and results['documents'] and not filter_dict:
+        try:
+            import bm25_search
+            bm25_idx = bm25_search.get_or_build_index(collection)
+            if bm25_idx is not None:
+                sparse_ids, _ = bm25_idx.search(user_query, top_k=top_k)
+                fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
+                id_to_doc = dict(zip(results['ids'], results['documents']))
+                id_to_meta = dict(zip(results['ids'], results['metadatas']))
+                id_to_dist = dict(zip(results['ids'], results['distances']))
+                # Fetch any BM25-only hits that dense search missed
+                missing_ids = [i for i in fused_ids if i not in id_to_doc]
+                if missing_ids:
+                    extra = collection.get(ids=missing_ids, include=["documents", "metadatas"])
+                    for eid, edoc, emeta in zip(extra['ids'], extra['documents'], extra['metadatas']):
+                        id_to_doc[eid] = edoc
+                        id_to_meta[eid] = emeta
+                        id_to_dist[eid] = 1.0
+                results = {
+                    'ids': [i for i in fused_ids if i in id_to_doc][:top_k],
+                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:top_k],
+                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:top_k],
+                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:top_k],
+                }
+        except Exception as e:
+            logger.debug(f"Hybrid search skipped: {e}")
+
     # Check if search returned results
     if not results['documents']:
         logger.warning(f"No results found for query: {user_query[:50]}")
@@ -153,17 +176,27 @@ def retrieve_context(
             'formatted_context': '',
             'chunks_used': 0
         }
-    
+
+    docs = results['documents']
+    metas = results['metadatas']
+    dists = results['distances']
+
+    if config.USE_RERANKER and docs:
+        import rerank
+        docs, metas, scores = rerank.rerank(
+            user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        dists = scores
+
     # Format context for LLM
     formatted_context, chunks_used = format_context(
-        chunks=results['documents'],
-        metadatas=results['metadatas']
+        chunks=docs,
+        metadatas=metas
     )
-    
+
     return {
-        'chunks': results['documents'],
-        'metadatas': results['metadatas'],
-        'distances': results['distances'],
+        'chunks': docs,
+        'metadatas': metas,
+        'distances': dists,
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
@@ -289,11 +322,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     )
 
     try:
-        response = client.models.generate_content(
-            model=config.LLM_MODEL_NAME,
-            contents=prompt,
-            config=generate_config,
-        )
+        response = _call_gemini(client, config.LLM_MODEL_NAME, prompt, generate_config)
 
         # Check if response has text
         if response.text:
@@ -324,6 +353,28 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     except Exception as e:
         logger.error(f"Error calling Gemini API: {e}")
         raise
+
+
+@retry(stop=stop_after_attempt(3),
+       wait=wait_exponential(multiplier=1, min=1, max=8),
+       retry=retry_if_exception_type(Exception), reraise=True)
+def _call_gemini(client, model, contents, gen_config):
+    return client.models.generate_content(model=model, contents=contents,
+                                          config=gen_config)
+
+
+def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
+    """Run faithfulness verification if configured; log warnings for ungrounded claims."""
+    try:
+        import verify
+        results = verify.check_claims(answer, chunks)
+        for r in results:
+            if not r["grounded"]:
+                logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
+        return results
+    except Exception as e:
+        logger.debug(f"Faithfulness check skipped: {e}")
+        return []
 
 
 def answer_question_strategy_a(
@@ -396,14 +447,16 @@ def answer_question_strategy_a(
     
     # Extract citations using robust parser
     citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
-    
-    return {
+
+    result = {
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
+    result['faithfulness'] = _run_faithfulness(answer, context_data.get('chunks', []))
+    return result
 
 
 def answer_question_strategy_b(
@@ -487,14 +540,16 @@ def answer_question_strategy_b(
     else:
         answer = english_answer
     
-    return {
+    result = {
         'answer': answer,
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
-        'english_answer': english_answer  # Include for debugging
+        'english_answer': english_answer
     }
+    result['faithfulness'] = _run_faithfulness(english_answer, context_data.get('chunks', []))
+    return result
 
 
 def answer_question(
@@ -521,6 +576,140 @@ def answer_question(
         return answer_question_strategy_b(user_query, top_k, filter_dict)
     else:
         raise ValueError(f"Invalid strategy: {strategy}. Must be 'A' or 'B'")
+
+
+def _build_chat_prompt(
+    user_query: str,
+    context: str,
+    history: str,
+    lang_name: str,
+) -> str:
+    """Build a prompt that includes conversation history before the retrieved context."""
+    history_section = f"## Conversation History\n{history}\n\n---\n\n" if history else ""
+    return (
+        f"{history_section}"
+        f"## Context\n{context}\n\n---\n\n"
+        f"## Current Question\n{user_query}\n\n"
+        f"## Instructions\n"
+        f"- Answer in: {lang_name}.\n"
+        f"- Use only the context above; cite each claim inline as [n].\n"
+        f"- This is a conversation — refer to prior turns only when directly relevant.\n"
+        f"- Lead with a direct answer, then add technical depth only as the question requires.\n"
+        f"- If the context is insufficient, state exactly what is missing instead of inferring.\n"
+    )
+
+
+def answer_with_history(
+    messages: List[Dict[str, str]],
+    strategy: str = "A",
+    top_k: int = None,
+    filter_dict: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """
+    Answer the latest user message while incorporating conversation history.
+
+    Args:
+        messages: Full conversation so far as a list of
+                  ``{"role": "user"|"assistant", "content": str}`` dicts.
+                  The last element must have ``role == "user"``.
+        strategy: "A" for multilingual LLM, "B" for English + translation.
+        top_k: Number of chunks to retrieve.
+        filter_dict: Optional ChromaDB metadata filter.
+
+    Returns:
+        Same shape as ``answer_question()``.
+    """
+    if not messages or messages[-1]["role"] != "user":
+        raise ValueError("Last message must be from the user")
+
+    user_query = messages[-1]["content"]
+    prior = messages[:-1]
+
+    detected_lang = lang_utils.detect_language(user_query) or "en"
+    lang_name = lang_utils.get_language_name(detected_lang)
+
+    # For strategy B, retrieve using an English translation of the query
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            retrieval_query = translation.translate_to_english(user_query, detected_lang)
+        except Exception:
+            retrieval_query = user_query
+    else:
+        retrieval_query = user_query
+
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
+
+    if context_data["chunks_used"] == 0:
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+            try:
+                no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+            except Exception:
+                pass
+        return {
+            "answer": no_docs_msg,
+            "language": detected_lang,
+            "language_name": lang_name,
+            "chunks_used": 0,
+            "citations": [],
+        }
+
+    # Trim history to the last CHAT_HISTORY_MAX_TURNS exchanges (user + assistant each)
+    max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
+    trimmed = prior[-max_msgs:] if len(prior) > max_msgs else prior
+
+    # Build numbered history so the model can track conversational structure
+    history_lines = []
+    turn = 1
+    i = 0
+    while i < len(trimmed):
+        if trimmed[i]["role"] == "user":
+            user_line = f"[Turn {turn}] User: {trimmed[i]['content']}"
+            if i + 1 < len(trimmed) and trimmed[i + 1]["role"] == "assistant":
+                asst_line = f"[Turn {turn}] Assistant: {trimmed[i + 1]['content']}"
+                history_lines.append(f"{user_line}\n{asst_line}")
+                i += 2
+            else:
+                history_lines.append(user_line)
+                i += 1
+            turn += 1
+        else:
+            i += 1
+    history_str = "\n\n".join(history_lines)
+
+    # Always show the user's original query in the chat prompt so the model
+    # sees what the user actually typed (retrieval_query is only used for
+    # vector search in Strategy B — the answer language instruction handles output lang).
+    prompt_lang = "English" if strategy == "B" else lang_name
+    prompt = _build_chat_prompt(
+        user_query=user_query,
+        context=context_data["formatted_context"],
+        history=history_str,
+        lang_name=prompt_lang,
+    )
+
+    english_answer = llm_generate(prompt)
+    citations = extract_citations(english_answer, context_data["metadatas"], context_data.get("chunks"))
+
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            answer = translation.translate_from_english(english_answer, detected_lang)
+        except Exception:
+            answer = english_answer
+    else:
+        answer = english_answer
+
+    result: Dict[str, Any] = {
+        "answer": answer,
+        "language": detected_lang,
+        "language_name": lang_name,
+        "chunks_used": context_data["chunks_used"],
+        "citations": citations,
+    }
+    if strategy == "B" and answer != english_answer:
+        result["english_answer"] = english_answer
+    result["faithfulness"] = _run_faithfulness(english_answer, context_data.get("chunks", []))
+    return result
 
 
 if __name__ == "__main__":

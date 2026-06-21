@@ -1,5 +1,5 @@
 {
-  "_instructions": "For each query, list the paper IDs that are truly relevant. Paper IDs should match the keys in 'corpus'. Add or remove queries as needed.",
+  "_instructions": "For each query, list the paper IDs that are truly relevant. Paper IDs should match the keys in 'corpus'. Add relevance_grades (0=irrelevant, 1=marginally, 2=relevant, 3=highly relevant) for nDCG computation. Expand to 50-100+ queries across >=10 papers for meaningful metrics.",
   "corpus": {
     "tandem_nn": "Tandem Neural Network Based Design of Miniaturized Microstrip Antennas",
     "bayesian_stp": "Bayesian Optimization Based on Student's T Process for Microstrip Antenna",
@@ -15,25 +15,57 @@
       "id": "A",
       "text": "What is the role of smooth thresholding in tandem neural network antenna design?",
       "relevant_papers": ["tandem_nn"],
+      "relevance_grades": {"tandem_nn": 3},
       "notes": "Single-source question — only the tandem NN paper is relevant"
     },
     {
       "id": "B",
       "text": "Compare Bayesian optimization and PPO-based RL methods for antenna optimization.",
       "relevant_papers": ["bayesian_stp", "bayesian_techniques", "ppo_pixel", "ppo_wireless"],
+      "relevance_grades": {"bayesian_stp": 3, "bayesian_techniques": 3, "ppo_pixel": 3, "ppo_wireless": 2, "ai_ml_review": 1},
       "notes": "Cross-method comparison — both BO and PPO papers are relevant"
     },
     {
       "id": "C",
       "text": "How do surrogate-model-based methods differ from policy-based RL in sample efficiency and convergence behavior?",
       "relevant_papers": ["surrogate_lowcost", "surrogate_framework", "ppo_pixel"],
+      "relevance_grades": {"surrogate_lowcost": 3, "surrogate_framework": 3, "ppo_pixel": 2, "ai_ml_review": 1},
       "notes": "RL context missing from corpus — ppo_pixel listed as relevant but was absent from retrieved results"
     },
     {
       "id": "D",
       "text": "What hyperparameters control PPO training stability in the cited antenna design paper?",
       "relevant_papers": ["ppo_pixel"],
+      "relevance_grades": {"ppo_pixel": 3},
       "notes": "Strict grounding test — only the PPO paper is relevant"
+    },
+    {
+      "id": "E",
+      "text": "What machine learning approaches have been applied to antenna design, and what are their trade-offs?",
+      "relevant_papers": ["ai_ml_review", "tandem_nn", "bayesian_stp", "bayesian_techniques", "ppo_pixel", "surrogate_lowcost", "surrogate_framework"],
+      "relevance_grades": {"ai_ml_review": 3, "tandem_nn": 2, "bayesian_stp": 2, "bayesian_techniques": 2, "ppo_pixel": 2, "surrogate_lowcost": 2, "surrogate_framework": 2, "ppo_wireless": 1},
+      "notes": "Broad review question — the review paper is most relevant, all others contribute"
+    },
+    {
+      "id": "F",
+      "text": "How does the Student's T Process differ from standard Gaussian Process in Bayesian antenna optimization?",
+      "relevant_papers": ["bayesian_stp"],
+      "relevance_grades": {"bayesian_stp": 3, "bayesian_techniques": 1},
+      "notes": "Specific to STP paper, bayesian_techniques has tangential overlap"
+    },
+    {
+      "id": "G",
+      "text": "What cost reduction does surrogate-based optimization achieve compared to full-wave simulation?",
+      "relevant_papers": ["surrogate_lowcost", "surrogate_framework"],
+      "relevance_grades": {"surrogate_lowcost": 3, "surrogate_framework": 3, "ai_ml_review": 1},
+      "notes": "Both surrogate papers directly address simulation cost"
+    },
+    {
+      "id": "H",
+      "text": "How is reinforcement learning reward shaped for antenna coverage and capacity objectives?",
+      "relevant_papers": ["ppo_wireless", "ppo_pixel"],
+      "relevance_grades": {"ppo_wireless": 3, "ppo_pixel": 2},
+      "notes": "PPO wireless focuses on coverage/capacity; PPO pixel has related reward design"
     }
   ]
 }

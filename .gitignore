@@ -71,3 +71,6 @@ test_gemini.py
 *.backup
 *.bak
 *.old
+
+# Graphify output
+graphify-out/
