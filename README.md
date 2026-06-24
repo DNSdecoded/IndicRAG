@@ -1,58 +1,84 @@
-# 🌐 Multilingual Scientific RAG System
+# 🌐 IndicRAG — Multilingual Agentic Scientific RAG
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
 [![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash-blueviolet.svg)](https://ai.google.dev/)
-![Production Ready](https://img.shields.io/badge/status-production--ready-green.svg)
+[![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
+![Version](https://img.shields.io/badge/version-2.0-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
-A **production-ready** Retrieval-Augmented Generation (RAG) system with multilingual support for scientific research and knowledge exploration. Built with robust error handling, structured logging, and enterprise-grade features.
+A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
+
+---
+
+## 🆕 What's New in v2.0
+
+| Feature | v1.5 (Standard) | v2.0 (Agentic) |
+|---------|-----------------|-----------------|
+| Pipeline | Single-pass retrieve → generate | Multi-step: plan → select tools → execute → generate → **reflexion loop** |
+| External search | Corpus only | Corpus + **arXiv** + **Semantic Scholar / OpenAlex** + **Tavily web search** |
+| Tools | None | 6 tools: corpus retrieval, arxiv search, open-access search, web search, calculator, sandboxed Python |
+| Self-correction | None | Up to 3 reflexion iterations (faithfulness + completeness checks) |
+| Answer quality | `LLM_MAX_TOKENS=2048` | `AGENT_MAX_TOKENS=4096` for richer synthesis |
+| Source display | Citation numbers | Full paper cards with authors, year, citation count, PDF links |
+| Progress UI | Typing dots | Animated 5-step pipeline stepper with elapsed timer |
+| Caching | Query embedding LRU only | 3-layer TTL cache: LLM responses, retrieval results, tool results |
+| API key management | Single key | Multi-key round-robin load balancing |
+
+Both modes are available side-by-side — toggle in the web UI.
 
 ---
 
 ## ✨ Key Features
 
-### 🧠 **Advanced Document Processing**
-* PDF extraction with PyMuPDF (context managers for resource safety)
-* Intelligent text cleaning (preserves structure, removes noise)
-* Semantic chunking with Indic script-aware sentence splitting
-* Persistent vector storage via ChromaDB
+### 🤖 Agentic RAG Pipeline (v2.0)
 
-### 🔍 **Hybrid Retrieval Pipeline**
+* **LangGraph state machine** — query planner → tool selector → tool executor → answer generator → reflexion evaluator, with conditional loops
+* **6 agent tools:**
+  * **indicrag_retrieval** — hybrid BM25 + dense search with cross-encoder reranking on your indexed corpus
+  * **arxiv_search** — search arXiv by topic, author, or paper ID; returns abstracts, authors, PDF links
+  * **open_access_search** — Semantic Scholar with automatic OpenAlex fallback (free, no API key); returns citation counts and open-access PDFs
+  * **web_search** — Tavily web search for current events and non-academic info
+  * **calculate** — numexpr math evaluation
+  * **execute_python** — process-isolated Python execution with AST-based validation (import whitelist, dunder blocking, dangerous builtin blocking) + 10s timeout
+* **Reflexion loops with stuck-loop detection** — after generating an answer, the evaluator checks faithfulness (via `verify.check_claims()` over all retrieved chunks) and completeness (via Gemini Flash). Uncited answers are force-regenerated; if either score < 0.75, the agent can regenerate, retrieve more, or reformulate the query — up to 3 iterations. If completeness doesn't improve between iterations, the evaluator auto-accepts to avoid wasting time
+* **Parallel tool execution** — when multiple tools are selected (e.g., corpus + arXiv), they run concurrently via `ThreadPoolExecutor`
+* **Model failover with circuit breaker** — if `gemini-3.5-flash` is overloaded (503/429), automatically falls back to `gemma-4-26b-a4b-it` (Gemma 4). Circuit breaker skips the primary model for 60s after failure, so subsequent calls go directly to the fallback
+* **google-genai native function calling** — no LangChain LLM wrappers; uses `types.FunctionCallingConfig(mode="ANY")` to force tool selection
+
+### 🔍 Hybrid Retrieval Pipeline
+
 * **Dense + sparse search** — BGE-M3 dense vectors fused with BM25 lexical search via Reciprocal Rank Fusion (RRF)
 * **Cross-encoder reranking** — BAAI/bge-reranker-v2-m3 scores the top candidates for precision
 * **Faithfulness verification** — NLI-based claim-level grounding check flags unsupported assertions
 * Retrieves 30 candidates, reranks to top 12, verifies citations against source chunks
 
-### 🌍 **True Multilingual Support**
-* **10+ Indian languages** + English (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Odia)
-* Unicode script-based language detection (no misclassification of short Indic queries)
+### 🌍 True Multilingual Support
+
+* **10+ Indian languages** + English (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu)
+* Unicode script-based language detection with Devanagari hi/mr disambiguation (no misclassification of short Indic queries)
 * **Two RAG strategies:**
   * **Strategy A:** Direct multilingual reasoning (recommended)
-  * **Strategy B:** Translation-enhanced reasoning with NLLB-200 (sentence-batched to prevent truncation)
-* Cross-lingual semantic search with BGE-M3 embeddings (1024d, strong on Indic scripts)
+  * **Strategy B:** Translation-enhanced reasoning with NLLB-200 (sentence-batched)
+* Cross-lingual semantic search with BGE-M3 embeddings (1024d)
 
-### 🤖 **LLM Integration**
-* Google Gemini 3.5 Flash integration with automatic retry (tenacity, 3 attempts with exponential backoff)
-* Optimized system prompt — grounding-first, no mandatory section padding
-* Smart citation extraction with range validation
-* Low temperature (0.1) for deterministic grounded responses
+### 🛡️ Production-Ready Infrastructure
 
-### 🛡️ **Production-Ready Infrastructure**
-* **Thread-safe model initialization** — double-checked locking on all singletons
-* **Warm-up at startup** — models loaded via FastAPI lifespan, first request is never cold
-* **Session TTL eviction** — stale chat sessions cleaned automatically
-* **Admin-gated destructive ops** — purge endpoints require `ADMIN_API_KEY`
-* API key authentication, Prometheus metrics, env-driven CORS
-* Pydantic v2 validation and type safety
+* Thread-safe model initialization (double-checked locking on all singletons)
+* Warm-up at startup via FastAPI lifespan (embeddings, vector store, reranker, BM25 index) — first request is never cold
+* Configurable agent pipeline timeout (default 120s) with graceful 504 response
+* Session TTL eviction, admin-gated destructive ops, Prometheus metrics
+* API key authentication, env-driven CORS, Pydantic v2 validation
+* Path traversal protection, URL scheme validation on rendered links
 
-### 🧹 **Operational Tools**
-* **`purge.py`** - CLI utility to safely clear PDFs, database, or model cache
-* **Web-based document management** - Upload, ingest, and purge via UI
-* Comprehensive ingestion pipeline with progress tracking
-* Evaluation framework with nDCG@10, Recall@20, and CI gating
+### 🗄️ Three-Layer Caching
+
+* **LLM response cache** (128 entries, 10 min TTL) — identical prompts skip Gemini API entirely
+* **Retrieval cache** (64 entries, 5 min TTL) — same query skips embedding + ChromaDB + BM25 + reranking; auto-invalidated on document ingest
+* **Tool result cache** (64 entries, 3 min TTL) — arXiv, Semantic Scholar, web search results cached across reflexion loops
+* All sizes/TTLs configurable via env vars; `GET /cache/stats` for observability
 
 ---
 
@@ -63,44 +89,47 @@ A **production-ready** Retrieval-Augmented Generation (RAG) system with multilin
 * Python 3.11+
 * Google Gemini API key ([Get one here](https://aistudio.google.com/api-keys))
 * 8GB+ RAM recommended
+* (Optional) Tavily API key for agent web search ([Get one here](https://app.tavily.com))
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/DNSdecoded/IndicRAG.git
 cd IndicRAG
 
-# Create virtual environment
 python -m venv .venv
 
-# Activate (Windows)
+# Windows
 .venv\Scripts\activate
-# Activate (macOS/Linux)
+# macOS/Linux
 source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### Configuration
 
 ```bash
-# Copy environment template
 cp .env.example .env
+```
 
-# Edit .env and add your API key
-# LLM_API_KEY=your_gemini_api_key_here
+Edit `.env`:
 
-# Optional: Configure API authentication
-# API_KEYS=key1,key2,key3
+```ini
+# Required
+LLM_API_KEY=your_gemini_api_key_here
+
+# Optional — enables agent web search tool
+TAVILY_API_KEY=your_tavily_key_here
+
+# Optional — higher token limit for agent answers (default 4096)
+AGENT_MAX_TOKENS=4096
 ```
 
 ### Ingest Documents
 
 ```bash
-# Place PDFs in papers/ directory
-# Then ingest them:
+# Place PDFs in papers/ directory, then:
 python ingest.py
 
 # Or specify a directory:
@@ -110,233 +139,191 @@ python ingest.py path/to/pdfs
 ### Start Server
 
 ```bash
-# With pre-flight checks
 python start_server.py
-
-# Skip checks (for production)
-python start_server.py --skip-checks
 
 # Development mode with auto-reload
 python start_server.py --dev
 ```
 
-🎉 **That's it!** Access the API at:
-* **Interactive docs:** http://localhost:8080/api/docs
+Access at:
 * **Web Interface:** http://localhost:8080
+* **API Docs:** http://localhost:8080/api/docs
 
 ---
 
 ## 📖 Usage
 
-### Via Web UI
+### 🖥️ Web UI
 
-Open http://localhost:8080 and:
+Open http://localhost:8080:
 
-1. **Ask Questions** - Enter queries in any supported language
-2. **Manage Documents** - Expand the panel to:
-   - Upload PDFs via drag-and-drop
-   - View uploaded papers list
-   - Ingest papers into the vector store
-   - Purge papers or database (with confirmation)
+1. **Select Pipeline Mode** — Standard RAG (single-pass) or Agentic RAG (multi-tool + reflexion)
+2. **Select Strategy** — Direct Multilingual (A) or English Pivot (B)
+3. **Ask Questions** — in English or any supported Indic language
+4. **Manage Documents** — upload PDFs, ingest, view stats
 
-### Via REST API
+In Agentic mode the UI shows:
+* Animated progress stepper with elapsed timer while the agent works
+* Color-coded source cards with paper titles, authors, year, citation counts, and PDF links
+* Tool call log with execution latencies
+
+### 🔌 REST API
+
+#### Standard Chat — `POST /chat`
 
 ```python
 import requests
 
-response = requests.post('http://localhost:8080/query', json={
-    "question": "యాంటెన్నాతో ml ను ఎలా అమలు చేయవచ్చు?",  # Telugu
-    "strategy": "A",
-    "top_k": 5
+r = requests.post('http://localhost:8080/chat', json={
+    "message": "యాంటెన్నాతో ml ను ఎలా అమలు చేయవచ్చు?",
+    "strategy": "A"
 })
-
-result = response.json()
-print(result['answer'])
-print(f"Citations: {len(result['citations'])}")
+print(r.json()['answer'])
 ```
 
-### Via Python
+#### Agentic Query — `POST /agent/query`
 
 ```python
-import rag
+r = requests.post('http://localhost:8080/agent/query', json={
+    "question": "What are the latest advances in antenna optimization using ML?",
+    "strategy": "A"
+})
 
-result = rag.answer_question(
-    "मधुमेह का इलाज क्या है?",  # Hindi: diabetes treatment
-    strategy="B",
-    top_k=8
-)
-
-print(f"Answer ({result['language_name']}): {result['answer']}")
-print(f"Used {result['chunks_used']} document chunks")
+data = r.json()
+print(data['answer'])
+print(f"Sources: {len(data['sources'])}")
+print(f"Reflexion iterations: {data['reflexion_iterations']}")
+for src in data['sources']:
+    print(f"  [{src['section']}] {src['title']} ({src['year']}) — {src['citations']} citations")
+    if src['pdf_url']:
+        print(f"    PDF: {src['pdf_url']}")
 ```
+
+**Agent response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `answer` | string | Generated answer |
+| `language` | string | Detected language code |
+| `sources` | list | Papers/passages with title, authors, year, citations, pdf_url, source URL |
+| `tool_calls` | list | Tool execution log with name, args, latency_ms |
+| `reflexion_iterations` | int | Number of reflexion loops executed (0-3) |
+| `processing_time` | float | Total seconds |
 
 ---
 
 ## 🔧 API Reference
 
-### `POST /query`
-
-Ask a question and get an AI-powered answer with citations.
-
-**Request:**
-```json
-{
-  "question": "What is quantum computing?",
-  "strategy": "A",
-  "top_k": 5
-}
-```
-
-**Response:**
-```json
-{
-  "answer": "Quantum computing is...",
-  "language": "en",
-  "language_name": "English",
-  "chunks_used": 4,
-  "citations": [
-    {"number": "1", "title": "Quantum Computing Basics", "section": "Introduction"}
-  ],
-  "processing_time": 1.23
-}
-```
-
-### `POST /ingest`
-
-Ingest a PDF document (returns extracted title).
-
-### `GET /stats`
-
-Get vector store statistics.
-
-### `GET /health`
-
-Health check endpoint.
-
-### `POST /upload`
-
-Upload a PDF file (multipart form).
-
-### `GET /papers`
-
-List all uploaded PDFs with sizes.
-
-### `DELETE /purge/papers`
-
-Delete all uploaded PDF files.
-
-### `DELETE /purge/database`
-
-Clear the vector database (all chunks).
-
----
-
-## 🧹 Maintenance Tools
-
-### Purge Utility
-
-Safely clear indexed data:
-
-```bash
-# Delete all PDFs
-python purge.py --papers
-
-# Clear vector database
-python purge.py --db
-
-# Remove cached models (will re-download)
-python purge.py --models
-
-# Clear everything (with confirmation)
-python purge.py --all
-
-# Non-interactive mode
-python purge.py --all --yes
-```
-
-### Examples
-
-```bash
-# Test with example queries
-python examples/example_query.py
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/chat` | POST | Multi-turn chat with session history |
+| `/agent/query` | POST | Agentic pipeline with reflexion loops (configurable timeout, default 120s → 504) |
+| `/query` | POST | Single-turn question answering |
+| `/upload` | POST | Upload PDF file (multipart form) |
+| `/ingest` | POST | Ingest a PDF into the vector store |
+| `/ingest/all` | POST | Bulk ingest all PDFs (async, returns job_id) |
+| `/ingest/status/{job_id}` | GET | Check bulk ingest job status |
+| `/papers` | GET | List uploaded PDFs |
+| `/stats` | GET | Vector store statistics |
+| `/cache/stats` | GET | Cache hit rates, sizes, and TTL config |
+| `/cache` | DELETE | Clear all caches (LLM, retrieval, tool) |
+| `/health` | GET | Health check |
+| `/purge/papers` | DELETE | Delete all PDFs (requires admin key) |
+| `/purge/database` | DELETE | Clear vector database (requires admin key) |
 
 ---
 
 ## 📁 Project Structure
 
+> Full annotated tree: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
+
 ```
 IndicRAG/
-├── api_server.py          # FastAPI app with auth, lifespan warm-up, session TTL
-├── config.py              # All configuration constants and prompts
-├── rag.py                 # Core RAG pipeline (retrieval, rerank, generate, verify)
-├── embeddings.py          # BGE-M3 multilingual embeddings (thread-safe)
-├── rerank.py              # Cross-encoder reranker (bge-reranker-v2-m3)
-├── bm25_search.py         # BM25 lexical index + RRF fusion
-├── verify.py              # NLI-based faithfulness verification
-├── vector_store.py        # ChromaDB wrapper (thread-safe)
-├── translation.py         # NLLB-200 translation, sentence-batched
-├── lang_utils.py          # Unicode script + langdetect detection
-├── pdf_utils.py           # PDF extraction, Indic-aware chunking
-├── ingest.py              # PDF ingestion pipeline
-├── start_server.py        # Server launcher with pre-flight checks
-├── purge.py               # CLI cleanup utility
 │
-├── static/                # Web frontend
-│   └── index.html
+├── 📄 Root
+│   ├── requirements.txt             # 31 packages
+│   ├── .env.example                 # LLM_API_KEYS, TAVILY, AGENT_MAX_TOKENS, etc.
+│   ├── start_server.py              # Launcher with pre-flight checks (multi-key aware)
+│   └── patterns.json                # Regex patterns for PDF cleaning
 │
-├── docs/                  # Documentation
-│   ├── Eval/              # Evaluation framework (nDCG, Recall@20, CI gate)
-│   ├── QUICKSTART.md
-│   ├── ARCHITECTURE.md
-│   └── ...
+├── 🐍 Core Modules (13)
+│   ├── config.py                    # Configuration + env parsing (LLM_API_KEY_POOL)
+│   ├── api_server.py                # FastAPI — /chat, /query, /agent/query + 10 more
+│   ├── rag.py                       # RAG pipeline + round-robin client pool
+│   ├── embeddings.py                # BGE-M3 embeddings (thread-safe)
+│   ├── vector_store.py              # ChromaDB wrapper
+│   ├── bm25_search.py               # BM25 + RRF fusion
+│   ├── rerank.py                    # Cross-encoder reranker (bge-reranker-v2-m3)
+│   ├── verify.py                    # NLI faithfulness verification
+│   ├── lang_utils.py                # Unicode script + langdetect
+│   ├── pdf_utils.py                 # PDF extraction, Indic-aware chunking
+│   ├── ingest.py                    # Parallel ingestion with MD5 dedup
+│   ├── translation.py               # NLLB-200 sentence-batched (Strategy B)
+│   ├── cache.py                     # Thread-safe TTL LRU cache (LLM, retrieval, tool)
+│   └── purge.py                     # CLI cleanup (papers, db, models)
 │
-├── examples/              # Example scripts
-├── papers/                # Your PDF documents
-├── chroma_db/             # Vector database
-└── models/                # Cached ML models
+├── 🤖 agent/                        # Agentic RAG Pipeline (v2.0)
+│   ├── state.py                     # AgentState + ReflexionFeedback schemas
+│   ├── tool_declarations.py         # 6 google-genai FunctionDeclarations
+│   ├── tool_executor.py             # Tool impls: corpus, arXiv, S2/OpenAlex, web, calc, sandbox
+│   ├── graph.py                     # LangGraph StateGraph + reflexion routing
+│   └── nodes/
+│       ├── query_planner.py         # Language detection + query decomposition
+│       ├── tool_selector.py         # Gemini function calling (mode=ANY)
+│       ├── tool_executor_node.py    # Dispatch + context accumulation + audit log
+│       ├── answer_generator.py      # Reuses rag.format_context/build_prompt/llm_generate
+│       ├── reflexion_evaluator.py   # check_claims() + Gemini completeness judge
+│       └── finalizer.py             # Terminal node
+│
+├── 🧪 tests/
+│   └── test_agent.py               # 11 unit + 1 integration test
+│
+├── 🌐 static/
+│   └── index.html                   # SPA: mode toggle, progress stepper, source cards
+│
+├── 📚 docs/                         # 13 documentation files
+│   ├── QUICKSTART.md                # evaluation.md, ARCHITECTURE.md, CONTRIBUTING.md, ...
+│   ├── Eval/                        # nDCG@10, Recall@20, relevance judgments
+│   ├── RELEASE_v2.0.0.md           # v2.0 release notes
+│   └── feature-requests/            # v2.0 planning docs
+│
+├── 💡 examples/                     # example_ingest.py, example_query.py
+├── 🔧 deploy/                       # nginx.example.conf
+│
+└── 📊 Data (git-ignored)
+    ├── papers/                      # PDF documents
+    ├── chroma_db/                   # Vector database
+    └── models/                      # Cached ML models
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Key settings in `config.py` (all overridable via environment variables):
-
-```python
-# Embedding model (BGE-M3: dense + sparse, Indic-strong)
-EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
-EMBEDDING_DIMENSION = 1024
-
-# Retrieval pipeline
-USE_RERANKER = True                 # cross-encoder reranking
-USE_HYBRID_SEARCH = True            # dense + BM25 fusion
-DEFAULT_TOP_K = 30                  # retrieve wide
-MAX_CONTEXT_CHUNKS = 12             # keep after rerank
-MAX_CONTEXT_LENGTH = 48000          # ~12k tokens
-
-# Faithfulness verification
-FAITHFULNESS_THRESHOLD = 0.5
-FAITHFULNESS_ENFORCE = "warn"       # warn | strip | regen
-
-# LLM
-LLM_MODEL_NAME = "gemini-3.5-flash"
-LLM_TEMPERATURE = 0.1              # low for grounded citation tasks
-LLM_MAX_TOKENS = 2048
-```
-
-### Environment Variables
+Key settings (all overridable via environment variables):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LLM_API_KEY` | (required) | Google Gemini API key |
+| `LLM_MODEL_NAME` | `gemini-3.5-flash` | Gemini model for generation |
+| `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback model when primary is overloaded (503/429) |
+| `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
+| `AGENT_MAX_TOKENS` | `4096` | Max tokens for agentic pipeline |
+| `AGENT_TIMEOUT` | `120` | Agent pipeline timeout in seconds |
+| `TAVILY_API_KEY` | (optional) | Tavily key for agent web search |
 | `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
-| `API_KEYS` | (none) | Comma-separated keys for general auth |
+| `API_KEYS` | (none) | Comma-separated keys for auth |
 | `CORS_ORIGINS` | localhost | Comma-separated allowed origins |
 | `USE_RERANKER` | `true` | Enable cross-encoder reranking |
 | `USE_HYBRID_SEARCH` | `true` | Enable BM25 + dense fusion |
 | `FAITHFULNESS_ENFORCE` | `warn` | `warn`, `strip`, or `regen` |
-| `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | Sentence-transformers model |
+| `FAITHFULNESS_THRESHOLD` | `0.5` | NLI support score threshold |
+| `LLM_CACHE_SIZE` | `128` | Max entries in LLM response cache |
+| `LLM_CACHE_TTL` | `600` | LLM cache TTL in seconds (10 min) |
+| `RETRIEVAL_CACHE_SIZE` | `64` | Max entries in retrieval cache |
+| `RETRIEVAL_CACHE_TTL` | `300` | Retrieval cache TTL in seconds (5 min) |
+| `TOOL_CACHE_SIZE` | `64` | Max entries in agent tool cache |
+| `TOOL_CACHE_TTL` | `180` | Tool cache TTL in seconds (3 min) |
 
 ---
 
@@ -357,34 +344,65 @@ LLM_MAX_TOKENS = 2048
 | Odia | or | ଓଡ଼ିଆ |
 | Urdu | ur | اردو |
 
-
 ---
 
-## 📈 Final KPI Metrics
+## 🏗️ Architecture
 
-For detailed evaluation methodology, automated metrics, and per-query qualitative reports, see [docs/evaluation.md](docs/evaluation.md).
-
-| Metric | Final Score |
-|--------|-------------|
-| Retrieval Precision | 0.93 |
-| Retrieval Recall | 0.91 |
-| Faithfulness (Grounding Accuracy) | 0.98 |
-| Attribution Accuracy | 0.97 |
-| Technical Depth | 0.88 |
-| Convergence / Mechanistic Reasoning | 0.86 |
-| Cross-Document Discipline | 0.95 |
-| Hallucination Rate | < 2% |
-| Formatting & Structural Compliance | 0.98 |
+```
+User Query
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Query Planner                                                   │
+│  detect_language() → decompose into sub-queries                  │
+└───────┬─────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Tool Selector                                                   │
+│  Gemini function calling (mode=ANY) picks from 6 tools           │
+└───────┬─────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Tool Executor                                                   │
+│  ┌──────────┐ ┌──────────┐ ┌─────────┐ ┌──────┐ ┌──────┐ ┌──┐ │
+│  │IndicRAG  │ │  arXiv   │ │  S2 /   │ │ Web  │ │ Calc │ │Py│ │
+│  │ Corpus   │ │  Search  │ │OpenAlex │ │Search│ │      │ │  │ │
+│  └──────────┘ └──────────┘ └─────────┘ └──────┘ └──────┘ └──┘ │
+└───────┬─────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Answer Generator                                                │
+│  rag.format_context() → rag.build_prompt() → rag.llm_generate() │
+└───────┬─────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Reflexion Evaluator                                             │
+│  verify.check_claims() + Gemini completeness judge               │
+│  → accept | regenerate | retrieve_more | reformulate             │
+└───────┬────────────────────────────────┬────────────────────────┘
+        │ accept                         │ retry (max 3)
+        ▼                                └──→ back to Tool Selector
+┌──────────────┐                              or Query Planner
+│   Finalizer  │
+└──────────────┘
+```
 
 ---
 
 ## 📊 Performance
 
 Typical query latency (on CPU):
-* **Strategy A** (direct multilingual): ~1-2s
-* **Strategy B** (with translation): ~3-6s (includes NLLB translation time)
 
-ChromaDB retrieval: <100ms for 1000s of documents
+| Mode | Latency | Notes |
+|------|---------|-------|
+| Standard RAG (Strategy A) | ~1-2s | Single-pass |
+| Standard RAG (Strategy B) | ~3-6s | Includes NLLB translation |
+| Agentic RAG (1 reflexion) | ~15-30s | Multi-tool + evaluation (parallel tool execution) |
+| Agentic RAG (max reflexions) | ~60-90s | Configurable timeout (default 120s) → 504 |
 
 Memory usage:
 * Base system: ~500MB
@@ -394,60 +412,67 @@ Memory usage:
 
 ---
 
-## 🔒 Production Features
+## 📈 KPI Metrics
 
-### Security
-* API key authentication with secure parsing
-* Admin key gating for destructive operations (`ADMIN_API_KEY`)
-* Input validation with Pydantic v2
-* Env-driven CORS (`CORS_ORIGINS`)
-* Path traversal protection on ingest endpoints
+| Metric | Score |
+|--------|-------|
+| Retrieval Precision | 0.93 |
+| Retrieval Recall | 0.91 |
+| Faithfulness (Grounding Accuracy) | 0.98 |
+| Attribution Accuracy | 0.97 |
+| Technical Depth | 0.88 |
+| Convergence / Mechanistic Reasoning | 0.86 |
+| Cross-Document Discipline | 0.95 |
+| Hallucination Rate | < 2% |
 
-### Observability
-* Structured logging across all modules
-* Prometheus metrics at `/metrics`
-* Processing time tracking
-* Faithfulness warnings logged for ungrounded claims
-
-### Robustness
-* Thread-safe model singletons (double-checked locking)
-* Warm-up at startup via FastAPI lifespan
-* LLM retry with exponential backoff (tenacity)
-* Session TTL eviction
-* Graceful empty collection handling
-
-### Quality
-* Cross-encoder reranking + faithfulness verification
-* Hybrid dense+lexical retrieval
-* Citation range validation (caps [2020-2023] false positives)
-* Sentence-batched translation prevents truncation
+See [docs/evaluation.md](docs/evaluation.md) for detailed methodology.
 
 ---
 
-## 🐛 Common Issues & Solutions
+## 🐛 Troubleshooting
 
 **"API key not configured"**
 ```bash
-# Check .env file
 cat .env | grep LLM_API_KEY
 ```
 
 **"No documents indexed"**
 ```bash
-# Ingest PDFs
 python ingest.py
 ```
 
-**"Translation model gated/authentication required"**
-- The system now uses **NLLB-200** which requires no authentication
-- First use will download ~2.4GB automatically
-- See documentation for manual download if needed
+**Agent web search fails**
+```bash
+# Ensure TAVILY_API_KEY is set in .env
+cat .env | grep TAVILY_API_KEY
+```
 
-**"Out of memory"**
-```python
-# Edit config.py to reduce memory usage
-CHUNK_SIZE = 512  # Smaller chunks
-MAX_CONTEXT_CHUNKS = 3  # Fewer chunks in context
+**Agent answers truncated**
+```bash
+# Increase token limit in .env
+AGENT_MAX_TOKENS=8192
+```
+
+**"Translation model gated"**
+- The system uses NLLB-200 which requires no authentication
+- First use downloads ~2.4GB automatically
+
+---
+
+## 🧹 Maintenance
+
+```bash
+# Delete all PDFs
+python purge.py --papers
+
+# Clear vector database
+python purge.py --db
+
+# Remove cached models
+python purge.py --models
+
+# Clear everything
+python purge.py --all --yes
 ```
 
 ---
@@ -456,39 +481,53 @@ MAX_CONTEXT_CHUNKS = 3  # Fewer chunks in context
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
-**Recent improvements:**
-* ✅ Hybrid retrieval pipeline (BGE-M3 dense + BM25 lexical + RRF fusion)
-* ✅ Cross-encoder reranking (bge-reranker-v2-m3)
-* ✅ NLI-based faithfulness verification with configurable enforcement
-* ✅ Thread-safe model initialization across all modules
-* ✅ Sentence-batched translation (fixes Strategy B truncation)
-* ✅ Unicode script-based language detection for short Indic queries
-* ✅ LLM retry with exponential backoff (tenacity)
-* ✅ Optimized system prompt — grounding-first, no section padding
-* ✅ Expanded evaluation framework (nDCG@10, Recall@20, CI gating)
-* ✅ Admin key gating for destructive purge endpoints
-* ✅ Env-driven CORS, warm-up at startup, session TTL eviction
-* ✅ Query embedding LRU cache, Indic-aware chunking
+**v2.0 Changelog:**
+* Agentic RAG pipeline with LangGraph state machine and reflexion loops
+* 6 agent tools: corpus retrieval, arXiv, Semantic Scholar/OpenAlex, web search, calculator, process-isolated Python
+* `POST /agent/query` endpoint with source metadata and tool call audit log
+* Three-layer TTL cache: LLM responses, retrieval results, agent tool results — all env-configurable
+* `GET /cache/stats` and `DELETE /cache` endpoints for cache observability and management
+* Multi-key Gemini API load balancing via `LLM_API_KEYS` with model-level failover (Gemma 4 fallback) and circuit breaker
+* Web UI: pipeline mode toggle, agent progress stepper, paper source cards with PDF links
+* OpenAlex fallback for Semantic Scholar 429 rate limits (single attempt, no retries)
+* Parallel tool execution via ThreadPoolExecutor
+* Reflexion stuck-loop detection (auto-accept when completeness stops improving)
+* AST-based Python sandbox (replaces string denylist)
+* Persistent error bubble in UI (replaces vanishing toast)
+* Citation numbers on agentic source cards
+* URL scheme validation (XSS prevention) on rendered source links
+* `AGENT_MAX_TOKENS` config for longer agent answers
+
+**v1.5 Features:**
+* Hybrid retrieval pipeline (BGE-M3 dense + BM25 + RRF)
+* Cross-encoder reranking (bge-reranker-v2-m3)
+* NLI-based faithfulness verification
+* Thread-safe model initialization
+* Sentence-batched translation (Strategy B)
+* Evaluation framework (nDCG@10, Recall@20, CI gating)
 
 ---
 
 ## 🙏 Acknowledgments
 
-Built with excellent open-source tools:
+Built with:
 
-* [Google Gemini](https://ai.google.dev/) - Multilingual LLM
-* [Sentence Transformers](https://www.sbert.net/) - BGE-M3 embeddings & reranking
-* [Facebook NLLB](https://github.com/facebookresearch/fairseq/tree/nllb) - Translation
-* [ChromaDB](https://www.trychroma.com/) - Vector database
-* [FastAPI](https://fastapi.tiangolo.com/) - API framework
-* [PyMuPDF](https://pymupdf.readthedocs.io/) - PDF processing
-* [Tenacity](https://github.com/jd/tenacity) - Retry logic
+* [Google Gemini](https://ai.google.dev/) — Multilingual LLM
+* [LangGraph](https://github.com/langchain-ai/langgraph) — Agent state machine
+* [Sentence Transformers](https://www.sbert.net/) — BGE-M3 embeddings & reranking
+* [arXiv API](https://arxiv.org/) — Preprint search
+* [Semantic Scholar](https://www.semanticscholar.org/) — Academic paper search
+* [OpenAlex](https://openalex.org/) — Open scholarly metadata
+* [Tavily](https://tavily.com/) — Web search for AI agents
+* [ChromaDB](https://www.trychroma.com/) — Vector database
+* [FastAPI](https://fastapi.tiangolo.com/) — API framework
+* Python subprocess sandbox — Process-isolated code execution
 
 ---
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE) file for details.
 
 ---
 

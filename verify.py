@@ -30,7 +30,8 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         cited = [i for i in cited if 0 <= i < len(chunks)]
         if not cited:
             continue
-        score = max(model.predict([(chunks[i], sent)])[0] for i in cited)
-        results.append({"claim": sent, "support": float(score),
+        pairs = [(chunks[i], sent) for i in cited]
+        score = float(max(model.predict(pairs)))
+        results.append({"claim": sent, "support": score,
                         "grounded": score >= config.FAITHFULNESS_THRESHOLD})
     return results

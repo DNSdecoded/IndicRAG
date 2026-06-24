@@ -15,25 +15,32 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 logger = logging.getLogger(__name__)
 
-# Client is initialised lazily inside llm_generate() so we can still import
-# this module even when the API key is absent (e.g. retrieval-only mode).
-_genai_client: genai.Client | None = None
+# Client pool — one genai.Client per API key, round-robin load balanced.
+# Lazily initialised so the module can be imported without keys (retrieval-only mode).
+_client_pool: list[genai.Client] = []
 _client_lock = __import__('threading').Lock()
+_client_index = __import__('itertools').cycle([])  # replaced on init
+
+
+def _init_client_pool() -> None:
+    """Build the client pool from config.LLM_API_KEY_POOL (called under lock)."""
+    global _client_pool, _client_index
+    if not config.LLM_API_KEY_POOL:
+        raise ValueError(
+            "Google Gemini API key not configured. "
+            "Set LLM_API_KEY (single) or LLM_API_KEYS (comma-separated) in .env."
+        )
+    _client_pool = [genai.Client(api_key=k) for k in config.LLM_API_KEY_POOL]
+    _client_index = __import__('itertools').cycle(range(len(_client_pool)))
 
 
 def _get_client() -> genai.Client:
-    """Return (and lazily create) the shared Google GenAI client (thread-safe)."""
-    global _genai_client
-    if _genai_client is None:
+    """Return the next client from the round-robin pool (thread-safe)."""
+    if not _client_pool:
         with _client_lock:
-            if _genai_client is None:
-                if not config.LLM_API_KEY:
-                    raise ValueError(
-                        "Google Gemini API key not configured. "
-                        "Please set LLM_API_KEY environment variable or in .env file."
-                    )
-                _genai_client = genai.Client(api_key=config.LLM_API_KEY)
-    return _genai_client
+            if not _client_pool:
+                _init_client_pool()
+    return _client_pool[next(_client_index)]
 
 
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
@@ -123,10 +130,19 @@ def retrieve_context(
     """
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
-    
+
+    from cache import retrieval_cache, make_key
+    cache_scope = None if collection is None else getattr(collection, "name", id(collection))
+    cache_key = make_key(user_query, top_k, filter_dict, cache_scope)
+    if collection is None and filter_dict is None:
+        cached = retrieval_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("[Retrieval cache hit]")
+            return cached
+
     if collection is None:
         collection = vector_store.get_or_create_collection()
-    
+
     # Embed the query
     query_embedding = embeddings.embed_query(user_query)
     
@@ -193,13 +209,16 @@ def retrieve_context(
         metadatas=metas
     )
 
-    return {
+    result = {
         'chunks': docs,
         'metadatas': metas,
         'distances': dists,
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
+    if collection is None and filter_dict is None:
+        retrieval_cache.put(cache_key, result)
+    return result
 
 
 def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
@@ -292,6 +311,13 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
 
+    from cache import llm_cache, make_key
+    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE)
+    cached = llm_cache.get(cache_key)
+    if cached is not None:
+        logger.debug("[LLM cache hit]")
+        return cached
+
     client = _get_client()
 
     # Safety settings - set to BLOCK_NONE for scientific content
@@ -322,10 +348,11 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     )
 
     try:
-        response = _call_gemini(client, config.LLM_MODEL_NAME, prompt, generate_config)
+        response = generate_with_failover(config.LLM_MODEL_NAME, prompt, generate_config)
 
         # Check if response has text
         if response.text:
+            llm_cache.put(cache_key, response.text)
             return response.text
 
         # Handle blocked or empty responses
@@ -340,7 +367,9 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
                     if hasattr(part, 'text') and part.text
                 ]
                 if parts_text:
-                    return ''.join(parts_text)
+                    result_text = ''.join(parts_text)
+                    llm_cache.put(cache_key, result_text)
+                    return result_text
 
             finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
             raise Exception(
@@ -361,6 +390,81 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
 def _call_gemini(client, model, contents, gen_config):
     return client.models.generate_content(model=model, contents=contents,
                                           config=gen_config)
+
+
+def _is_transient(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (429, 503):
+        return True
+    msg = str(exc)
+    return "503" in msg or "429" in msg or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg
+
+
+import time as _time
+
+_circuit_breaker: dict[str, float] = {}
+_CIRCUIT_COOLDOWN = 60
+
+
+def generate_with_failover(model: str, contents, gen_config):
+    """
+    Call generate_content rotating through all API keys on 503/429 errors.
+
+    Tries every client in the pool exactly once.  If all keys fail on the
+    primary model, retries with LLM_FALLBACK_MODEL before giving up.
+    Uses a circuit breaker to skip models that recently failed on all keys.
+    """
+    if not _client_pool:
+        with _client_lock:
+            if not _client_pool:
+                _init_client_pool()
+
+    pool = _client_pool
+    models_to_try = [model]
+    if config.LLM_FALLBACK_MODEL and config.LLM_FALLBACK_MODEL != model:
+        models_to_try.append(config.LLM_FALLBACK_MODEL)
+
+    # Round-robin: start from the next key in rotation, not always pool[0]
+    start = next(_client_index)
+    ordered_pool = pool[start:] + pool[:start]
+
+    last_exc: Exception | None = None
+    any_attempted = False
+    for current_model in models_to_try:
+        tripped_until = _circuit_breaker.get(current_model, 0)
+        if _time.monotonic() < tripped_until:
+            logger.info(f"[Gemini failover] {current_model} circuit open, skipping")
+            continue
+
+        any_attempted = True
+        all_failed = True
+        for offset, client in enumerate(ordered_pool, 1):
+            try:
+                result = client.models.generate_content(
+                    model=current_model, contents=contents, config=gen_config
+                )
+                _circuit_breaker.pop(current_model, None)
+                return result
+            except Exception as exc:
+                if _is_transient(exc):
+                    logger.warning(
+                        f"[Gemini failover] {current_model} key #{offset}/{len(pool)} "
+                        f"returned {getattr(exc, 'status_code', '?')}: {exc!s:.120} — trying next"
+                    )
+                    last_exc = exc
+                    continue
+                raise
+
+        if all_failed:
+            _circuit_breaker[current_model] = _time.monotonic() + _CIRCUIT_COOLDOWN
+            if current_model == model and len(models_to_try) > 1:
+                logger.warning(f"[Gemini failover] {model} circuit tripped for {_CIRCUIT_COOLDOWN}s, falling back to {config.LLM_FALLBACK_MODEL}")
+
+    if not any_attempted:
+        raise RuntimeError(
+            "All configured Gemini models are currently circuit-open; retry after cooldown."
+        )
+    raise last_exc  # type: ignore[misc]
 
 
 def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:

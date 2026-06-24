@@ -13,6 +13,9 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
             integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
             crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"
+            integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"
+            crossorigin="anonymous"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         /* ── THEME VARIABLES ───────────────────────────────── */
@@ -200,6 +203,43 @@
         .kb-stat-value { font-family: 'JetBrains Mono', monospace; font-size: .95rem; font-weight: 600; color: var(--primary); display: block; }
         .kb-stat-label { font-size: .6rem; color: var(--text-4); text-transform: uppercase; letter-spacing: .5px; transition: var(--transition); margin-top: 2px;}
 
+        /* Tool calls in agent responses */
+        .asst-tools { margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--border); }
+        .tools-label { font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-4); margin-bottom: .45rem; transition: var(--transition); }
+        .tool-row { font-family: 'JetBrains Mono', monospace; font-size: .7rem; color: var(--text-3); padding: .35rem .6rem; background: var(--surface-up); border-radius: 5px; margin-bottom: .3rem; border: 1px solid var(--border); display: flex; align-items: center; gap: .5rem; transition: var(--transition); overflow: hidden; }
+        .tool-row .tool-args { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-4); font-size: .65rem; }
+        .tool-row:last-child { margin-bottom: 0; }
+        .tool-icon { flex-shrink: 0; font-size: .8rem; }
+        .tool-name { font-weight: 600; color: var(--primary); }
+        .tool-latency { margin-left: auto; color: var(--text-4); font-size: .6rem; }
+        .chip-reflexion { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+        [data-theme="dark"] .chip-reflexion { background: #451A03; color: #FCD34D; border-color: #78350F; }
+        .chip-tools { background: #EDE9FE; color: #5B21B6; border: 1px solid #DDD6FE; }
+        [data-theme="dark"] .chip-tools { background: #2E1065; color: #C4B5FD; border-color: #4C1D95; }
+        .chip-agent { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; }
+        [data-theme="dark"] .chip-agent { background: #022C22; color: #6EE7B7; border-color: #064E3B; }
+
+        /* Agent sources */
+        .asst-sources { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+        .sources-label { font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-4); margin-bottom: .55rem; }
+        .source-card { background: var(--surface-up); border: 1px solid var(--border); border-radius: 8px; padding: .65rem .8rem; margin-bottom: .45rem; transition: var(--transition), border-color .15s; }
+        .source-card:hover { border-color: var(--border-accent); }
+        .source-card:last-child { margin-bottom: 0; }
+        .source-header { display: flex; align-items: flex-start; gap: .5rem; }
+        .source-badge { font-size: .55rem; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; padding: .1rem .4rem; border-radius: 3px; flex-shrink: 0; margin-top: 2px; }
+        .source-badge.arxiv { background: #FEF3C7; color: #92400E; } [data-theme="dark"] .source-badge.arxiv { background: #451A03; color: #FCD34D; }
+        .source-badge.semantic_scholar { background: #EDE9FE; color: #5B21B6; } [data-theme="dark"] .source-badge.semantic_scholar { background: #2E1065; color: #C4B5FD; }
+        .source-badge.openalex { background: #DBEAFE; color: #1E40AF; } [data-theme="dark"] .source-badge.openalex { background: #172554; color: #93C5FD; }
+        .source-badge.corpus { background: #ECFDF5; color: #065F46; } [data-theme="dark"] .source-badge.corpus { background: #022C22; color: #6EE7B7; }
+        .source-badge.web { background: #FFF7ED; color: #C2410C; } [data-theme="dark"] .source-badge.web { background: #431407; color: #FDBA74; }
+        .source-title { font-size: .8rem; font-weight: 600; color: var(--text-1); line-height: 1.35; flex: 1; }
+        .source-title a { color: inherit; text-decoration: none; }
+        .source-title a:hover { text-decoration: underline; }
+        .source-meta { display: flex; align-items: center; gap: .6rem; margin-top: .35rem; flex-wrap: wrap; }
+        .source-meta-item { font-family: 'JetBrains Mono', monospace; font-size: .65rem; color: var(--text-3); display: flex; align-items: center; gap: .2rem; }
+        .source-pdf-link { font-size: .65rem; font-weight: 600; color: var(--primary); text-decoration: none; padding: .15rem .45rem; border: 1px solid var(--primary-border); border-radius: 4px; margin-left: auto; transition: background .15s; flex-shrink: 0; }
+        .source-pdf-link:hover { background: var(--primary-bg); }
+
         /* Sidebar footer */
         .sidebar-footer { padding: .7rem 1rem; border-top: 1px solid var(--border); flex-shrink: 0; display: flex; flex-direction: column; gap: .35rem; transition: var(--transition); }
         .sfooter-btn {
@@ -266,7 +306,7 @@
         .msg-row { display: flex; gap: .75rem; align-items: flex-start; animation: fadeUp .3s ease; }
         .msg-row.user { justify-content: flex-end; }
         .user-bubble { background: var(--user-bubble-bg); color: var(--user-bubble-text); border-radius: 12px 12px 0 12px; padding: .8rem 1.1rem; font-size: .875rem; line-height: 1.6; max-width: 65%; box-shadow: var(--shadow); transition: var(--transition); }
-        .asst-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: 1rem 1.25rem; max-width: 78%; box-shadow: var(--shadow); transition: var(--transition); }
+        .asst-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: 1rem 1.25rem; max-width: 82%; box-shadow: var(--shadow); transition: var(--transition); overflow-wrap: break-word; word-break: break-word; }
 
         /* Chips */
         .asst-meta { display: flex; align-items: center; gap: .4rem; margin-bottom: .6rem; flex-wrap: wrap; }
@@ -276,7 +316,7 @@
         .chip-time { background: var(--chip-time-bg); color: var(--chip-time-c); border: 1px solid var(--border); }
 
         /* Answer text */
-        .asst-text { font-size: .875rem; line-height: 1.7; color: var(--text-2); transition: var(--transition); }
+        .asst-text { font-size: .875rem; line-height: 1.7; color: var(--text-2); transition: var(--transition); overflow-wrap: break-word; word-break: break-word; }
         .asst-text p { margin-bottom: .75rem; }
         .asst-text p:last-child { margin-bottom: 0; }
         .asst-text strong { color: var(--text-1); font-weight: 600; }
@@ -302,12 +342,30 @@
         .cite-row:last-child { margin-bottom: 0; }
         .cite-num { font-weight: 600; color: var(--primary); margin-right: .35rem; }
 
-        /* Typing */
+        /* Typing (standard mode) */
         .typing-row { display: flex; gap: .75rem; align-items: flex-start; }
         .typing-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: .85rem 1.1rem; display: flex; align-items: center; gap: 5px; box-shadow: var(--shadow); transition: var(--transition); }
         .typing-bubble span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); animation: tdot 1.2s ease-in-out infinite; }
         .typing-bubble span:nth-child(2){animation-delay:.2s} .typing-bubble span:nth-child(3){animation-delay:.4s}
         @keyframes tdot{0%,80%,100%{transform:scale(.65);opacity:.45}40%{transform:scale(1);opacity:1}}
+
+        /* Agent progress stepper */
+        .agent-progress { background: var(--surface); border: 1px solid var(--border); border-radius: 0 12px 12px 12px; padding: 1rem 1.25rem; box-shadow: var(--shadow); min-width: 320px; max-width: 420px; }
+        .agent-progress-title { font-size: .75rem; font-weight: 600; color: var(--text-1); margin-bottom: .75rem; display: flex; align-items: center; gap: .45rem; }
+        .agent-progress-title .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .agent-progress-timer { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: .65rem; color: var(--text-4); font-weight: 400; }
+        .agent-steps { display: flex; flex-direction: column; gap: 0; }
+        .agent-step { display: flex; align-items: center; gap: .55rem; padding: .35rem 0; font-size: .75rem; color: var(--text-4); transition: color .3s, opacity .3s; position: relative; }
+        .agent-step.active { color: var(--primary); font-weight: 600; }
+        .agent-step.done { color: var(--ts-c); }
+        .agent-step .step-icon { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .65rem; flex-shrink: 0; border: 1.5px solid var(--border); background: var(--surface-up); transition: all .3s; }
+        .agent-step.active .step-icon { border-color: var(--primary); background: var(--primary-bg); animation: pulse-ring 1.5s ease infinite; }
+        .agent-step.done .step-icon { border-color: var(--ts-br); background: var(--ts-bg); }
+        @keyframes pulse-ring { 0%,100% { box-shadow: 0 0 0 0 rgba(51,65,85,.2); } 50% { box-shadow: 0 0 0 4px rgba(51,65,85,.08); } }
+        .step-line { position: absolute; left: 8.5px; top: 28px; width: 1.5px; height: 10px; background: var(--border); }
+        .agent-step:last-child .step-line { display: none; }
+        .agent-step.done .step-line { background: var(--ts-br); }
 
         /* ── INPUT BAR ──────────────────────────────────── */
         .input-area { padding: .85rem 1.5rem .85rem; background: var(--bg); flex-shrink: 0; transition: var(--transition); }
@@ -360,6 +418,31 @@
         IndicRAG
     </div>
     <div class="sidebar-scroll">
+        <div class="sidebar-section">
+            <div class="section-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                Pipeline Mode
+            </div>
+            <div class="strategy-card selected" id="cardStandard" onclick="selectMode('standard')">
+                <label>
+                    <input type="radio" name="mode" id="radioStandard" value="standard" checked onchange="selectMode('standard')">
+                    <div class="strategy-card-body">
+                        <span class="strategy-title">Standard RAG</span>
+                        <span class="strategy-desc">Single-pass retrieval & generation</span>
+                    </div>
+                </label>
+            </div>
+            <div class="strategy-card" id="cardAgent" onclick="selectMode('agent')">
+                <label>
+                    <input type="radio" name="mode" id="radioAgent" value="agent" onchange="selectMode('agent')">
+                    <div class="strategy-card-body">
+                        <span class="strategy-title">Agentic RAG</span>
+                        <span class="strategy-desc">Multi-tool · Reflexion · arXiv & Semantic Scholar</span>
+                    </div>
+                </label>
+            </div>
+        </div>
+
         <div class="sidebar-section">
             <div class="section-label">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
@@ -428,7 +511,7 @@
             <div class="header-title">Research Assistant</div>
             <div class="header-sub">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-                Using multilingual-e5-base & IndicTrans2
+                BGE-M3 embeddings · Gemini 3.5 Flash · Agentic pipeline
             </div>
         </div>
         <div class="header-actions">
@@ -444,7 +527,9 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><line x1="10" y1="21" x2="14" y2="21"/></svg>
             </div>
             <div class="welcome-bubble">
-                Welcome to the IndicRAG Interface. Upload your scientific PDFs and ask questions in English or your preferred Indic language.
+                Welcome to <strong>IndicRAG</strong>. Upload scientific PDFs and ask questions in English or any Indic language.<br><br>
+                <strong>Standard RAG</strong> — single-pass retrieval from your corpus.<br>
+                <strong>Agentic RAG</strong> — multi-tool pipeline with arXiv, Semantic Scholar, web search, code execution, and reflexion loops for self-correcting answers.
             </div>
         </div>
     </div>
@@ -464,7 +549,7 @@
         <div class="input-error" id="inputError"></div>
         <div class="input-disclaimer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            ANSWERS ARE GENERATED BASED ON UPLOADED DOCUMENTS
+            STANDARD MODE USES UPLOADED DOCUMENTS · AGENT MODE CAN ALSO SEARCH ARXIV & THE WEB
         </div>
     </div>
 </main>
@@ -513,6 +598,7 @@
 const API       = window.location.origin;
 let sessionId   = null;
 let strategy    = 'A';
+let pipelineMode = 'standard';
 let isLoading   = false;
 let pendingPurge = null;
 
@@ -534,6 +620,16 @@ function toggleTheme() {
     applyTheme(saved === 'dark');
 })();
 
+// ── PIPELINE MODE ─────────────────────────────────────────────
+function selectMode(m) {
+    pipelineMode = m;
+    document.getElementById('radioStandard').checked = m === 'standard';
+    document.getElementById('radioAgent').checked = m === 'agent';
+    document.getElementById('cardStandard').classList.toggle('selected', m === 'standard');
+    document.getElementById('cardAgent').classList.toggle('selected', m === 'agent');
+    updatePlaceholder();
+}
+
 // ── STRATEGY ───────────────────────────────────────────────────
 function selectStrategy(s) {
     strategy = s;
@@ -541,9 +637,13 @@ function selectStrategy(s) {
     document.getElementById('radioB').checked = s === 'B';
     document.getElementById('cardA').classList.toggle('selected', s === 'A');
     document.getElementById('cardB').classList.toggle('selected', s === 'B');
-    const stratName = s === 'A' ? 'Direct Multilingual' : 'English Pivot';
+    updatePlaceholder();
+}
+function updatePlaceholder() {
+    const stratName = strategy === 'A' ? 'Direct Multilingual' : 'English Pivot';
+    const modeLabel = pipelineMode === 'agent' ? 'Agentic' : stratName;
     document.getElementById('chatInput').placeholder =
-        `Ask a question in English or an Indic language (using ${stratName})...`;
+        `Ask a question in English or an Indic language (${modeLabel})...`;
 }
 
 // ── RENDER ─────────────────────────────────────────────────────
@@ -563,9 +663,10 @@ function renderContent(text) {
         catch { r = display ? `<pre>$$${tex}$$</pre>` : `<code>$${tex}$</code>`; }
         html = html.split(id).join(r);
     });
-    return html;
+    return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
 }
 function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
+function safeHref(u) { try { const p = new URL(u, window.location.origin); return (p.protocol === 'https:' || p.protocol === 'http:') ? p.href : ''; } catch { return ''; } }
 
 // ── SESSION ────────────────────────────────────────────────────
 function updateSessionBadge() {
@@ -579,7 +680,9 @@ function newConversation() {
         <div class="welcome-row" id="welcomeMsg">
             <div class="bot-avatar">${botAvatarSvg}</div>
             <div class="welcome-bubble">
-                Welcome to the IndicRAG Interface. Upload your scientific PDFs and ask questions in English or your preferred Indic language.
+                Welcome to <strong>IndicRAG</strong>. Upload scientific PDFs and ask questions in English or any Indic language.<br><br>
+                <strong>Standard RAG</strong> — single-pass retrieval from your corpus.<br>
+                <strong>Agentic RAG</strong> — multi-tool pipeline with arXiv, Semantic Scholar, web search, code execution, and reflexion loops for self-correcting answers.
             </div>
         </div>`;
 }
@@ -595,15 +698,72 @@ function appendUserBubble(text) {
     document.getElementById('chatArea').appendChild(row);
     scrollBottom();
 }
+let _agentTimerInterval = null;
+const AGENT_STEPS = [
+    { icon: '🧠', label: 'Planning query…' },
+    { icon: '🔍', label: 'Selecting tools…' },
+    { icon: '⚡', label: 'Executing tools…' },
+    { icon: '✍️', label: 'Generating answer…' },
+    { icon: '🔄', label: 'Evaluating (reflexion)…' },
+];
+const AGENT_STEP_TIMINGS = [2000, 5000, 15000, 30000, 45000];
+
 function appendTyping() {
     removeWelcome();
     const row = document.createElement('div');
     row.id = 'typingRow'; row.className = 'typing-row';
-    row.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="typing-bubble"><span></span><span></span><span></span></div>`;
-    document.getElementById('chatArea').appendChild(row);
+    if (pipelineMode === 'agent') {
+        const stepsHtml = AGENT_STEPS.map((s, i) =>
+            `<div class="agent-step${i === 0 ? ' active' : ''}" data-step="${i}">
+                <span class="step-icon">${s.icon}</span>
+                <span>${s.label}</span>
+                <div class="step-line"></div>
+            </div>`
+        ).join('');
+        row.innerHTML = `
+            <div class="bot-avatar">${botAvatarSvg}</div>
+            <div class="agent-progress">
+                <div class="agent-progress-title">
+                    <span class="spinner"></span>
+                    Agent working
+                    <span class="agent-progress-timer" id="agentTimer">0s</span>
+                </div>
+                <div class="agent-steps" id="agentSteps">${stepsHtml}</div>
+            </div>`;
+        document.getElementById('chatArea').appendChild(row);
+
+        let elapsed = 0;
+        let currentStep = 0;
+        _agentTimerInterval = setInterval(() => {
+            elapsed++;
+            const timer = document.getElementById('agentTimer');
+            if (timer) timer.textContent = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed/60)}m ${elapsed%60}s`;
+
+            if (currentStep < AGENT_STEPS.length - 1) {
+                const threshold = AGENT_STEP_TIMINGS[currentStep] / 1000;
+                if (elapsed >= threshold) {
+                    const steps = document.querySelectorAll('#agentSteps .agent-step');
+                    if (steps[currentStep]) { steps[currentStep].classList.remove('active'); steps[currentStep].classList.add('done'); steps[currentStep].querySelector('.step-icon').textContent = '✓'; }
+                    currentStep++;
+                    if (steps[currentStep]) steps[currentStep].classList.add('active');
+                }
+            }
+        }, 1000);
+    } else {
+        row.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="typing-bubble"><span></span><span></span><span></span></div>`;
+        document.getElementById('chatArea').appendChild(row);
+    }
     scrollBottom();
 }
-function removeTyping() { const t=document.getElementById('typingRow'); if(t)t.remove(); }
+function removeTyping() {
+    if (_agentTimerInterval) { clearInterval(_agentTimerInterval); _agentTimerInterval = null; }
+    const t = document.getElementById('typingRow'); if (t) t.remove();
+}
+
+const TOOL_ICONS = {
+    indicrag_retrieval: '📚', web_search: '🌐', calculate: '🧮',
+    execute_python: '🐍', arxiv_search: '📄', open_access_search: '🔬',
+};
 
 function appendAssistantBubble(data) {
     const cites = data.citations || [];
@@ -628,6 +788,98 @@ function appendAssistantBubble(data) {
     document.getElementById('chatArea').appendChild(row);
     scrollBottom();
 }
+
+const SOURCE_BADGES = {
+    arxiv: 'arxiv', semantic_scholar: 'semantic_scholar', openalex: 'openalex',
+    web_search: 'web', indicrag_retrieval: 'corpus', calculator: 'corpus',
+    code_executor: 'corpus',
+};
+function _sourceBadgeClass(section) {
+    return SOURCE_BADGES[section] || (section && section.includes('arxiv') ? 'arxiv' : 'corpus');
+}
+function _sourceBadgeLabel(section) {
+    const labels = { arxiv: 'arXiv', semantic_scholar: 'Semantic Scholar', openalex: 'OpenAlex', web_search: 'Web', corpus: 'Corpus' };
+    return labels[_sourceBadgeClass(section)] || section || 'Source';
+}
+
+function appendAgentBubble(data) {
+    const tools = data.tool_calls || [];
+    const sources = data.sources || [];
+    const metaChips =
+        `<span class="meta-chip chip-agent">Agent</span>` +
+        `<span class="meta-chip chip-lang">${esc(data.language||'en')}</span>` +
+        (tools.length ? `<span class="meta-chip chip-tools">${tools.length} tool call${tools.length>1?'s':''}</span>` : '') +
+        (sources.length ? `<span class="meta-chip chip-cite">${sources.length} source${sources.length>1?'s':''}</span>` : '') +
+        (data.reflexion_iterations ? `<span class="meta-chip chip-reflexion">${data.reflexion_iterations} reflexion${data.reflexion_iterations>1?'s':''}</span>` : '') +
+        `<span class="meta-chip chip-time">${(data.processing_time||0).toFixed(1)}s</span>`;
+
+    // Sources section
+    const sourcesHtml = sources.length ? `
+        <div class="asst-sources">
+            <div class="sources-label">Sources (${sources.length})</div>
+            ${sources.map((s, i) => {
+                const badgeCls = _sourceBadgeClass(s.section);
+                const badgeLabel = _sourceBadgeLabel(s.section);
+                const srcHref = safeHref(s.source);
+                const pdfHref = safeHref(s.pdf_url);
+                const titleLink = srcHref ? `<a href="${esc(srcHref)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title);
+                const metaParts = [];
+                if (s.authors) metaParts.push(`<span class="source-meta-item">👤 ${esc(s.authors.length > 60 ? s.authors.slice(0,60)+'…' : s.authors)}</span>`);
+                if (s.year && s.year !== 'N/A' && s.year !== '') metaParts.push(`<span class="source-meta-item">📅 ${esc(s.year)}</span>`);
+                if (s.citations) metaParts.push(`<span class="source-meta-item">📊 ${s.citations} cited</span>`);
+                const pdfLink = pdfHref ? `<a class="source-pdf-link" href="${esc(pdfHref)}" target="_blank" rel="noopener noreferrer">PDF ↗</a>` : '';
+                return `<div class="source-card">
+                    <div class="source-header">
+                        <span class="cite-num">[${i+1}]</span>
+                        <span class="source-badge ${badgeCls}">${badgeLabel}</span>
+                        <span class="source-title">${titleLink}</span>
+                        ${pdfLink}
+                    </div>
+                    ${metaParts.length ? `<div class="source-meta">${metaParts.join('')}</div>` : ''}
+                </div>`;
+            }).join('')}
+        </div>` : '';
+
+    // Tools section (collapsed into a summary)
+    const toolsHtml = tools.length ? `
+        <div class="asst-tools">
+            <div class="tools-label">Tools Used</div>
+            ${tools.map(t => {
+                const icon = TOOL_ICONS[t.tool] || '🔧';
+                const args = t.args ? Object.entries(t.args).map(([k,v]) => `${k}=${typeof v==='string'&&v.length>50?v.slice(0,50)+'…':v}`).join(', ') : '';
+                return `<div class="tool-row">
+                    <span class="tool-icon">${icon}</span>
+                    <span class="tool-name">${esc(t.tool)}</span>
+                    <span class="tool-args" title="${esc(args)}">${esc(args)}</span>
+                    <span class="tool-latency">${(t.latency_ms||0).toFixed(0)}ms</span>
+                </div>`;
+            }).join('')}
+        </div>` : '';
+
+    const row = document.createElement('div');
+    row.className = 'msg-row assistant';
+    row.innerHTML = `
+        <div class="bot-avatar">${botAvatarSvg}</div>
+        <div class="asst-bubble">
+            <div class="asst-meta">${metaChips}</div>
+            <div class="asst-text">${renderContent(data.answer||'')}</div>
+            ${sourcesHtml}
+            ${toolsHtml}
+        </div>`;
+    document.getElementById('chatArea').appendChild(row);
+    scrollBottom();
+}
+function appendErrorBubble(msg) {
+    const row = document.createElement('div');
+    row.className = 'msg-row assistant';
+    row.innerHTML = `
+        <div class="bot-avatar">${botAvatarSvg}</div>
+        <div class="asst-bubble" style="border-color:var(--te-br,#ef4444);background:rgba(239,68,68,0.08);">
+            <div class="asst-text" style="color:#f87171;">⚠ ${esc(msg)}</div>
+        </div>`;
+    document.getElementById('chatArea').appendChild(row);
+    scrollBottom();
+}
 function scrollBottom() { const a=document.getElementById('chatArea'); a.scrollTop=a.scrollHeight; }
 
 // ── SEND ───────────────────────────────────────────────────────
@@ -641,15 +893,27 @@ async function sendMessage() {
     document.getElementById('sendBtn').disabled = true;
     appendUserBubble(text); appendTyping();
     try {
-        const res = await fetch(`${API}/chat`, {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
-        });
-        if (!res.ok) { const e=await res.json(); throw new Error(e.detail?.error||e.detail||'Request failed'); }
-        const data = await res.json();
-        sessionId = data.session_id; updateSessionBadge();
-        removeTyping(); appendAssistantBubble(data);
-    } catch(e) { removeTyping(); showInputError(e.message); }
+        let res, data;
+        if (pipelineMode === 'agent') {
+            res = await fetch(`${API}/agent/query`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ question: text, session_id: sessionId, strategy })
+            });
+            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
+            data = await res.json();
+            sessionId = data.session_id; updateSessionBadge();
+            removeTyping(); appendAgentBubble(data);
+        } else {
+            res = await fetch(`${API}/chat`, {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
+            });
+            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
+            data = await res.json();
+            sessionId = data.session_id; updateSessionBadge();
+            removeTyping(); appendAssistantBubble(data);
+        }
+    } catch(e) { removeTyping(); appendErrorBubble(e.message); }
     finally { isLoading=false; document.getElementById('sendBtn').disabled=false; input.focus(); }
 }
 
