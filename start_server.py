@@ -37,12 +37,19 @@ def check_api_key():
     from dotenv import load_dotenv
     load_dotenv()
     
-    api_key = os.getenv('LLM_API_KEY')
-    if not api_key or api_key == 'your-gemini-api-key-here':
+    raw_keys = os.getenv('LLM_API_KEYS', '')
+    api_key = os.getenv('LLM_API_KEY', '')
+    keys = [k.strip() for k in raw_keys.split(',') if k.strip()] if raw_keys else []
+    if not keys and api_key and api_key != 'your-gemini-api-key-here':
+        keys = [api_key]
+    if not keys:
         logger.error("✗ Gemini API key not configured!")
-        logger.info("  Edit .env and set your API key")
+        logger.info("  Edit .env and set LLM_API_KEY or LLM_API_KEYS")
         return False
-    logger.info("✓ Gemini API key configured")
+    if len(keys) > 1:
+        logger.info(f"✓ Gemini API keys configured ({len(keys)} keys, load balanced)")
+    else:
+        logger.info("✓ Gemini API key configured")
     return True
 
 

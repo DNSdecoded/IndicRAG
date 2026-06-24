@@ -1,6 +1,6 @@
 """BM25 lexical search index for hybrid retrieval (dense + sparse)."""
 import math
-import re
+import regex
 import threading
 import logging
 from collections import Counter
@@ -28,7 +28,7 @@ class BM25Index:
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
-        return re.findall(r'\b\w+\b', text.lower())
+        return regex.findall(r'\w+', text.lower())
 
     def build(self, ids: List[str], texts: List[str]):
         self.doc_ids = list(ids)

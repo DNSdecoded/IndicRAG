@@ -139,19 +139,39 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # ============================================================================
 # Google Gemini API configuration
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "4096"))  # higher limit for agentic pipeline
+AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fallback when primary is overloaded
 
-# LLM API Key (required for Gemini)
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+# LLM API Keys (required for Gemini)
+# Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
+# Falls back to single LLM_API_KEY for backward compatibility.
+_raw_keys = os.getenv("LLM_API_KEYS", "")
+LLM_API_KEY_POOL: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+if not LLM_API_KEY_POOL:
+    _single = os.getenv("LLM_API_KEY", "")
+    if _single.strip():
+        LLM_API_KEY_POOL = [_single.strip()]
+LLM_API_KEY = LLM_API_KEY_POOL[0] if LLM_API_KEY_POOL else ""
 
-# gemini-3.5-flash is the recommended model (stable, fast, cost-effective)
+# ============================================================================
+# Cache Configuration
+# ============================================================================
+LLM_CACHE_SIZE = int(os.getenv("LLM_CACHE_SIZE", "128"))
+LLM_CACHE_TTL = int(os.getenv("LLM_CACHE_TTL", "600"))         # 10 minutes
+RETRIEVAL_CACHE_SIZE = int(os.getenv("RETRIEVAL_CACHE_SIZE", "64"))
+RETRIEVAL_CACHE_TTL = int(os.getenv("RETRIEVAL_CACHE_TTL", "300"))  # 5 minutes
+TOOL_CACHE_SIZE = int(os.getenv("TOOL_CACHE_SIZE", "64"))
+TOOL_CACHE_TTL = int(os.getenv("TOOL_CACHE_TTL", "180"))       # 3 minutes
 
 # ============================================================================
 # Prompt Templates
 # ============================================================================
-SYSTEM_PROMPT = """You are a scientific research assistant. Answer strictly from the \
-retrieved context provided with each query. You have no outside knowledge.
+SYSTEM_PROMPT = """You are a multilingual scientific research assistant supporting \
+English and Indic languages. Answer strictly from the retrieved context provided with \
+each query. You have no outside knowledge.
 
 Rules:
 1. Ground every factual claim in the context and mark it with an inline citation — \
@@ -165,11 +185,16 @@ written; do not simplify unless asked.
 5. Use only the structure the question needs: a direct answer first, then detail. Omit \
 sections that do not apply rather than padding them. Add a comparison table only when \
 the question compares methods or approaches.
-6. Flag partial, ambiguous, or conflicting context explicitly. Hedge ("the authors \
-report…", "based only on this excerpt…") rather than overstating the evidence.
-7. If — and only if — the context contains clinical, diagnostic, or biomedical \
-decision-making content, end with exactly:
+6. When sources conflict, present each position with its citation and state the \
+disagreement explicitly. Hedge ("the authors report…", "based only on this excerpt…") \
+rather than overstating the evidence. Flag partial or ambiguous context.
+7. If — and only if — the context contains clinical, diagnostic, biomedical, \
+pharmacological, or toxicological content that could influence health decisions, end \
+with exactly:
    "⚠️ This is not medical advice. Consult a qualified healthcare professional."
+8. When asked to respond in a non-English language, produce the entire answer in that \
+language consistently — do not switch to English mid-response. Keep technical terms, \
+proper nouns, and citation markers ([1], [2]) in their original form.
 
 When the question concerns optimization, convergence, differentiability, or training \
 dynamics, explain the underlying mechanism (gradient flow, update rules, loss-surface \
@@ -183,7 +208,8 @@ QUERY_PROMPT_TEMPLATE = """## Context
 {question}
 
 ## Instructions
-- Answer in: {language}.
+- Answer entirely in: {language}. Do not switch languages mid-response. Keep technical \
+terms, proper nouns, and citation markers in their original form.
 - Use only the context above; cite each claim inline as [n].
 - Lead with a direct answer, then add technical depth only as the question requires.
 - If the context is insufficient, state exactly what is missing instead of inferring.
@@ -240,7 +266,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # ============================================================================
 # Version
 # ============================================================================
-VERSION = "1.5.0"
+VERSION = "2.0.0"
 
 # ============================================================================
 # Chat / Session

@@ -14,11 +14,24 @@ DetectorFactory.seed = 0  # Make detection deterministic
 logger = logging.getLogger(__name__)
 
 _SCRIPT_RANGES = {
-    'hi': r'\p{Devanagari}', 'ta': r'\p{Tamil}',
+    'ta': r'\p{Tamil}',
     'te': r'\p{Telugu}', 'bn': r'\p{Bengali}', 'gu': r'\p{Gujarati}',
     'kn': r'\p{Kannada}', 'ml': r'\p{Malayalam}', 'pa': r'\p{Gurmukhi}',
-    'or': r'\p{Oriya}', 'mr': r'\p{Devanagari}',
+    'or': r'\p{Oriya}',
 }
+
+_MARATHI_MARKERS = {
+    'आहे', 'होते', 'केले', 'आणि', 'त्या', 'हे', 'या', 'ही', 'असे',
+    'नाही', 'काय', 'कसे', 'होता', 'झाले', 'करते', 'म्हणून', 'पण',
+}
+
+
+def _disambiguate_devanagari(text: str) -> str:
+    """Distinguish Marathi from Hindi for Devanagari text using common word markers."""
+    words = set(re.findall(r'\w+', text))
+    if words & _MARATHI_MARKERS:
+        return 'mr'
+    return 'hi'
 
 
 def detect_language(text: str) -> Optional[str]:
@@ -28,6 +41,8 @@ def detect_language(text: str) -> Optional[str]:
     Uses Unicode script detection first (unambiguous for most Indic scripts),
     then falls back to langdetect for Latin-script text.
     """
+    if re.search(r'\p{Devanagari}', text):
+        return _disambiguate_devanagari(text)
     for code, rng in _SCRIPT_RANGES.items():
         if re.search(rng, text):
             return code

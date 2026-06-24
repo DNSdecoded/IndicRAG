@@ -87,6 +87,9 @@ async def lifespan(app):
     if config.USE_RERANKER:
         import rerank
         rerank._load()
+    if config.USE_HYBRID_SEARCH:
+        import bm25_search
+        bm25_search.get_or_build_index()
     yield
 
 # Initialize FastAPI app
@@ -344,7 +347,7 @@ async def health_check():
         status="healthy",
         timestamp=datetime.utcnow().isoformat(),
         version=config.VERSION,
-        gemini_configured=bool(config.LLM_API_KEY)
+        gemini_configured=bool(config.LLM_API_KEY_POOL)
     )
 
 
@@ -557,6 +560,11 @@ async def ingest_document(
             bm25_search.invalidate()
         except Exception:
             pass
+        try:
+            from cache import retrieval_cache
+            retrieval_cache.invalidate()
+        except Exception:
+            pass
 
         processing_time = time.time() - start_time
 
@@ -588,6 +596,11 @@ def _run_bulk_ingest(job_id: str):
         try:
             import bm25_search
             bm25_search.invalidate()
+        except Exception:
+            pass
+        try:
+            from cache import retrieval_cache
+            retrieval_cache.invalidate()
         except Exception:
             pass
         processing_time = time.time() - start_time
@@ -667,6 +680,27 @@ async def get_ingest_status(
             detail=f"Job '{job_id}' not found."
         )
     return JobStatusResponse(**job)
+
+
+@app.get("/cache/stats", tags=["Management"])
+async def cache_stats(authenticated: bool = Depends(verify_api_key)):
+    """Get cache hit/miss statistics for LLM, retrieval, and tool caches."""
+    from cache import llm_cache, retrieval_cache, tool_cache
+    return {
+        "llm": llm_cache.stats,
+        "retrieval": retrieval_cache.stats,
+        "tool": tool_cache.stats,
+    }
+
+
+@app.delete("/cache", tags=["Management"])
+async def clear_caches(authenticated: bool = Depends(verify_api_key)):
+    """Clear all caches."""
+    from cache import llm_cache, retrieval_cache, tool_cache
+    llm_cache.invalidate()
+    retrieval_cache.invalidate()
+    tool_cache.invalidate()
+    return {"status": "cleared"}
 
 
 @app.get("/stats", tags=["Management"])
@@ -869,13 +903,158 @@ async def purge_database(authenticated: bool = Depends(verify_admin_key)):
         )
 
 
+# ============================================================================
+# Agentic RAG Endpoint
+# ============================================================================
+
+from agent.graph import agent_graph
+from agent.state import AgentState
+
+
+class AgentQueryRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    session_id: Optional[str] = None
+    strategy: str = Field("A")
+
+    @field_validator("strategy")
+    @classmethod
+    def validate_strategy(cls, v):
+        if v not in ("A", "B"):
+            raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+
+class AgentSource(BaseModel):
+    title: str
+    source: str = ""
+    section: str = ""
+    pdf_url: str = ""
+    year: str = ""
+    authors: str = ""
+    citations: int = 0
+
+
+class AgentQueryResponse(BaseModel):
+    answer: str
+    session_id: str
+    language: str
+    reflexion_iterations: int
+    tool_calls: List[dict]
+    sources: List[AgentSource]
+    processing_time: float
+    timestamp: str
+
+
+@app.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
+async def agent_query(
+    request: AgentQueryRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """
+    Answer a question using the agentic IndicRAG pipeline with reflexion loops.
+    Supports the same 10+ languages as /query and /chat.
+    """
+    start_time = time.time()
+    session_id, messages = _get_or_create_session(request.session_id)
+
+    initial_state = AgentState(
+        original_query=request.question,
+        detected_language="",
+        query_plan=[],
+        tool_calls_requested=[],
+        retrieved_contexts=[],
+        draft_answer=None,
+        final_answer=None,
+        reflexion_count=0,
+        reflexion_history=[],
+        tool_calls_log=[],
+        session_id=session_id,
+        strategy=request.strategy,
+    )
+
+    import asyncio
+    try:
+        result = await asyncio.wait_for(
+            run_in_threadpool(agent_graph.invoke, initial_state),
+            timeout=float(config.AGENT_TIMEOUT),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Agent timed out after {config.AGENT_TIMEOUT}s for query: {request.question[:80]}")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail={"error": "Agent pipeline timed out. Try a simpler query or use Standard RAG mode.", "code": "AGENT_TIMEOUT"},
+        )
+    except Exception as e:
+        err_str = str(e)
+        # Detect Gemini 503/429 — surface as 503 so the client knows to retry
+        is_llm_unavailable = (
+            "503" in err_str or "429" in err_str
+            or "UNAVAILABLE" in err_str
+            or "RESOURCE_EXHAUSTED" in err_str
+            or "high demand" in err_str.lower()
+            or "unreachable" in err_str.lower()
+        )
+        if is_llm_unavailable:
+            logger.warning(f"LLM service unavailable for agent query: {err_str[:200]}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": "The AI model is temporarily unavailable due to high demand. "
+                             "Please try again in a few seconds.",
+                    "code": "LLM_UNAVAILABLE",
+                },
+            )
+        logger.error(f"Agent error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": err_str, "code": "AGENT_ERROR"},
+        )
+
+    _append_session_messages(session_id, request.question, result["final_answer"])
+    processing_time = time.time() - start_time
+
+    logger.info(
+        f"Agent query: lang={result['detected_language']} "
+        f"reflexion={result['reflexion_count']} time={processing_time:.2f}s"
+    )
+
+    # Extract unique sources from retrieved contexts
+    seen_titles = set()
+    sources = []
+    for ctx in result.get("retrieved_contexts", []):
+        title = ctx.get("title", "").strip()
+        if not title or title in seen_titles or title in ("Unknown", "No results"):
+            continue
+        seen_titles.add(title)
+        sources.append(AgentSource(
+            title=title,
+            source=ctx.get("source", ""),
+            section=ctx.get("section", ""),
+            pdf_url=ctx.get("pdf_url", ""),
+            year=ctx.get("year", ""),
+            authors=ctx.get("authors", ""),
+            citations=ctx.get("citations", 0),
+        ))
+
+    return AgentQueryResponse(
+        answer=result["final_answer"],
+        session_id=session_id,
+        language=result.get("detected_language", "en"),
+        reflexion_iterations=result.get("reflexion_count", 0),
+        tool_calls=result.get("tool_calls_log", []),
+        sources=sources,
+        processing_time=processing_time,
+        timestamp=datetime.utcnow().isoformat(),
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,  # Set to True for development
+        reload=False,
         log_level=config.LOG_LEVEL.lower()
     )

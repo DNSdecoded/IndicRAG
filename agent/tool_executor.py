@@ -1,0 +1,382 @@
+import ast
+import time
+import re
+import logging
+import json
+import os
+import urllib.request
+import urllib.parse
+import urllib.error
+
+import subprocess
+import sys
+import tempfile
+
+import numexpr
+import arxiv
+from tavily import TavilyClient
+
+import rag
+import config
+
+logger = logging.getLogger(__name__)
+_tavily = None
+
+
+def _get_tavily():
+    global _tavily
+    if _tavily is None:
+        _tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+    return _tavily
+
+
+def _expand_query_variants(query: str) -> list[str]:
+    from google.genai import types
+
+    client = rag._get_client()
+    prompt = (
+        f'Generate 3 alternative phrasings for this search query.\n'
+        f'Return JSON only: {{"variants": ["...", "...", "..."]}}\n'
+        f'Query: {query}'
+    )
+    resp = client.models.generate_content(
+        model=config.LLM_MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.7, max_output_tokens=256),
+    )
+    try:
+        clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
+        return json.loads(clean)["variants"]
+    except Exception:
+        return [query]
+
+
+def execute_indicrag(query: str, expand_query: bool = False) -> dict:
+    import hashlib
+    _MIN_EXPAND_WORDS = 4
+    should_expand = expand_query and len(query.split()) >= _MIN_EXPAND_WORDS
+
+    if should_expand:
+        variants = _expand_query_variants(query)
+        passages, seen = [], set()
+        for q in [query] + variants:
+            result = rag.retrieve_context(q)
+            for chunk, meta in zip(result["chunks"], result["metadatas"]):
+                key = hashlib.sha256(chunk.encode()).hexdigest()
+                if key not in seen:
+                    passages.append({"text": chunk, **meta})
+                    seen.add(key)
+        return {"passages": passages[: config.MAX_CONTEXT_CHUNKS]}
+    else:
+        result = rag.retrieve_context(query)
+        passages = [
+            {"text": chunk, **meta}
+            for chunk, meta in zip(result["chunks"], result["metadatas"])
+        ]
+        return {"passages": passages}
+
+
+def execute_web_search(query: str, num_results: int = 5) -> dict:
+    results = _get_tavily().search(
+        query=query,
+        max_results=min(num_results, 10),
+        search_depth="basic",
+        include_raw_content=False,
+    )
+    return {
+        "passages": [
+            {"text": r["content"], "title": r["title"], "source": r["url"]}
+            for r in results.get("results", [])
+        ]
+    }
+
+
+def execute_calculate(expression: str) -> dict:
+    cleaned = expression.replace("^", "**").strip()
+    try:
+        result = float(numexpr.evaluate(cleaned))
+        return {"text": f"Result: {result}", "source": "calculator"}
+    except Exception as e:
+        return {"text": f"Calculation error: {e}", "source": "calculator"}
+
+
+_SANDBOX_TIMEOUT = 10
+
+_ALLOWED_MODULES = frozenset({
+    "math", "statistics", "decimal", "fractions",
+    "collections", "itertools", "functools",
+    "re", "json", "datetime", "random", "string",
+})
+
+_DANGEROUS_NAMES = frozenset({
+    "eval", "exec", "compile", "execfile",
+    "__import__", "breakpoint", "exit", "quit",
+    "open", "input", "help", "credits", "license",
+    "getattr", "setattr", "delattr", "vars", "dir",
+    "globals", "locals", "memoryview", "type",
+})
+
+
+def _validate_ast(code: str) -> str | None:
+    """Parse code and validate AST. Returns error message or None if safe."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return f"Syntax error: {e}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            else:
+                names = [node.module.split(".")[0]] if node.module else []
+            for name in names:
+                if name not in _ALLOWED_MODULES:
+                    return f"Import '{name}' is not allowed. Allowed: {', '.join(sorted(_ALLOWED_MODULES))}"
+
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
+            return f"Access to dunder attribute '{node.attr}' is not allowed"
+
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _DANGEROUS_NAMES:
+                return f"Call to '{func.id}()' is not allowed"
+            if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_NAMES:
+                return f"Call to '.{func.attr}()' is not allowed"
+
+    return None
+
+
+def execute_python(code: str) -> dict:
+    error = _validate_ast(code)
+    if error:
+        return {"text": f"Blocked: {error}", "source": "code_executor"}
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            f.write(code)
+            tmp_path = f.name
+        result = subprocess.run(
+            [sys.executable, "-u", tmp_path],
+            capture_output=True, text=True, timeout=_SANDBOX_TIMEOUT,
+            env={"PATH": "", "PYTHONPATH": "", "PYTHONDONTWRITEBYTECODE": "1"},
+            cwd=tempfile.gettempdir(),
+        )
+        output = result.stdout.strip()
+        if result.returncode != 0:
+            err = result.stderr.strip()
+            return {"text": f"Runtime error: {err}\n{output}".strip(), "source": "code_executor"}
+        return {"text": output or "(no output)", "source": "code_executor"}
+    except subprocess.TimeoutExpired:
+        return {"text": f"Execution timed out after {_SANDBOX_TIMEOUT}s.", "source": "code_executor"}
+    except Exception as e:
+        return {"text": f"Sandbox error: {e}", "source": "code_executor"}
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+def execute_arxiv_search(query: str, max_results: int = 5, sort_by: str = "relevance") -> dict:
+    sort = arxiv.SortCriterion.Relevance if sort_by != "submitted_date" else arxiv.SortCriterion.SubmittedDate
+    client = arxiv.Client()
+    search = arxiv.Search(
+        query=query,
+        max_results=min(max_results, 10),
+        sort_by=sort,
+    )
+    passages = []
+    for paper in client.results(search):
+        authors = ", ".join(a.name for a in paper.authors[:5])
+        if len(paper.authors) > 5:
+            authors += f" (+{len(paper.authors) - 5} more)"
+        text = (
+            f"Title: {paper.title}\n"
+            f"Authors: {authors}\n"
+            f"Published: {paper.published.strftime('%Y-%m-%d')}\n"
+            f"Abstract: {paper.summary[:600]}"
+        )
+        passages.append({
+            "text": text,
+            "title": paper.title,
+            "source": paper.entry_id,
+            "section": "arxiv",
+            "pdf_url": paper.pdf_url,
+            "arxiv_id": paper.entry_id.split("/")[-1],
+        })
+    return {"passages": passages}
+
+
+_S2_API = "https://api.semanticscholar.org/graph/v1/paper/search"
+_S2_FIELDS = "title,abstract,authors,year,citationCount,openAccessPdf,externalIds,url"
+
+_OPENALEX_API = "https://api.openalex.org/works"
+
+
+def _parse_s2_papers(data: dict) -> list[dict]:
+    passages = []
+    for paper in data.get("data", []):
+        authors = ", ".join(a.get("name", "") for a in (paper.get("authors") or [])[:5])
+        if len(paper.get("authors") or []) > 5:
+            authors += f" (+{len(paper['authors']) - 5} more)"
+        pdf_url = ""
+        oa = paper.get("openAccessPdf")
+        if oa and isinstance(oa, dict):
+            pdf_url = oa.get("url", "")
+        abstract = (paper.get("abstract") or "No abstract available.")[:600]
+        text = (
+            f"Title: {paper.get('title', 'Unknown')}\n"
+            f"Authors: {authors}\n"
+            f"Year: {paper.get('year', 'N/A')}\n"
+            f"Citations: {paper.get('citationCount', 0)}\n"
+            f"Abstract: {abstract}"
+        )
+        passages.append({
+            "text": text,
+            "title": paper.get("title", "Unknown"),
+            "source": paper.get("url", ""),
+            "section": "semantic_scholar",
+            "pdf_url": pdf_url,
+            "year": str(paper.get("year", "")),
+            "authors": authors,
+            "citations": paper.get("citationCount", 0),
+        })
+    return passages
+
+
+def _fetch_openalex(query: str, max_results: int, year_range: str, open_access_only: bool) -> list[dict]:
+    params = {"search": query, "per_page": min(max_results, 10)}
+    if open_access_only:
+        params["filter"] = "open_access.is_oa:true"
+    if year_range:
+        parts = year_range.split("-")
+        if len(parts) == 2:
+            f = f"from_publication_date:{parts[0]}-01-01"
+            if parts[1]:
+                f += f",to_publication_date:{parts[1]}-12-31"
+            params["filter"] = params.get("filter", "") + ("," if "filter" in params else "") + f
+
+    url = f"{_OPENALEX_API}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "mailto:indicrag@example.com"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode())
+
+    passages = []
+    for work in data.get("results", []):
+        raw_authors = work.get("authorships", [])
+        authors = ", ".join(
+            a.get("author", {}).get("display_name", "") for a in raw_authors[:5]
+        )
+        if len(raw_authors) > 5:
+            authors += f" (+{len(raw_authors) - 5} more)"
+        pdf_url = ""
+        oa_info = work.get("open_access", {})
+        if oa_info.get("oa_url"):
+            pdf_url = oa_info["oa_url"]
+        best_loc = work.get("best_oa_location") or {}
+        if not pdf_url and best_loc.get("pdf_url"):
+            pdf_url = best_loc["pdf_url"]
+
+        title = work.get("display_name") or work.get("title") or "Unknown"
+        year = str(work.get("publication_year", "N/A"))
+        cite_count = work.get("cited_by_count", 0)
+        abstract_inv = work.get("abstract_inverted_index")
+        if abstract_inv and isinstance(abstract_inv, dict):
+            word_pos = []
+            for word, positions in abstract_inv.items():
+                for pos in positions:
+                    word_pos.append((pos, word))
+            word_pos.sort()
+            abstract = " ".join(w for _, w in word_pos)[:600]
+        else:
+            abstract = "No abstract available."
+
+        text = (
+            f"Title: {title}\n"
+            f"Authors: {authors}\n"
+            f"Year: {year}\n"
+            f"Citations: {cite_count}\n"
+            f"Abstract: {abstract}"
+        )
+        source_url = work.get("doi") or work.get("id", "")
+        if source_url and source_url.startswith("https://doi.org/"):
+            pass
+        elif work.get("doi"):
+            source_url = f"https://doi.org/{work['doi']}"
+
+        passages.append({
+            "text": text,
+            "title": title,
+            "source": source_url,
+            "section": "openalex",
+            "pdf_url": pdf_url,
+            "year": year,
+            "authors": authors,
+            "citations": cite_count,
+        })
+    return passages
+
+
+def execute_open_access_search(
+    query: str,
+    max_results: int = 5,
+    year_range: str = "",
+    open_access_only: bool = True,
+) -> dict:
+    # Try Semantic Scholar first with aggressive retry
+    params = {
+        "query": query,
+        "limit": min(max_results, 10),
+        "fields": _S2_FIELDS,
+    }
+    if open_access_only:
+        params["openAccessPdf"] = ""
+    if year_range:
+        params["year"] = year_range
+
+    url = f"{_S2_API}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "IndicRAG/2.0"})
+
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        passages = _parse_s2_papers(data)
+        if passages:
+            return {"passages": passages}
+    except urllib.error.HTTPError as e:
+        logger.warning(f"[OpenAccessSearch] Semantic Scholar failed: {e}")
+    except Exception as e:
+        logger.warning(f"[OpenAccessSearch] Semantic Scholar failed: {e}")
+
+    # Fallback to OpenAlex (free, virtually no rate limits)
+    logger.info("[OpenAccessSearch] Falling back to OpenAlex API")
+    try:
+        passages = _fetch_openalex(query, max_results, year_range, open_access_only)
+        if passages:
+            return {"passages": passages}
+    except Exception as e:
+        logger.error(f"[OpenAccessSearch] OpenAlex also failed: {e}")
+
+    return {"passages": [{"text": "No open-access papers found for this query.", "source": "open_access_search", "title": "No results", "section": "none"}]}
+
+
+TOOL_DISPATCH = {
+    "indicrag_retrieval": lambda args: execute_indicrag(
+        args["query"], args.get("expand_query", False)
+    ),
+    "web_search": lambda args: execute_web_search(
+        args["query"], args.get("num_results", 5)
+    ),
+    "calculate": lambda args: execute_calculate(args["expression"]),
+    "execute_python": lambda args: execute_python(args["code"]),
+    "arxiv_search": lambda args: execute_arxiv_search(
+        args["query"], args.get("max_results", 5), args.get("sort_by", "relevance")
+    ),
+    "open_access_search": lambda args: execute_open_access_search(
+        args["query"], args.get("max_results", 5),
+        args.get("year_range", ""), args.get("open_access_only", True)
+    ),
+}
