@@ -116,6 +116,9 @@ _DANGEROUS_NAMES = frozenset({
     "globals", "locals", "memoryview", "type",
 })
 
+_DUNDER_IN_STRING = re.compile(r"__\w+__")
+_FORMAT_METHODS = frozenset({"format", "format_map"})
+
 
 def _validate_ast(code: str) -> str | None:
     """Parse code and validate AST. Returns error message or None if safe."""
@@ -137,12 +140,26 @@ def _validate_ast(code: str) -> str | None:
         if isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
             return f"Access to dunder attribute '{node.attr}' is not allowed"
 
+        # Block format-string sandbox escapes: "{0.__class__}".format(x)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _DUNDER_IN_STRING.search(node.value):
+                return "String constants must not contain dunder patterns"
+
+        # Block .format() / .format_map() calls (format-string injection vector)
         if isinstance(node, ast.Call):
             func = node.func
+            if isinstance(func, ast.Attribute) and func.attr in _FORMAT_METHODS:
+                return f"Call to '.{func.attr}()' is not allowed in sandbox"
             if isinstance(func, ast.Name) and func.id in _DANGEROUS_NAMES:
                 return f"Call to '{func.id}()' is not allowed"
             if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_NAMES:
                 return f"Call to '.{func.attr}()' is not allowed"
+
+        # Block %-formatting on strings (another format-string vector)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            if isinstance(node.left, ast.Constant) and isinstance(node.left.value, str):
+                if _DUNDER_IN_STRING.search(node.left.value):
+                    return "%-formatting with dunder patterns is not allowed"
 
     return None
 
