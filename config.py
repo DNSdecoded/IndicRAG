@@ -149,10 +149,14 @@ LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fa
 # Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
 # Falls back to single LLM_API_KEY for backward compatibility.
 _raw_keys = os.getenv("LLM_API_KEYS", "")
-LLM_API_KEY_POOL: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+_PLACEHOLDER = "your-gemini-api-key-here"
+LLM_API_KEY_POOL: list[str] = [
+    k.strip() for k in _raw_keys.split(",")
+    if k.strip() and k.strip() != _PLACEHOLDER
+]
 if not LLM_API_KEY_POOL:
     _single = os.getenv("LLM_API_KEY", "")
-    if _single.strip():
+    if _single.strip() and _single.strip() != _PLACEHOLDER:
         LLM_API_KEY_POOL = [_single.strip()]
 LLM_API_KEY = LLM_API_KEY_POOL[0] if LLM_API_KEY_POOL else ""
 

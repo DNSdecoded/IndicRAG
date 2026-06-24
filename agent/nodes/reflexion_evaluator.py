@@ -71,8 +71,9 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
         else:
             action = parsed.get("action", "retrieve_more")
     except Exception as e:
-        logger.warning(f"[Reflexion] Completeness check failed: {e} — defaulting to accept")
-        completeness_score, action, missing = 0.6, "accept", []
+        logger.warning(f"[Reflexion] Completeness check failed: {e}")
+        completeness_score, missing = 0.0, []
+        action = "regenerate" if faithfulness_score >= 0.75 else "retrieve_more"
 
     feedback = ReflexionFeedback(
         faithfulness_score=faithfulness_score,
@@ -82,12 +83,22 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     )
     history = list(state.get("reflexion_history", [])) + [feedback]
 
-    # Detect stuck loop: if completeness didn't improve, accept what we have
+    # Detect stuck loop: if completeness didn't improve, stop looping
     prev = state.get("reflexion_history", [])
     if prev and action != "accept":
         prev_complete = prev[-1].get("completeness_score", 0.0)
         if completeness_score <= prev_complete + 0.05:
-            action = "accept"
+            if faithfulness_score < 0.75:
+                logger.info(
+                    f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} "
+                    f"faith={faithfulness_score:.2f} complete={completeness_score:.2f} "
+                    f"action=safe_stop (stuck with low faithfulness)"
+                )
+                return {
+                    "final_answer": config.NO_DOCUMENTS_RESPONSE,
+                    "reflexion_count": count + 1,
+                    "reflexion_history": history,
+                }
             logger.info(
                 f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} "
                 f"faith={faithfulness_score:.2f} complete={completeness_score:.2f} "

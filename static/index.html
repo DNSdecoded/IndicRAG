@@ -13,6 +13,9 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"
             integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
             crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"
+            integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"
+            crossorigin="anonymous"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         /* ── THEME VARIABLES ───────────────────────────────── */
@@ -422,7 +425,7 @@
             </div>
             <div class="strategy-card selected" id="cardStandard" onclick="selectMode('standard')">
                 <label>
-                    <input type="radio" name="mode" id="radioStandard" value="standard" checked>
+                    <input type="radio" name="mode" id="radioStandard" value="standard" checked onchange="selectMode('standard')">
                     <div class="strategy-card-body">
                         <span class="strategy-title">Standard RAG</span>
                         <span class="strategy-desc">Single-pass retrieval & generation</span>
@@ -431,7 +434,7 @@
             </div>
             <div class="strategy-card" id="cardAgent" onclick="selectMode('agent')">
                 <label>
-                    <input type="radio" name="mode" id="radioAgent" value="agent">
+                    <input type="radio" name="mode" id="radioAgent" value="agent" onchange="selectMode('agent')">
                     <div class="strategy-card-body">
                         <span class="strategy-title">Agentic RAG</span>
                         <span class="strategy-desc">Multi-tool · Reflexion · arXiv & Semantic Scholar</span>
@@ -660,7 +663,7 @@ function renderContent(text) {
         catch { r = display ? `<pre>$$${tex}$$</pre>` : `<code>$${tex}$</code>`; }
         html = html.split(id).join(r);
     });
-    return html;
+    return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
 }
 function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
 function safeHref(u) { try { const p = new URL(u, window.location.origin); return (p.protocol === 'https:' || p.protocol === 'http:') ? p.href : ''; } catch { return ''; } }
@@ -896,7 +899,7 @@ async function sendMessage() {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ question: text, session_id: sessionId, strategy })
             });
-            if (!res.ok) { const e=await res.json(); throw new Error(e.detail?.error||e.detail||'Request failed'); }
+            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
             data = await res.json();
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAgentBubble(data);
@@ -905,7 +908,7 @@ async function sendMessage() {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
             });
-            if (!res.ok) { const e=await res.json(); throw new Error(e.detail?.error||e.detail||'Request failed'); }
+            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
             data = await res.json();
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAssistantBubble(data);

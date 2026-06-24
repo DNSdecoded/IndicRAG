@@ -132,7 +132,8 @@ def retrieve_context(
         top_k = config.DEFAULT_TOP_K
 
     from cache import retrieval_cache, make_key
-    cache_key = make_key(user_query, top_k, filter_dict)
+    cache_scope = None if collection is None else getattr(collection, "name", id(collection))
+    cache_key = make_key(user_query, top_k, filter_dict, cache_scope)
     if collection is None and filter_dict is None:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
@@ -215,7 +216,7 @@ def retrieve_context(
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
-    if filter_dict is None:
+    if collection is None and filter_dict is None:
         retrieval_cache.put(cache_key, result)
     return result
 
@@ -423,15 +424,21 @@ def generate_with_failover(model: str, contents, gen_config):
     if config.LLM_FALLBACK_MODEL and config.LLM_FALLBACK_MODEL != model:
         models_to_try.append(config.LLM_FALLBACK_MODEL)
 
+    # Round-robin: start from the next key in rotation, not always pool[0]
+    start = next(_client_index)
+    ordered_pool = pool[start:] + pool[:start]
+
     last_exc: Exception | None = None
+    any_attempted = False
     for current_model in models_to_try:
         tripped_until = _circuit_breaker.get(current_model, 0)
         if _time.monotonic() < tripped_until:
             logger.info(f"[Gemini failover] {current_model} circuit open, skipping")
             continue
 
+        any_attempted = True
         all_failed = True
-        for client in pool:
+        for offset, client in enumerate(ordered_pool, 1):
             try:
                 result = client.models.generate_content(
                     model=current_model, contents=contents, config=gen_config
@@ -441,7 +448,7 @@ def generate_with_failover(model: str, contents, gen_config):
             except Exception as exc:
                 if _is_transient(exc):
                     logger.warning(
-                        f"[Gemini failover] {current_model} key #{pool.index(client) + 1}/{len(pool)} "
+                        f"[Gemini failover] {current_model} key #{offset}/{len(pool)} "
                         f"returned {getattr(exc, 'status_code', '?')}: {exc!s:.120} — trying next"
                     )
                     last_exc = exc
@@ -453,6 +460,10 @@ def generate_with_failover(model: str, contents, gen_config):
             if current_model == model and len(models_to_try) > 1:
                 logger.warning(f"[Gemini failover] {model} circuit tripped for {_CIRCUIT_COOLDOWN}s, falling back to {config.LLM_FALLBACK_MODEL}")
 
+    if not any_attempted:
+        raise RuntimeError(
+            "All configured Gemini models are currently circuit-open; retry after cooldown."
+        )
     raise last_exc  # type: ignore[misc]
 
 

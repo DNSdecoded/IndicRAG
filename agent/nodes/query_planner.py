@@ -46,8 +46,12 @@ def query_planner_node(state: AgentState) -> dict:
         raw = resp.text or ""
         clean = re.sub(r"```(?:json)?|```", "", raw).strip()
         parsed = json.loads(clean)
-        sub_queries = parsed.get("sub_queries") or [query]
-        sub_queries = sub_queries[:_MAX_SUB_QUERIES]
+        parsed_queries = parsed.get("sub_queries")
+        if isinstance(parsed_queries, list):
+            sub_queries = [q.strip() for q in parsed_queries if isinstance(q, str) and q.strip()]
+            sub_queries = (sub_queries or [query])[:_MAX_SUB_QUERIES]
+        else:
+            sub_queries = [query]
     except Exception:
         sub_queries = [query]
 

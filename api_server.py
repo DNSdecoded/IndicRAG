@@ -561,10 +561,11 @@ async def ingest_document(
         except Exception:
             pass
         try:
-            from cache import retrieval_cache
+            from cache import retrieval_cache, tool_cache
             retrieval_cache.invalidate()
+            tool_cache.invalidate()
         except Exception:
-            pass
+            logger.warning("Failed to invalidate caches after ingestion", exc_info=True)
 
         processing_time = time.time() - start_time
 
@@ -599,10 +600,11 @@ def _run_bulk_ingest(job_id: str):
         except Exception:
             pass
         try:
-            from cache import retrieval_cache
+            from cache import retrieval_cache, tool_cache
             retrieval_cache.invalidate()
+            tool_cache.invalidate()
         except Exception:
-            pass
+            logger.warning("Failed to invalidate caches after bulk ingestion", exc_info=True)
         processing_time = time.time() - start_time
         status_value = "partial" if stats.get("failed", 0) > 0 else "success"
         _update_job(
@@ -1007,7 +1009,7 @@ async def agent_query(
         logger.error(f"Agent error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": err_str, "code": "AGENT_ERROR"},
+            detail={"error": "Agent pipeline failed. Please try again later.", "code": "AGENT_ERROR"},
         )
 
     _append_session_messages(session_id, request.question, result["final_answer"])

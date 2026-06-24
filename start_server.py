@@ -39,8 +39,9 @@ def check_api_key():
     
     raw_keys = os.getenv('LLM_API_KEYS', '')
     api_key = os.getenv('LLM_API_KEY', '')
-    keys = [k.strip() for k in raw_keys.split(',') if k.strip()] if raw_keys else []
-    if not keys and api_key and api_key != 'your-gemini-api-key-here':
+    placeholder = 'your-gemini-api-key-here'
+    keys = [k.strip() for k in raw_keys.split(',') if k.strip() and k.strip() != placeholder] if raw_keys else []
+    if not keys and api_key and api_key != placeholder:
         keys = [api_key]
     if not keys:
         logger.error("✗ Gemini API key not configured!")

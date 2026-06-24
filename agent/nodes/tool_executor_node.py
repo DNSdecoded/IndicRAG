@@ -9,6 +9,7 @@ from cache import tool_cache, make_key
 logger = logging.getLogger(__name__)
 
 _CACHEABLE_TOOLS = {"indicrag_retrieval", "arxiv_search", "open_access_search", "web_search"}
+_MAX_PARALLEL_TOOLS = 4
 
 
 def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
@@ -16,7 +17,7 @@ def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
     fn = TOOL_DISPATCH.get(name)
     if fn is None:
         logger.warning(f"[ToolExecutor] Unknown tool: {name}")
-        return name, args, {"passages": []}, 0.0
+        return name, args, {"passages": [], "error": f"Unknown tool: {name}"}, 0.0
 
     cache_key = make_key(name, args) if name in _CACHEABLE_TOOLS else None
     result = tool_cache.get(cache_key) if cache_key else None
@@ -28,14 +29,22 @@ def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
         try:
             result = fn(args)
         except Exception as e:
-            logger.error(f"[ToolExecutor] {name} failed: {e}")
-            result = {"passages": [], "text": str(e)}
+            logger.error(f"[ToolExecutor] {name} failed: {e}", exc_info=True)
+            result = {"passages": [], "error": str(e)}
         latency_ms = round((time.monotonic() - start) * 1000, 1)
-        if cache_key and result:
+        if cache_key and result and "error" not in result:
             tool_cache.put(cache_key, result)
         logger.info(f"[ToolExecutor] {name} completed in {latency_ms:.0f}ms")
 
     return name, args, result, latency_ms
+
+
+def _collect_result(name, args, result, latency_ms, contexts, log):
+    if "error" not in result and "passages" in result:
+        contexts.extend(result["passages"])
+    elif "error" not in result and "text" in result:
+        contexts.append({"text": result["text"], "source": name})
+    log.append({"tool": name, "args": args, "latency_ms": latency_ms})
 
 
 def tool_executor_node(state: AgentState) -> dict:
@@ -43,14 +52,16 @@ def tool_executor_node(state: AgentState) -> dict:
     contexts = list(state.get("retrieved_contexts", []))
     log = list(state.get("tool_calls_log", []))
 
+    if len(tool_calls) > _MAX_PARALLEL_TOOLS:
+        logger.warning(
+            f"[ToolExecutor] Truncating {len(tool_calls)} tool calls to {_MAX_PARALLEL_TOOLS}"
+        )
+        tool_calls = tool_calls[:_MAX_PARALLEL_TOOLS]
+
     if len(tool_calls) <= 1:
         for call in tool_calls:
             name, args, result, latency_ms = _run_tool(call["name"], call.get("args", {}))
-            if "passages" in result:
-                contexts.extend(result["passages"])
-            elif "text" in result:
-                contexts.append({"text": result["text"], "source": name})
-            log.append({"tool": name, "args": args, "latency_ms": latency_ms})
+            _collect_result(name, args, result, latency_ms, contexts, log)
     else:
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
             futures = {
@@ -59,11 +70,7 @@ def tool_executor_node(state: AgentState) -> dict:
             }
             for future in as_completed(futures):
                 name, args, result, latency_ms = future.result()
-                if "passages" in result:
-                    contexts.extend(result["passages"])
-                elif "text" in result:
-                    contexts.append({"text": result["text"], "source": name})
-                log.append({"tool": name, "args": args, "latency_ms": latency_ms})
+                _collect_result(name, args, result, latency_ms, contexts, log)
 
     return {
         "retrieved_contexts": contexts,

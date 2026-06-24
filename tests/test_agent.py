@@ -112,6 +112,7 @@ def test_route_reflexion_max_count():
     assert _route_reflexion(state) == "finalizer"
 
 
+@pytest.mark.network
 def test_arxiv_search_returns_passages():
     from agent.tool_executor import execute_arxiv_search
 

@@ -29,7 +29,7 @@ _MARATHI_MARKERS = {
 def _disambiguate_devanagari(text: str) -> str:
     """Distinguish Marathi from Hindi for Devanagari text using common word markers."""
     words = set(re.findall(r'\w+', text))
-    if words & _MARATHI_MARKERS:
+    if len(words & _MARATHI_MARKERS) >= 2:
         return 'mr'
     return 'hi'
 

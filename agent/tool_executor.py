@@ -33,18 +33,17 @@ def _get_tavily():
 def _expand_query_variants(query: str) -> list[str]:
     from google.genai import types
 
-    client = rag._get_client()
     prompt = (
         f'Generate 3 alternative phrasings for this search query.\n'
         f'Return JSON only: {{"variants": ["...", "...", "..."]}}\n'
         f'Query: {query}'
     )
-    resp = client.models.generate_content(
-        model=config.LLM_MODEL_NAME,
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.7, max_output_tokens=256),
-    )
     try:
+        resp = rag.generate_with_failover(
+            model=config.LLM_MODEL_NAME,
+            contents=prompt,
+            gen_config=types.GenerateContentConfig(temperature=0.7, max_output_tokens=256),
+        )
         clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
         return json.loads(clean)["variants"]
     except Exception:
@@ -140,6 +139,15 @@ def _validate_ast(code: str) -> str | None:
         if isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
             return f"Access to dunder attribute '{node.attr}' is not allowed"
 
+        # Block dunder names used as variables (e.g. __builtins__)
+        if isinstance(node, ast.Name) and node.id.startswith("__") and node.id.endswith("__"):
+            return f"Access to dunder name '{node.id}' is not allowed"
+
+        # Block subscript access to dunder names in strings (e.g. x['__import__'])
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            if isinstance(node.slice.value, str) and _DUNDER_IN_STRING.search(node.slice.value):
+                return "Subscript access with dunder key is not allowed"
+
         # Block format-string sandbox escapes: "{0.__class__}".format(x)
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if _DUNDER_IN_STRING.search(node.value):
@@ -164,18 +172,54 @@ def _validate_ast(code: str) -> str | None:
     return None
 
 
+_SANDBOX_WRAPPER = '''\
+import sys as _sys
+_SAFE_BUILTINS = {
+    "abs", "all", "any", "bin", "bool", "bytes", "chr", "complex",
+    "dict", "divmod", "enumerate", "filter", "float", "frozenset",
+    "hash", "hex", "int", "isinstance", "issubclass", "iter", "len",
+    "list", "map", "max", "min", "next", "oct", "ord", "pow", "print",
+    "range", "repr", "reversed", "round", "set", "slice", "sorted",
+    "str", "sum", "tuple", "zip",
+}
+_ALLOWED_IMPORTS = {
+    "math", "statistics", "decimal", "fractions",
+    "collections", "itertools", "functools",
+    "re", "json", "datetime", "random", "string",
+}
+import builtins as _b
+_safe = {k: getattr(_b, k) for k in _SAFE_BUILTINS if hasattr(_b, k)}
+_safe["__build_class__"] = _b.__build_class__
+_real_import = _b.__import__
+def _restricted_import(name, *args, **kwargs):
+    top = name.split(".")[0]
+    if top not in _ALLOWED_IMPORTS:
+        raise ImportError(f"Import '{top}' is not allowed")
+    return _real_import(name, *args, **kwargs)
+_safe["__import__"] = _restricted_import
+exec(
+    compile(open(_sys.argv[1]).read(), _sys.argv[1], "exec"),
+    {"__builtins__": _safe, "__name__": "__main__"},
+)
+'''
+
+
 def execute_python(code: str) -> dict:
     error = _validate_ast(code)
     if error:
         return {"text": f"Blocked: {error}", "source": "code_executor"}
 
     tmp_path = None
+    wrapper_path = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
             f.write(code)
             tmp_path = f.name
+        with tempfile.NamedTemporaryFile(mode='w', suffix='_wrapper.py', delete=False, encoding='utf-8') as f:
+            f.write(_SANDBOX_WRAPPER)
+            wrapper_path = f.name
         result = subprocess.run(
-            [sys.executable, "-u", tmp_path],
+            [sys.executable, "-u", wrapper_path, tmp_path],
             capture_output=True, text=True, timeout=_SANDBOX_TIMEOUT,
             env={"PATH": "", "PYTHONPATH": "", "PYTHONDONTWRITEBYTECODE": "1"},
             cwd=tempfile.gettempdir(),
@@ -190,11 +234,12 @@ def execute_python(code: str) -> dict:
     except Exception as e:
         return {"text": f"Sandbox error: {e}", "source": "code_executor"}
     finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+        for p in (tmp_path, wrapper_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
 
 def execute_arxiv_search(query: str, max_results: int = 5, sort_by: str = "relevance") -> dict:

@@ -226,7 +226,7 @@ Result: Queries in Hindi retrieve English documents about the same topic.
 
 **Factors affecting quality:**
 
-1. **Domain coverage**: E5 trained on general text, may miss domain-specific terms
+1. **Domain coverage**: BGE-M3 trained on general text, may miss domain-specific terms
 2. **Language balance**: Better for Hindi/Bengali than Odia/Konkani
 3. **Query length**: Longer queries → better retrieval
 4. **Chunk size**: Too small → lacks context; too large → dilutes relevance
