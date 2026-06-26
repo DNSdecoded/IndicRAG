@@ -165,7 +165,7 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
         else:
             append_sentence_to_chunk(sentence)
 
-    if current_chunk and len(current_chunk) >= config.MIN_CHUNK_SIZE:
+    if current_chunk:
         chunks.append(current_chunk.strip())
 
     return chunks
@@ -184,7 +184,7 @@ def extract_sections(text: str) -> List[Tuple[str, str]]:
     sections = []
     
     # Create regex pattern for section headers (must be exact lines)
-    header_pattern = r'\n[ \t]*(?:\d+\.?|[A-Z]\.)?[ \t]*(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*\n'
+    header_pattern = r'(?:^|\n)[ \t]*(?:\d+\.?\s*|[A-Z]\.\s*)?(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*(?:\n|$)'
     
     # Find all section headers
     matches = list(re.finditer(header_pattern, text, re.IGNORECASE))
@@ -242,7 +242,7 @@ def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
             
             candidates.sort(reverse=True, key=lambda x: x[0])
             for size, text in candidates[:10]:
-                if 20 < len(text) < 200:
+                if 5 < len(text) < 300:
                     return text
     except Exception as e:
         logger.error(f"Error extracting title from PDF font info: {e}")

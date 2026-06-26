@@ -1,6 +1,7 @@
 """Claim-level faithfulness check via cross-encoder NLI."""
 import re
 import threading
+import numpy as np
 import torch
 from typing import List
 from sentence_transformers import CrossEncoder
@@ -16,7 +17,9 @@ def _load():
         with _lock:
             if _model is None:
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                _model = CrossEncoder("BAAI/bge-reranker-v2-m3", device=device,
+                # ponytail: nli-deberta-v3-base needed here — bge-reranker scores relevance,
+                # not entailment; wrong distribution for faithfulness thresholding (BUG-003)
+                _model = CrossEncoder("cross-encoder/nli-deberta-v3-base", device=device,
                                       cache_folder=str(config.MODELS_CACHE_DIR))
     return _model
 
@@ -31,7 +34,11 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         if not cited:
             continue
         pairs = [(chunks[i], sent) for i in cited]
-        score = float(max(model.predict(pairs)))
+        raw = np.atleast_2d(model.predict(pairs))  # (n, 3): contradiction, neutral, entailment
+        # softmax → probabilities; entailment is label index 2
+        e = np.exp(raw - raw.max(axis=1, keepdims=True))
+        probs = e / e.sum(axis=1, keepdims=True)
+        score = float(probs[:, 2].max())
         results.append({"claim": sent, "support": score,
                         "grounded": score >= config.FAITHFULNESS_THRESHOLD})
     return results

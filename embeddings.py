@@ -46,7 +46,7 @@ def load_embedding_model(model_name: str = None) -> SentenceTransformer:
         )
 
         logger.info(f"Model loaded on device: {device}")
-        logger.info(f"Embedding dimension: {model.get_sentence_embedding_dimension()}")
+        logger.info(f"Embedding dimension: {model.get_embedding_dimension()}")
         _embedding_model = model
 
     return _embedding_model
@@ -91,6 +91,7 @@ def embed_texts(
 
 _query_cache: dict = {}
 _QUERY_CACHE_MAX = 128
+_query_cache_lock = threading.Lock()
 
 
 def embed_query(query: str) -> np.ndarray:
@@ -98,12 +99,14 @@ def embed_query(query: str) -> np.ndarray:
     Embed a single query text (with LRU cache).
     """
     key = query.strip().lower()
-    if key in _query_cache:
-        return _query_cache[key]
+    with _query_cache_lock:
+        if key in _query_cache:
+            return _query_cache[key]
     result = embed_texts([query], batch_size=1, show_progress=False, is_query=True)[0]
-    if len(_query_cache) >= _QUERY_CACHE_MAX:
-        _query_cache.pop(next(iter(_query_cache)))
-    _query_cache[key] = result
+    with _query_cache_lock:
+        if len(_query_cache) >= _QUERY_CACHE_MAX:
+            _query_cache.pop(next(iter(_query_cache)))
+        _query_cache[key] = result
     return result
 
 

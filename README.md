@@ -43,16 +43,17 @@ Both modes are available side-by-side — toggle in the web UI.
   * **web_search** — Tavily web search for current events and non-academic info
   * **calculate** — numexpr math evaluation
   * **execute_python** — process-isolated Python execution with AST-based validation (import whitelist, dunder blocking, dangerous builtin blocking) + 10s timeout
-* **Reflexion loops with stuck-loop detection** — after generating an answer, the evaluator checks faithfulness (via `verify.check_claims()` over all retrieved chunks) and completeness (via Gemini Flash). Uncited answers are force-regenerated; if either score < 0.75, the agent can regenerate, retrieve more, or reformulate the query — up to 3 iterations. If completeness doesn't improve between iterations, the evaluator auto-accepts to avoid wasting time
+* **Reflexion loops with stuck-loop detection** — after generating an answer, the evaluator checks faithfulness (NLI entailment score, minimum across all claims) and completeness (Gemini Flash). If either score < 0.75, the agent can regenerate, retrieve more, or reformulate — up to 3 iterations. On `regenerate`, tool selection is skipped and the answer generator reruns with existing context. If completeness doesn't improve >0.05 between iterations, the evaluator auto-accepts to break stuck loops
+* **Multi-turn agent conversations** — session history is passed to the answer generator so follow-up questions resolve pronouns and references correctly
 * **Parallel tool execution** — when multiple tools are selected (e.g., corpus + arXiv), they run concurrently via `ThreadPoolExecutor`
 * **Model failover with circuit breaker** — if `gemini-3.5-flash` is overloaded (503/429), automatically falls back to `gemma-4-26b-a4b-it` (Gemma 4). Circuit breaker skips the primary model for 60s after failure, so subsequent calls go directly to the fallback
-* **google-genai native function calling** — no LangChain LLM wrappers; uses `types.FunctionCallingConfig(mode="ANY")` to force tool selection
+* **google-genai native function calling** — no LangChain LLM wrappers; uses `types.FunctionCallingConfig(mode="AUTO")` so the model can return an empty tool list on `regenerate` reflexion actions
 
 ### 🔍 Hybrid Retrieval Pipeline
 
 * **Dense + sparse search** — BGE-M3 dense vectors fused with BM25 lexical search via Reciprocal Rank Fusion (RRF)
 * **Cross-encoder reranking** — BAAI/bge-reranker-v2-m3 scores the top candidates for precision
-* **Faithfulness verification** — NLI-based claim-level grounding check flags unsupported assertions
+* **Faithfulness verification** — `cross-encoder/nli-deberta-v3-base` NLI model scores entailment probability per claim; unsupported assertions are flagged or rejected
 * Retrieves 30 candidates, reranks to top 12, verifies citations against source chunks
 
 ### 🌍 True Multilingual Support
@@ -226,6 +227,7 @@ for src in data['sources']:
 | `/papers` | GET | List uploaded PDFs |
 | `/stats` | GET | Vector store statistics |
 | `/cache/stats` | GET | Cache hit rates, sizes, and TTL config |
+| `/search` | POST | Retrieval-only search — corpus, web, or both (no LLM generation) |
 | `/cache` | DELETE | Clear all caches (LLM, retrieval, tool) |
 | `/health` | GET | Health check |
 | `/purge/papers` | DELETE | Delete all PDFs (requires admin key) |
@@ -276,7 +278,7 @@ IndicRAG/
 │       └── finalizer.py             # Terminal node
 │
 ├── 🧪 tests/
-│   └── test_agent.py               # 11 unit + 1 integration test
+│   └── test_agent.py               # 37 unit + 1 integration test
 │
 ├── 🌐 static/
 │   └── index.html                   # SPA: mode toggle, progress stepper, source cards
@@ -360,7 +362,7 @@ User Query
         ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Tool Selector                                                   │
-│  Gemini function calling (mode=ANY) picks from 6 tools           │
+│  Gemini function calling (mode=AUTO) picks from 6 tools          │
 └───────┬─────────────────────────────────────────────────────────┘
         │
         ▼
@@ -485,6 +487,7 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 * Agentic RAG pipeline with LangGraph state machine and reflexion loops
 * 6 agent tools: corpus retrieval, arXiv, Semantic Scholar/OpenAlex, web search, calculator, process-isolated Python
 * `POST /agent/query` endpoint with source metadata and tool call audit log
+* `POST /search` retrieval-only endpoint (corpus, web, or both)
 * Three-layer TTL cache: LLM responses, retrieval results, agent tool results — all env-configurable
 * `GET /cache/stats` and `DELETE /cache` endpoints for cache observability and management
 * Multi-key Gemini API load balancing via `LLM_API_KEYS` with model-level failover (Gemma 4 fallback) and circuit breaker
@@ -497,6 +500,22 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
 * Citation numbers on agentic source cards
 * URL scheme validation (XSS prevention) on rendered source links
 * `AGENT_MAX_TOKENS` config for longer agent answers
+
+**v2.0 Patch (2026-06-27):**
+* **Faithfulness verifier** switched from relevance reranker to `cross-encoder/nli-deberta-v3-base` NLI model — score is now entailment probability, not relevance; faithfulness uses minimum across all claims (not average) so a single hallucinated claim is caught
+* **Multi-turn agent** — `conversation_history` threaded through `AgentState` and prepended to the answer generator's prompt; follow-up questions in `/agent/query` now resolve prior context
+* **Regenerate reflexion** fixed — tool selector now returns an empty tool list (was being overridden to `indicrag_retrieval` even when the model correctly chose no tools)
+* **BM25 index** keyed per collection — custom-collection queries no longer search the wrong index
+* **Client pool race** fixed — `next(_client_index)` now runs under `_client_lock` in both `_get_client()` and `generate_with_failover()`
+* **Error responses** sanitised — internal paths and exception details no longer leak in 500 responses
+* **Agent graph** lazy-loaded — import errors in agent nodes no longer prevent standard RAG endpoints from starting
+* **Section header regex** broadened; 6 additional academic headers added (`limitations`, `future work`, `appendix`, etc.)
+* **Translation** `max_length` raised 512 → 1024 to prevent silent truncation of long Indic answers
+* **numexpr** input validated against an identifier whitelist before evaluation
+* **Query cache**, **session eviction**, **job store** — thread-safety and memory-leak fixes
+* **Completeness evaluator** — truncates at sentence boundary; JSON example uses non-zero values to prevent models echoing back the placeholder; prompt clarifies faithfulness vs. completeness action mapping
+* **System prompt** — outside-knowledge contradiction resolved; backslash continuations removed; medical disclaimer narrowed to specific treatment/dosage recommendations
+* 26 additional unit tests covering hybrid search, translation, cache invalidation, and concurrency
 
 **v1.5 Features:**
 * Hybrid retrieval pipeline (BGE-M3 dense + BM25 + RRF)

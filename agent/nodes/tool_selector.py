@@ -61,7 +61,7 @@ def tool_selector_node(state: AgentState) -> dict:
         system_instruction=_SYSTEM,
         tools=[TOOLS],
         tool_config=types.ToolConfig(
-            function_calling_config=types.FunctionCallingConfig(mode="ANY")
+            function_calling_config=types.FunctionCallingConfig(mode="AUTO")
         ),
     )
 
@@ -79,8 +79,10 @@ def tool_selector_node(state: AgentState) -> dict:
                 tool_calls.append({"name": fc.name, "args": dict(fc.args)})
 
         if not tool_calls:
-            tool_calls = [{"name": "indicrag_retrieval",
-                           "args": {"query": queries[0], "expand_query": False}}]
+            last_action = history[-1]["action"] if history else None
+            if last_action != "regenerate":
+                tool_calls = [{"name": "indicrag_retrieval",
+                               "args": {"query": queries[0], "expand_query": False}}]
 
     except Exception as exc:
         # All keys exhausted or unrecoverable error — fall back to default tool

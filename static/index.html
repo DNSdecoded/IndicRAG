@@ -539,7 +539,7 @@
             <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Attach PDF">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
-            <textarea id="chatInput" rows="1" placeholder="Ask a question in English or an Indic language (using Direct Multilingual)..."></textarea>
+            <textarea id="chatInput" rows="1" maxlength="2000" placeholder="Ask a question in English or an Indic language (using Direct Multilingual)..."></textarea>
             <button class="send-btn" id="sendBtn" onclick="sendMessage()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -899,8 +899,8 @@ async function sendMessage() {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ question: text, session_id: sessionId, strategy })
             });
-            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
             data = await res.json();
+            if (!res.ok) throw new Error(data.detail?.error||data.detail||'Request failed');
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAgentBubble(data);
         } else {
@@ -908,8 +908,8 @@ async function sendMessage() {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
             });
-            if (!res.ok) { const e=await res.json().catch(async()=>({detail:await res.text().catch(()=>'')})); throw new Error(e.detail?.error||e.detail||'Request failed'); }
             data = await res.json();
+            if (!res.ok) throw new Error(data.detail?.error||data.detail||'Request failed');
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAssistantBubble(data);
         }
@@ -940,8 +940,9 @@ async function uploadFiles(files) {
         try {
             const fd=new FormData(); fd.append('file',file);
             const r=await fetch(`${API}/upload`,{method:'POST',body:fd});
-            if(!r.ok){const e=await r.json();throw new Error(e.detail||'Upload failed');}
-            showToast(`✓ Uploaded: ${(await r.json()).filename}`,'success');
+            const d=await r.json();
+            if(!r.ok) throw new Error(d.detail||'Upload failed');
+            showToast(`✓ Uploaded: ${d.filename}`,'success');
         } catch(e){showToast(`✗ ${file.name}: ${e.message}`,'error');}
     }
     refreshKB();
@@ -965,15 +966,15 @@ async function refreshKB() {
                 <button class="paper-ingest-btn" id="ib-${sid}" onclick="ingestOne('${esc(p.filename).replace(/'/g,"\\'")}','${sid}')">Ingest</button>
             </div>`;
         }).join('');
-    } catch{}
+    } catch(e){ console.error('Failed to load knowledge base:', e); }
 }
 async function ingestOne(filename,sid) {
     const btn=document.getElementById(`ib-${sid}`); if(!btn)return;
     const orig=btn.textContent; btn.disabled=true; btn.textContent='…';
     try {
         const r=await fetch(`${API}/ingest`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pdf_path:filename})});
-        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Ingest failed');}
         const d=await r.json();
+        if(!r.ok) throw new Error(d.detail||'Ingest failed');
         showToast(`✓ Ingested ${d.chunks_ingested} chunks`,'success');
         btn.textContent='✓'; btn.style.background='#16a34a'; refreshKB();
     } catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent=orig;}
@@ -983,8 +984,8 @@ async function ingestAll() {
     btn.disabled=true; btn.textContent='⏳ Starting…';
     try {
         const r=await fetch(`${API}/ingest/all`,{method:'POST',headers:{'Content-Type':'application/json'}});
-        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Failed');}
         const d=await r.json();
+        if(!r.ok) throw new Error(d.detail||'Failed');
         showToast('Job started — polling for completion…','info');
         const poll=setInterval(async()=>{
             try {
@@ -1014,9 +1015,13 @@ async function confirmPurge(){
     if(!pendingPurge)return;
     const ep=pendingPurge==='papers'?'/purge/papers':'/purge/database';
     try{
-        const r=await fetch(`${API}${ep}`,{method:'DELETE'});
-        if(!r.ok){const e=await r.json();throw new Error(e.detail||'Purge failed');}
-        showToast((await r.json()).message,'success'); refreshKB();
+        const headers={};
+        const apiKey=localStorage.getItem('indicrag-api-key');
+        if(apiKey) headers['X-API-Key']=apiKey;
+        const r=await fetch(`${API}${ep}`,{method:'DELETE',headers});
+        const d=await r.json();
+        if(!r.ok) throw new Error(d.detail||'Purge failed');
+        showToast(d.message,'success'); refreshKB();
     }catch(e){showToast(`Purge failed: ${e.message}`,'error');}
     hidePurgeModal();
 }

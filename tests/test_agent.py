@@ -1,4 +1,7 @@
 from unittest.mock import patch, MagicMock
+from concurrent.futures import ThreadPoolExecutor
+import itertools
+import inspect
 import pytest
 
 
@@ -56,11 +59,13 @@ def test_state_schema_fields():
         reflexion_count=0,
         reflexion_history=[],
         tool_calls_log=[],
+        conversation_history=[],
         session_id="test-001",
         strategy="A",
     )
     assert state["original_query"] == "test"
     assert state["strategy"] == "A"
+    assert state["conversation_history"] == []
 
 
 def test_finalizer_uses_final_answer():
@@ -217,7 +222,7 @@ def test_make_key_deterministic():
 
 @pytest.mark.integration
 def test_full_graph_terminates():
-    from agent.graph import agent_graph
+    from agent.graph import build_agent_graph
     from agent.state import AgentState
     from agent.nodes.reflexion_evaluator import MAX_REFLEXION
 
@@ -232,9 +237,332 @@ def test_full_graph_terminates():
         reflexion_count=0,
         reflexion_history=[],
         tool_calls_log=[],
+        conversation_history=[],
         session_id="test-001",
         strategy="A",
     )
-    result = agent_graph.invoke(state)
+    result = build_agent_graph().invoke(state)
     assert result["final_answer"] is not None
     assert result["reflexion_count"] <= MAX_REFLEXION
+
+
+# =============================================================================
+# BUG-027: Agent conversation history surfaced in answer_generator
+# =============================================================================
+
+def test_answer_generator_prepends_history():
+    with patch("rag.format_context", return_value=("ctx", 1)), \
+         patch("rag.build_prompt", return_value="base prompt") as mock_bp, \
+         patch("rag.llm_generate", return_value="answer") as mock_gen:
+        from agent.nodes.answer_generator import answer_generator_node
+
+        history = [
+            {"role": "user", "content": "What is BERT?"},
+            {"role": "assistant", "content": "BERT is a language model."},
+        ]
+        state = {
+            "retrieved_contexts": [{"text": "t", "title": "T", "section": "body"}],
+            "original_query": "How does it compare to GPT?",
+            "detected_language": "en",
+            "strategy": "A",
+            "conversation_history": history,
+        }
+        result = answer_generator_node(state)
+        prompt_used = mock_gen.call_args[0][0]
+        assert "Prior conversation" in prompt_used
+        assert "BERT" in prompt_used
+        assert "base prompt" in prompt_used
+        assert result["draft_answer"] == "answer"
+
+
+def test_answer_generator_no_history_unchanged():
+    with patch("rag.format_context", return_value=("ctx", 1)), \
+         patch("rag.build_prompt", return_value="base prompt"), \
+         patch("rag.llm_generate", return_value="answer") as mock_gen:
+        from agent.nodes.answer_generator import answer_generator_node
+
+        state = {
+            "retrieved_contexts": [{"text": "t", "title": "T", "section": "body"}],
+            "original_query": "q",
+            "detected_language": "en",
+            "strategy": "A",
+            "conversation_history": [],
+        }
+        answer_generator_node(state)
+        prompt_used = mock_gen.call_args[0][0]
+        assert "Prior conversation" not in prompt_used
+
+
+def test_answer_generator_history_capped_at_six_messages():
+    with patch("rag.format_context", return_value=("ctx", 1)), \
+         patch("rag.build_prompt", return_value="base prompt"), \
+         patch("rag.llm_generate", return_value="answer") as mock_gen:
+        from agent.nodes.answer_generator import answer_generator_node
+
+        history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg{i}"}
+                   for i in range(10)]
+        state = {
+            "retrieved_contexts": [{"text": "t", "title": "T", "section": "body"}],
+            "original_query": "q",
+            "detected_language": "en",
+            "strategy": "A",
+            "conversation_history": history,
+        }
+        answer_generator_node(state)
+        prompt_used = mock_gen.call_args[0][0]
+        # Only last 6 messages (msg4–msg9) should appear; msg0–msg3 excluded
+        assert "msg0" not in prompt_used
+        assert "msg9" in prompt_used
+
+
+# =============================================================================
+# BUG-029: Hybrid search — BM25 index building and RRF fusion
+# =============================================================================
+
+def test_bm25_build_and_basic_search():
+    from bm25_search import BM25Index
+    idx = BM25Index()
+    idx.build(["d1", "d2", "d3"],
+              ["neural network transformer", "convolutional network", "transformer attention"])
+    assert idx.n_docs == 3
+    ids, scores = idx.search("transformer", top_k=2)
+    assert len(ids) == 2
+    assert "d1" in ids or "d3" in ids  # both contain "transformer"
+
+
+def test_bm25_empty_corpus():
+    from bm25_search import BM25Index
+    idx = BM25Index()
+    idx.build([], [])
+    ids, scores = idx.search("anything")
+    assert ids == [] and scores == []
+
+
+def test_rrf_merges_both_lists():
+    from bm25_search import rrf
+    fused = rrf(["a", "b", "c"], ["c", "d", "a"])
+    assert set(fused) == {"a", "b", "c", "d"}
+    # "a" ranks 1st in dense and 3rd in sparse — should beat "b" (dense only at 2nd)
+    assert fused.index("a") < fused.index("b")
+
+
+def test_rrf_empty_sparse():
+    from bm25_search import rrf
+    ids = ["x", "y", "z"]
+    assert rrf(ids, []) == ids
+
+
+def test_bm25_per_collection_isolation():
+    import bm25_search
+    bm25_search.invalidate()
+
+    coll_a = MagicMock()
+    coll_a.name = "coll_a"
+    coll_a.count.return_value = 2
+    coll_a.get.return_value = {"ids": ["a1", "a2"], "documents": ["hello world", "foo bar"]}
+
+    coll_b = MagicMock()
+    coll_b.name = "coll_b"
+    coll_b.count.return_value = 1
+    coll_b.get.return_value = {"ids": ["b1"], "documents": ["completely different"]}
+
+    idx_a = bm25_search.get_or_build_index(coll_a)
+    idx_b = bm25_search.get_or_build_index(coll_b)
+
+    assert idx_a is not idx_b
+    assert idx_a.n_docs == 2
+    assert idx_b.n_docs == 1
+    # Cache hit — collection.get not called a second time
+    assert bm25_search.get_or_build_index(coll_a) is idx_a
+    assert coll_a.get.call_count == 1
+
+
+def test_bm25_invalidate_clears_all_collections():
+    import bm25_search
+    coll = MagicMock()
+    coll.name = "to_clear"
+    coll.count.return_value = 1
+    coll.get.return_value = {"ids": ["x"], "documents": ["text"]}
+    bm25_search.get_or_build_index(coll)
+    assert "to_clear" in bm25_search._indices
+    bm25_search.invalidate()
+    assert bm25_search._indices == {}
+
+
+# =============================================================================
+# BUG-030: Translation pipeline
+# =============================================================================
+
+def test_translate_same_language_is_noop():
+    from translation import translate_text
+    assert translate_text("Hello world", "en", "en") == "Hello world"
+
+
+def test_translate_unsupported_language_raises():
+    from translation import translate_text
+    with pytest.raises(ValueError, match="Unsupported"):
+        translate_text("Hello", "en", "zz")
+
+
+def test_translate_max_length_default_is_1024():
+    from translation import translate_text
+    sig = inspect.signature(translate_text)
+    assert sig.parameters["max_length"].default == 1024
+
+
+def test_translate_calls_model_generate():
+    import torch
+    mock_model = MagicMock()
+    mock_tokenizer = MagicMock()
+    mock_tokenizer.convert_tokens_to_ids.return_value = 256047
+    mock_tokenizer.return_value = {
+        "input_ids": torch.zeros(1, 5, dtype=torch.long),
+        "attention_mask": torch.ones(1, 5, dtype=torch.long),
+    }
+    mock_model.parameters.return_value = iter([torch.zeros(1)])
+    mock_model.generate.return_value = torch.zeros(1, 5, dtype=torch.long)
+    mock_tokenizer.batch_decode.return_value = ["अनुवाद"]
+
+    with patch("translation.load_translation_model", return_value=(mock_model, mock_tokenizer)):
+        from translation import translate_text
+        result = translate_text("Hello.", "en", "hi")
+    assert mock_model.generate.called
+    assert isinstance(result, str)
+
+
+def test_translate_long_text_is_segmented():
+    """Verify the text is split into segments before model calls."""
+    import torch
+    mock_model = MagicMock()
+    mock_tokenizer = MagicMock()
+    mock_tokenizer.convert_tokens_to_ids.return_value = 256047
+    mock_tokenizer.return_value = {
+        "input_ids": torch.zeros(1, 5, dtype=torch.long),
+        "attention_mask": torch.ones(1, 5, dtype=torch.long),
+    }
+    mock_model.parameters.return_value = iter([torch.zeros(1)])
+    mock_model.generate.return_value = torch.zeros(1, 5, dtype=torch.long)
+    mock_tokenizer.batch_decode.return_value = ["seg"]
+
+    with patch("translation.load_translation_model", return_value=(mock_model, mock_tokenizer)):
+        from translation import translate_text
+        long_text = "Sentence one. Sentence two. Sentence three. Sentence four."
+        translate_text(long_text, "en", "hi")
+
+    # generate must be called (segments processed)
+    assert mock_model.generate.call_count >= 1
+
+
+# =============================================================================
+# BUG-031: Cache invalidation after ingestion
+# =============================================================================
+
+def test_retrieval_cache_invalidate_wipes_all_entries():
+    from cache import TTLCache, make_key
+    c = TTLCache(max_size=10, ttl_seconds=60)
+    c.put(make_key("q1", 5, None, None, False, 10), {"chunks": ["a"]})
+    c.put(make_key("q2", 5, None, None, False, 10), {"chunks": ["b"]})
+    c.invalidate()
+    assert c.get(make_key("q1", 5, None, None, False, 10)) is None
+    assert c.get(make_key("q2", 5, None, None, False, 10)) is None
+
+
+def test_three_caches_invalidate_independently():
+    from cache import TTLCache
+    c1, c2, c3 = TTLCache(4, 60), TTLCache(4, 60), TTLCache(4, 60)
+    for c in (c1, c2, c3):
+        c.put("k", "v")
+    c1.invalidate()
+    assert c1.get("k") is None
+    assert c2.get("k") == "v"
+    assert c3.get("k") == "v"
+
+
+def test_bm25_cache_cleared_by_invalidate():
+    import bm25_search
+    coll = MagicMock()
+    coll.name = "inv_test"
+    coll.count.return_value = 1
+    coll.get.return_value = {"ids": ["d1"], "documents": ["some text"]}
+    bm25_search.invalidate()
+    bm25_search.get_or_build_index(coll)
+    assert "inv_test" in bm25_search._indices
+    bm25_search.invalidate()
+    assert bm25_search._indices == {}
+
+
+def test_cache_selective_key_invalidate():
+    from cache import TTLCache
+    c = TTLCache(max_size=4, ttl_seconds=60)
+    c.put("keep", "yes")
+    c.put("drop", "no")
+    c.invalidate("drop")
+    assert c.get("keep") == "yes"
+    assert c.get("drop") is None
+
+
+# =============================================================================
+# BUG-032: Concurrency / thread safety
+# =============================================================================
+
+def test_query_cache_concurrent_reads_writes():
+    import numpy as np
+    import embeddings as emb_mod
+
+    fake = np.zeros(1024, dtype=np.float32)
+    emb_mod._query_cache.clear()
+
+    with patch("embeddings.embed_texts", return_value=np.array([fake])):
+        from embeddings import embed_query
+
+        def task(i):
+            return embed_query(f"q{i % 5}")
+
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            results = [f.result() for f in [ex.submit(task, i) for i in range(100)]]
+
+    assert len(results) == 100
+    assert all(r is not None for r in results)
+
+
+def test_client_pool_idx_stays_in_bounds_under_concurrency():
+    import rag
+
+    rag._client_pool = [MagicMock(), MagicMock(), MagicMock()]
+    rag._client_index = itertools.cycle(range(3))
+
+    with ThreadPoolExecutor(max_workers=30) as ex:
+        indices = [f.result() for f in [ex.submit(rag._next_client_idx) for _ in range(300)]]
+
+    assert all(0 <= i < 3 for i in indices)
+    assert len(indices) == 300
+
+
+def test_sessions_concurrent_creation_all_unique():
+    import api_server
+    with api_server._sessions_lock:
+        api_server._sessions.clear()
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        ids = [f.result()[0] for f in [ex.submit(api_server._get_or_create_session, None)
+                                        for _ in range(50)]]
+
+    assert len(set(ids)) == 50
+    with api_server._sessions_lock:
+        assert len(api_server._sessions) == 50
+
+
+def test_jobs_concurrent_updates_no_corruption():
+    import api_server
+    with api_server._jobs_lock:
+        for i in range(10):
+            api_server._jobs[f"job-{i}"] = {"status": "running"}
+
+    def update(i):
+        api_server._update_job(f"job-{i % 10}", status="done", val=i)
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        [f.result() for f in [ex.submit(update, i) for i in range(100)]]
+
+    with api_server._jobs_lock:
+        assert all(j["status"] == "done" for j in api_server._jobs.values())

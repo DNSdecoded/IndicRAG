@@ -34,13 +34,19 @@ def _init_client_pool() -> None:
     _client_index = __import__('itertools').cycle(range(len(_client_pool)))
 
 
+def _next_client_idx() -> int:
+    """Advance the round-robin counter under the pool lock (BUG-001/002)."""
+    with _client_lock:
+        return next(_client_index)
+
+
 def _get_client() -> genai.Client:
     """Return the next client from the round-robin pool (thread-safe)."""
     if not _client_pool:
         with _client_lock:
             if not _client_pool:
                 _init_client_pool()
-    return _client_pool[next(_client_index)]
+    return _client_pool[_next_client_idx()]
 
 
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
@@ -133,7 +139,8 @@ def retrieve_context(
 
     from cache import retrieval_cache, make_key
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
-    cache_key = make_key(user_query, top_k, filter_dict, cache_scope)
+    cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
+                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS)
     if collection is None and filter_dict is None:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
@@ -386,7 +393,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
 
 @retry(stop=stop_after_attempt(3),
        wait=wait_exponential(multiplier=1, min=1, max=8),
-       retry=retry_if_exception_type(Exception), reraise=True)
+       retry=retry_if_exception_type((ConnectionError, TimeoutError)), reraise=True)
 def _call_gemini(client, model, contents, gen_config):
     return client.models.generate_content(model=model, contents=contents,
                                           config=gen_config)
@@ -425,7 +432,7 @@ def generate_with_failover(model: str, contents, gen_config):
         models_to_try.append(config.LLM_FALLBACK_MODEL)
 
     # Round-robin: start from the next key in rotation, not always pool[0]
-    start = next(_client_index)
+    start = _next_client_idx()
     ordered_pool = pool[start:] + pool[:start]
 
     last_exc: Exception | None = None
@@ -477,7 +484,7 @@ def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
         return results
     except Exception as e:
-        logger.debug(f"Faithfulness check skipped: {e}")
+        logger.warning(f"Faithfulness check failed: {e}", exc_info=True)
         return []
 
 
@@ -696,7 +703,7 @@ def _build_chat_prompt(
         f"## Current Question\n{user_query}\n\n"
         f"## Instructions\n"
         f"- Answer in: {lang_name}.\n"
-        f"- Use only the context above; cite each claim inline as [n].\n"
+        f"- Use only the context above; cite each claim inline as [n], [n, m], or [n-m] — exactly as the context labels them.\n"
         f"- This is a conversation — refer to prior turns only when directly relevant.\n"
         f"- Lead with a direct answer, then add technical depth only as the question requires.\n"
         f"- If the context is insufficient, state exactly what is missing instead of inferring.\n"

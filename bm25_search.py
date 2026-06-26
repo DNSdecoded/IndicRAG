@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_index = None
+_indices: dict[str, "BM25Index"] = {}
 _lock = threading.Lock()
 
 
@@ -84,34 +84,35 @@ def rrf(dense_ids: List[str], sparse_ids: List[str], k: int = 60) -> List[str]:
 
 
 def get_or_build_index(collection=None) -> Optional[BM25Index]:
-    """Return (and lazily build) the BM25 index from the ChromaDB collection."""
-    global _index
-    if _index is not None:
-        return _index
+    """Return (and lazily build) the BM25 index for the given collection."""
+    global _indices
+    if collection is None:
+        import vector_store
+        collection = vector_store.get_or_create_collection()
+    coll_name = getattr(collection, "name", "default")
+
+    if coll_name in _indices:
+        return _indices[coll_name]
 
     with _lock:
-        if _index is not None:
-            return _index
-
-        if collection is None:
-            import vector_store
-            collection = vector_store.get_or_create_collection()
+        if coll_name in _indices:
+            return _indices[coll_name]
 
         count = collection.count()
         if count == 0:
             return None
 
-        logger.info(f"Building BM25 index from {count} documents...")
+        logger.info(f"Building BM25 index for '{coll_name}' from {count} documents...")
         all_docs = collection.get(include=["documents"])
         idx = BM25Index()
         idx.build(all_docs["ids"], all_docs["documents"])
-        _index = idx
-        logger.info("BM25 index built")
+        _indices[coll_name] = idx
+        logger.info(f"BM25 index built for '{coll_name}'")
 
-    return _index
+    return _indices[coll_name]
 
 
 def invalidate():
-    """Clear the cached index (call after ingestion)."""
-    global _index
-    _index = None
+    """Clear all cached indices (call after ingestion)."""
+    global _indices
+    _indices = {}

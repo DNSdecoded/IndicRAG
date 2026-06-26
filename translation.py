@@ -67,7 +67,7 @@ def translate_text(
     text: str,
     source_lang: str,
     target_lang: str,
-    max_length: int = 512
+    max_length: int = 1024
 ) -> str:
     """
     Translate text between English and Indic languages.

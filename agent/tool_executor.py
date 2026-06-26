@@ -26,7 +26,10 @@ _tavily = None
 def _get_tavily():
     global _tavily
     if _tavily is None:
-        _tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+        key = os.environ.get("TAVILY_API_KEY")
+        if not key:
+            raise ValueError("TAVILY_API_KEY not configured. Web search unavailable.")
+        _tavily = TavilyClient(api_key=key)
     return _tavily
 
 
@@ -42,11 +45,16 @@ def _expand_query_variants(query: str) -> list[str]:
         resp = rag.generate_with_failover(
             model=config.LLM_MODEL_NAME,
             contents=prompt,
-            gen_config=types.GenerateContentConfig(temperature=0.7, max_output_tokens=256),
+            gen_config=types.GenerateContentConfig(
+                temperature=0.7,
+                max_output_tokens=256,
+                system_instruction="Generate alternative search phrasings that preserve the original query's semantic meaning. Do not add new topics or narrow the scope.",
+            ),
         )
         clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
         return json.loads(clean)["variants"]
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Query expansion failed, using original: {e}")
         return [query]
 
 
@@ -90,8 +98,16 @@ def execute_web_search(query: str, num_results: int = 5) -> dict:
     }
 
 
+_SAFE_MATH_NAMES = re.compile(
+    r'\b(sqrt|log|log10|log2|sin|cos|tan|asin|acos|atan|atan2|exp|abs|pi|e|inf)\b'
+)
+
+
 def execute_calculate(expression: str) -> dict:
     cleaned = expression.replace("^", "**").strip()
+    stripped = _SAFE_MATH_NAMES.sub("", cleaned)
+    if re.search(r'[a-zA-Z_]', stripped):
+        return {"text": "Invalid expression: only numeric operations allowed.", "source": "calculator"}
     try:
         result = float(numexpr.evaluate(cleaned))
         return {"text": f"Result: {result}", "source": "calculator"}

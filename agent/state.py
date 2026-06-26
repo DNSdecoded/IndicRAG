@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     reflexion_history: List[ReflexionFeedback]
 
     tool_calls_log: List[dict]
+    conversation_history: List[dict]
 
     session_id: str
     strategy: Literal["A", "B"]

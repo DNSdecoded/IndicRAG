@@ -12,6 +12,12 @@ from agent.state import AgentState, ReflexionFeedback
 logger = logging.getLogger(__name__)
 MAX_REFLEXION = 3
 
+
+def _truncate_at_sentence(text: str, limit: int) -> str:
+    cut = text[:limit]
+    pos = cut.rfind(". ")
+    return cut[:pos + 1] if pos > limit // 2 else cut
+
 _COMPLETENESS_PROMPT = """\
 Evaluate if this answer completely addresses all parts of the query.
 
@@ -20,15 +26,14 @@ Answer: {answer}
 
 Score completeness (0.0-1.0). If < 0.75, list what is missing.
 
-The system will auto-accept if both completeness and faithfulness are >= 0.75.
-Your action choice only matters when at least one score is below threshold.
-Pick the action that best fixes the deficit:
-- "regenerate":    retrieved passages seem adequate but the answer is poorly written
-- "retrieve_more": answer is incomplete because needed context was NOT retrieved
+The system auto-accepts when both completeness and faithfulness are >= 0.75; your action is ignored then.
+When below threshold, choose the action that fixes the actual deficit:
+- "regenerate":    faithfulness is low but completeness is adequate — passages are fine, rewrite the answer
+- "retrieve_more": completeness is low because needed context was NOT retrieved
 - "reformulate":   the original query was misunderstood at the planning stage
 
-Return JSON only:
-{{"completeness_score": 0.0, "action": "retrieve_more", "missing_aspects": []}}"""
+Return JSON only (example — use real values, not these):
+{{"completeness_score": 0.85, "action": "accept", "missing_aspects": ["methodology details"]}}"""
 
 
 def reflexion_evaluator_node(state: AgentState) -> dict:
@@ -46,7 +51,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
     claims = verify.check_claims(answer, chunks)
     if claims:
-        faithfulness_score = sum(r["support"] for r in claims) / len(claims)
+        # ponytail: min not mean — one hallucinated claim can hide in a high average (BUG-013)
+        faithfulness_score = min(r["support"] for r in claims)
     else:
         faithfulness_score = 0.0
 
@@ -54,7 +60,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
         resp = rag.generate_with_failover(
             model=config.LLM_MODEL_NAME,
             contents=_COMPLETENESS_PROMPT.format(
-                query=state["original_query"], answer=answer[:1500]
+                query=state["original_query"], answer=_truncate_at_sentence(answer, 4000)
             ),
             gen_config=types.GenerateContentConfig(temperature=0, max_output_tokens=256),
         )
@@ -94,8 +100,12 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
                     f"faith={faithfulness_score:.2f} complete={completeness_score:.2f} "
                     f"action=safe_stop (stuck with low faithfulness)"
                 )
+                missing_str = (", ".join(missing) or "the requested details") if missing else "the requested details"
                 return {
-                    "final_answer": config.NO_DOCUMENTS_RESPONSE,
+                    "final_answer": (
+                        f"The retrieved context does not fully support answering this question. "
+                        f"The available sources do not contain sufficient information about: {missing_str}."
+                    ),
                     "reflexion_count": count + 1,
                     "reflexion_history": history,
                 }

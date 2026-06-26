@@ -55,6 +55,3 @@ def build_agent_graph():
 
     wf.add_edge("finalizer", END)
     return wf.compile()
-
-
-agent_graph = build_agent_graph()

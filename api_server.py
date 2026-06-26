@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import uuid
 import threading
@@ -28,12 +28,22 @@ import config
 # ---------------------------------------------------------------------------
 _jobs: Dict[str, Dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
+_last_job_eviction = 0.0
 
 
 def _update_job(job_id: str, **kwargs):
-    """Thread-safe update of a job's fields."""
+    """Thread-safe update of a job's fields; evicts completed jobs once per hour."""
+    global _last_job_eviction
     with _jobs_lock:
         _jobs[job_id].update(kwargs)
+        now = time.monotonic()
+        if now - _last_job_eviction >= 3600:
+            _last_job_eviction = now
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+            for jid in [j for j, v in _jobs.items()
+                        if v.get("completed_at") and
+                        datetime.fromisoformat(v["completed_at"]) < cutoff]:
+                del _jobs[jid]
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +51,17 @@ def _update_job(job_id: str, **kwargs):
 # ---------------------------------------------------------------------------
 _sessions: Dict[str, Dict[str, Any]] = {}
 _sessions_lock = threading.Lock()
+_last_session_eviction = 0.0
 
 
 def _evict_stale_sessions():
     """Remove sessions older than SESSION_MAX_AGE_HOURS. Must be called under _sessions_lock."""
-    cutoff = datetime.utcnow() - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
+    global _last_session_eviction
+    now = time.monotonic()
+    if now - _last_session_eviction < 60:
+        return
+    _last_session_eviction = now
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
     for sid in [s for s, v in _sessions.items()
                 if datetime.fromisoformat(v["created_at"]) < cutoff]:
         del _sessions[sid]
@@ -56,12 +72,12 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
     with _sessions_lock:
         _evict_stale_sessions()
         if session_id and session_id in _sessions:
-            return session_id, _sessions[session_id]["messages"]
+            return session_id, list(_sessions[session_id]["messages"])
         new_id = session_id or str(uuid.uuid4())
         _sessions[new_id] = {
             "id": new_id,
             "messages": [],
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         }
         return new_id, _sessions[new_id]["messages"]
 
@@ -345,7 +361,7 @@ async def health_check():
     """Health check endpoint."""
     return HealthResponse(
         status="healthy",
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         version=config.VERSION,
         gemini_configured=bool(config.LLM_API_KEY_POOL)
     )
@@ -404,7 +420,7 @@ async def query_question(
             chunks_used=result['chunks_used'],
             citations=citations,
             processing_time=processing_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         )
     
     except ValueError as e:
@@ -421,10 +437,7 @@ async def query_question(
         logger.error(f"Error processing query: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": f"Error processing query: {str(e)}",
-                "code": "INTERNAL_ERROR"
-            }
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -463,7 +476,7 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
     except Exception as e:
         logger.error(f"Error in /chat: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": str(e), "code": "INTERNAL_ERROR"})
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
     # Persist both turns in session history
     _append_session_messages(session_id, request.message, result["answer"])
@@ -483,7 +496,7 @@ async def chat(
         chunks_used=result["chunks_used"],
         citations=[Citation(**c) for c in result["citations"]],
         processing_time=processing_time,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     )
 
 
@@ -583,7 +596,7 @@ async def ingest_document(
         logger.error(f"Error ingesting document: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error ingesting document: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -615,7 +628,7 @@ def _run_bulk_ingest(job_id: str):
             failed=stats.get("failed", 0),
             chunks_ingested=stats.get("total_chunks", 0),
             processing_time=processing_time,
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         )
         logger.info(f"Bulk ingest job {job_id} finished: {status_value}")
     except Exception as e:
@@ -626,7 +639,7 @@ def _run_bulk_ingest(job_id: str):
             status="failed",
             processing_time=processing_time,
             error=str(e),
-            completed_at=datetime.utcnow().isoformat(),
+            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         )
 
 
@@ -646,7 +659,7 @@ async def ingest_all_documents(
         _jobs[job_id] = {
             "job_id": job_id,
             "status": "pending",
-            "submitted_at": datetime.utcnow().isoformat(),
+            "submitted_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "completed_at": None,
             "total_files": None,
             "successful": None,
@@ -723,7 +736,122 @@ async def get_stats(authenticated: bool = Depends(verify_api_key)):
         logger.error(f"Error getting stats: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting stats: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
+        )
+
+
+# ============================================================================
+# Search Endpoint (retrieval-only, no LLM generation)
+# ============================================================================
+
+
+class SearchRequest(BaseModel):
+    """Request model for retrieval-only search."""
+    query: str = Field(..., min_length=1, max_length=1000, description="Search query")
+    top_k: Optional[int] = Field(10, ge=1, le=30, description="Number of results")
+    source: str = Field("corpus", description="Source: 'corpus' for indexed docs, 'web' for Tavily web search, 'both' for hybrid")
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, v):
+        if v not in ("corpus", "web", "both"):
+            raise ValueError("Source must be 'corpus', 'web', or 'both'")
+        return v
+
+
+class SearchResult(BaseModel):
+    """A single search result."""
+    text: str
+    title: str = ""
+    source: str = ""
+    section: str = ""
+    score: float = 0.0
+
+
+class SearchResponse(BaseModel):
+    """Response model for retrieval-only search."""
+    query: str
+    language: str
+    results: List[SearchResult]
+    total_results: int
+    processing_time: float
+    timestamp: str
+
+
+@app.post("/search", response_model=SearchResponse, tags=["Search"])
+async def search_documents(
+    request: SearchRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """
+    Search for relevant passages without LLM generation.
+
+    Returns raw retrieved chunks from the indexed corpus, Tavily web search,
+    or both. Useful for debugging retrieval quality or building custom UIs.
+    """
+    import lang_utils
+    start_time = time.time()
+
+    try:
+        results = []
+        detected_lang = lang_utils.detect_language(request.query) or "en"
+
+        if request.source in ("corpus", "both"):
+            context_data = await run_in_threadpool(
+                rag.retrieve_context, request.query, request.top_k
+            )
+            for chunk, meta, dist in zip(
+                context_data["chunks"],
+                context_data["metadatas"],
+                context_data["distances"],
+            ):
+                results.append(SearchResult(
+                    text=chunk,
+                    title=meta.get("title", ""),
+                    source=meta.get("paper_id", ""),
+                    section=meta.get("section", ""),
+                    score=round(float(dist), 4),
+                ))
+
+        if request.source in ("web", "both"):
+            try:
+                from agent.tool_executor import execute_web_search
+                web_result = await run_in_threadpool(
+                    execute_web_search, request.query, min(request.top_k, 10)
+                )
+                for p in web_result.get("passages", []):
+                    results.append(SearchResult(
+                        text=p.get("text", ""),
+                        title=p.get("title", ""),
+                        source=p.get("source", ""),
+                        section="web",
+                        score=0.0,
+                    ))
+            except ValueError:
+                logger.warning("Web search requested but TAVILY_API_KEY not configured")
+            except Exception as e:
+                logger.warning(f"Web search failed: {e}")
+
+        processing_time = time.time() - start_time
+        logger.info(
+            f"Search: query='{request.query[:50]}', source={request.source}, "
+            f"results={len(results)}, time={processing_time:.2f}s"
+        )
+
+        return SearchResponse(
+            query=request.query,
+            language=detected_lang,
+            results=results,
+            total_results=len(results),
+            processing_time=processing_time,
+            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        )
+
+    except Exception as e:
+        logger.error(f"Search error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -807,7 +935,7 @@ async def upload_pdf(
         logger.error(f"Error uploading file: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error uploading file: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -832,7 +960,7 @@ async def list_papers(authenticated: bool = Depends(verify_api_key)):
         logger.error(f"Error listing papers: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error listing papers: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -865,7 +993,7 @@ async def purge_papers(authenticated: bool = Depends(verify_admin_key)):
         logger.error(f"Error purging papers: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error purging papers: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -901,7 +1029,7 @@ async def purge_database(authenticated: bool = Depends(verify_admin_key)):
         logger.error(f"Error purging database: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error purging database: {str(e)}"
+            detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
 
 
@@ -909,8 +1037,20 @@ async def purge_database(authenticated: bool = Depends(verify_admin_key)):
 # Agentic RAG Endpoint
 # ============================================================================
 
-from agent.graph import agent_graph
 from agent.state import AgentState
+
+_agent_graph = None
+_agent_graph_lock = threading.Lock()
+
+
+def _get_agent_graph():
+    global _agent_graph
+    if _agent_graph is None:
+        with _agent_graph_lock:
+            if _agent_graph is None:
+                from agent.graph import build_agent_graph
+                _agent_graph = build_agent_graph()
+    return _agent_graph
 
 
 class AgentQueryRequest(BaseModel):
@@ -970,6 +1110,7 @@ async def agent_query(
         reflexion_count=0,
         reflexion_history=[],
         tool_calls_log=[],
+        conversation_history=list(messages),
         session_id=session_id,
         strategy=request.strategy,
     )
@@ -977,7 +1118,7 @@ async def agent_query(
     import asyncio
     try:
         result = await asyncio.wait_for(
-            run_in_threadpool(agent_graph.invoke, initial_state),
+            run_in_threadpool(_get_agent_graph().invoke, initial_state),
             timeout=float(config.AGENT_TIMEOUT),
         )
     except asyncio.TimeoutError:
@@ -1046,7 +1187,7 @@ async def agent_query(
         tool_calls=result.get("tool_calls_log", []),
         sources=sources,
         processing_time=processing_time,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     )
 
 

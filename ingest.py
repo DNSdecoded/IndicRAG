@@ -183,11 +183,6 @@ def ingest_pdf(
 
 def _extract_worker(path: str, metadata: dict = None) -> tuple:
     """Worker function for parallel PDF extraction."""
-    import hashlib
-    import pdf_utils
-    from pathlib import Path
-    
-    # Compute MD5 hash locally — no heavy module imports
     hash_md5 = hashlib.md5()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):

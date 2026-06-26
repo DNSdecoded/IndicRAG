@@ -66,6 +66,7 @@ htmlcov/
 # Project specific
 quick_test.py
 test_gemini.py
+check_db.py
 
 # Backup files
 *.backup

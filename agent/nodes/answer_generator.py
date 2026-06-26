@@ -26,6 +26,14 @@ def answer_generator_node(state: AgentState) -> dict:
         strategy=state.get("strategy", "A"),
     )
 
+    history = state.get("conversation_history", [])
+    if history:
+        lines = [
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:500]}"
+            for m in history[-6:]  # last 3 turns
+        ]
+        prompt = "Prior conversation:\n" + "\n".join(lines) + "\n\n---\n\n" + prompt
+
     answer = rag.llm_generate(prompt, max_tokens=config.AGENT_MAX_TOKENS)
 
     logger.info(f"[AnswerGenerator] chunks_used={chunks_used}, ans_len={len(answer)}")
