@@ -11,7 +11,7 @@ A multi-step pipeline powered by [LangGraph](https://github.com/langchain-ai/lan
 
 **Query Planner** → **Tool Selector** → **Tool Executor** → **Answer Generator** → **Reflexion Evaluator** → loop or finalize
 
-- The **Reflexion Evaluator** checks every answer for faithfulness (via `verify.check_claims()` using the existing bge-reranker-v2-m3) and completeness (via a Gemini Flash judge). If either score falls below 0.75, the agent can:
+- The **Reflexion Evaluator** checks every answer for faithfulness (via `verify.check_claims()` using `cross-encoder/nli-deberta-v3-base`) and completeness (via a Gemini Flash judge). If either score falls below 0.75, the agent can:
   - **Regenerate** the answer from existing context
   - **Retrieve more** using additional tools
   - **Reformulate** the original query at the planning stage
@@ -130,7 +130,7 @@ agent/                          # Agentic RAG pipeline
 └── nodes/
     ├── __init__.py
     ├── query_planner.py        # Language detection + query decomposition
-    ├── tool_selector.py        # Gemini function calling (mode=ANY)
+    ├── tool_selector.py        # Gemini function calling (mode=AUTO)
     ├── tool_executor_node.py   # Tool dispatch + context accumulation + audit log
     ├── answer_generator.py     # Reuses rag.format_context / build_prompt / llm_generate
     ├── reflexion_evaluator.py  # Faithfulness (check_claims) + completeness (Gemini judge)
@@ -259,6 +259,52 @@ No database migrations. No re-ingestion required. Your existing ChromaDB data an
 
 ---
 
+---
+
+## v2.0 Patch — Bug Fixes & Improvements
+
+Post-release patch covering 32 bug fixes, 9 prompt improvements, multi-turn agent support, and 26 new tests.
+
+### Correctness
+
+- **Faithfulness verifier** (BUG-003): switched to `cross-encoder/nli-deberta-v3-base` NLI model — entailment probability via softmax on label index 2, replacing the incorrect bge-reranker usage. Faithfulness now uses `min()` across claims (BUG-013) so a single hallucinated claim fails the check.
+- **BM25 index** (BUG-012): keyed per collection name — custom-collection queries no longer search the wrong index.
+- **Translation** (BUG-011): `max_length` raised 512→1024 to prevent silent truncation of Indic text.
+- **Retrieval cache** (BUG-019): cache key now includes `USE_RERANKER` and `MAX_CONTEXT_CHUNKS` — different reranker configs no longer share cached results.
+- **PDF chunking** (BUG-024): last chunk always appended regardless of `MIN_CHUNK_SIZE` (was silently dropped). Title filter relaxed to `5 < len < 300` (BUG-022).
+- **Query expansion** (BUG-021): `calculate` tool now validates numexpr expressions against a math identifier whitelist before evaluation.
+- **Tool selector** (BUG-028): switched from `mode="ANY"` to `mode="AUTO"` — the reflexion `regenerate` action can now correctly return an empty tool list instead of being forced to pick a tool.
+
+### Concurrency & Safety
+
+- **Client pool** (BUG-001/002): `_next_client_idx()` now executes under lock — fixes race condition in round-robin under concurrent requests.
+- **Embedding query cache** (BUG-023): `_query_cache` protected by `_query_cache_lock`.
+- **Session list** (BUG-017): `/chat` returns a copy of the session messages list, not the internal reference.
+- **Job/session eviction** (BUG-005/006): stale job cleanup throttled to once per hour; session eviction throttled to once per 60s — prevents lock contention under load.
+- **500 error responses** (BUG-007): all three 500 handlers now return a generic message — no internal paths or exception details leaked.
+
+### Agent
+
+- **Multi-turn agent** (BUG-027): `conversation_history` added to `AgentState`; `answer_generator` prepends the last 6 session messages to the prompt; `/agent/query` passes session history in `initial_state`.
+- **Lazy graph loading** (BUG-020): agent graph built on first request, not at import time — import errors in the agent module no longer crash standard RAG endpoints.
+- **Reflexion stuck-loop** (BUG-004): returns a specific "sources do not contain sufficient information" message instead of a misleading no-documents response.
+- **Completeness truncation** (BUG-026): answer truncated at the last sentence boundary before 4 000 chars (was mid-sentence at 1 500 chars).
+
+### Prompt Quality (PROMPT-001–009)
+
+- Resolved outside-knowledge contradiction in `SYSTEM_PROMPT`
+- Removed backslash line continuations from `SYSTEM_PROMPT`
+- Narrowed medical disclaimer to specific treatment/dosage/diagnostic criteria
+- Chat citation format explicitly specifies `[n]`, `[n, m]`, `[n-m]`
+- Query expansion receives `system_instruction` to preserve semantic meaning
+- Completeness prompt clarifies action mapping; JSON example uses non-zero values
+
+### Tests
+
+26 new unit tests (total: 37 passed) covering BM25 per-collection isolation, translation pipeline, cache invalidation, and concurrency paths.
+
+---
+
 **Full Changelog:** v1.5.0...v2.0.0
 
-**Stats:** 15 new files, 8 modified files, 4 new dependencies, 3 new API endpoints, 6 agent tools, 3 cache layers, 16 unit tests
+**Stats:** 15 new files, 8 modified files, 4 new dependencies, 3 new API endpoints, 6 agent tools, 3 cache layers, 37 unit tests
