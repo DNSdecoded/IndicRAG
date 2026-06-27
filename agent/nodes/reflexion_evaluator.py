@@ -41,7 +41,7 @@ STEP 3 — ACTION (choose the one action that fixes the actual deficit):
   "reformulate"  Majority of source titles are OFF-TOPIC — the retrieval \
                  query was wrong; replanning needed.
 
-OUTPUT FORMAT: Begin your response IMMEDIATELY with the opening brace `{`. \
+OUTPUT FORMAT: Begin your response IMMEDIATELY with the opening brace `{{`. \
 Raw JSON only — no markdown fences, no prose before or after the object. \
 Keep missing_aspects strings SHORT (max 8 words each) to avoid truncation.
 
