@@ -11,7 +11,6 @@ import lang_utils
 import translation
 from google import genai
 from google.genai import types
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +299,8 @@ def build_prompt(
     )
 
 
-def llm_generate(prompt: str, max_tokens: int = None) -> str:
+def llm_generate(prompt: str, max_tokens: int = None,
+                 system_instruction: str = None) -> str:
     """
     Generate response from LLM using Google Gemini API.
     
@@ -324,8 +324,6 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     if cached is not None:
         logger.debug("[LLM cache hit]")
         return cached
-
-    client = _get_client()
 
     # Safety settings - set to BLOCK_NONE for scientific content
     safety_settings = [
@@ -351,7 +349,7 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
         temperature=config.LLM_TEMPERATURE,
         max_output_tokens=max_tokens,
         safety_settings=safety_settings,
-        system_instruction=config.SYSTEM_PROMPT,
+        system_instruction=system_instruction or config.SYSTEM_PROMPT,
     )
 
     try:
@@ -389,14 +387,6 @@ def llm_generate(prompt: str, max_tokens: int = None) -> str:
     except Exception as e:
         logger.error(f"Error calling Gemini API: {e}")
         raise
-
-
-@retry(stop=stop_after_attempt(3),
-       wait=wait_exponential(multiplier=1, min=1, max=8),
-       retry=retry_if_exception_type((ConnectionError, TimeoutError)), reraise=True)
-def _call_gemini(client, model, contents, gen_config):
-    return client.models.generate_content(model=model, contents=contents,
-                                          config=gen_config)
 
 
 def _is_transient(exc: Exception) -> bool:
@@ -472,6 +462,22 @@ def generate_with_failover(model: str, contents, gen_config):
             "All configured Gemini models are currently circuit-open; retry after cooldown."
         )
     raise last_exc  # type: ignore[misc]
+
+
+def safe_extract_text(response) -> str:
+    """Safely extract text from a google-genai response, handling empty/blocked responses."""
+    try:
+        if response.text:
+            return response.text
+    except (ValueError, AttributeError):
+        pass
+    if response.candidates:
+        candidate = response.candidates[0]
+        if candidate.content and candidate.content.parts:
+            parts = [p.text for p in candidate.content.parts if hasattr(p, "text") and p.text]
+            if parts:
+                return "".join(parts)
+    return ""
 
 
 def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
@@ -689,27 +695,6 @@ def answer_question(
         raise ValueError(f"Invalid strategy: {strategy}. Must be 'A' or 'B'")
 
 
-def _build_chat_prompt(
-    user_query: str,
-    context: str,
-    history: str,
-    lang_name: str,
-) -> str:
-    """Build a prompt that includes conversation history before the retrieved context."""
-    history_section = f"## Conversation History\n{history}\n\n---\n\n" if history else ""
-    return (
-        f"{history_section}"
-        f"## Context\n{context}\n\n---\n\n"
-        f"## Current Question\n{user_query}\n\n"
-        f"## Instructions\n"
-        f"- Answer in: {lang_name}.\n"
-        f"- Use only the context above; cite each claim inline as [n], [n, m], or [n-m] — exactly as the context labels them.\n"
-        f"- This is a conversation — refer to prior turns only when directly relevant.\n"
-        f"- Lead with a direct answer, then add technical depth only as the question requires.\n"
-        f"- If the context is insufficient, state exactly what is missing instead of inferring.\n"
-    )
-
-
 def answer_with_history(
     messages: List[Dict[str, str]],
     strategy: str = "A",
@@ -788,16 +773,14 @@ def answer_with_history(
             i += 1
     history_str = "\n\n".join(history_lines)
 
-    # Always show the user's original query in the chat prompt so the model
-    # sees what the user actually typed (retrieval_query is only used for
-    # vector search in Strategy B — the answer language instruction handles output lang).
-    prompt_lang = "English" if strategy == "B" else lang_name
-    prompt = _build_chat_prompt(
+    prompt = build_prompt(
         user_query=user_query,
         context=context_data["formatted_context"],
-        history=history_str,
-        lang_name=prompt_lang,
+        target_lang=detected_lang,
+        strategy=strategy,
     )
+    if history_str:
+        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
 
     english_answer = llm_generate(prompt)
     citations = extract_citations(english_answer, context_data["metadatas"], context_data.get("chunks"))

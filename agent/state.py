@@ -12,6 +12,8 @@ class AgentState(TypedDict):
     original_query: str
     detected_language: str
     query_plan: List[str]
+    year_from: Optional[int]
+    domain_hints: List[str]
 
     tool_calls_requested: List[dict]
     retrieved_contexts: List[dict]

@@ -63,6 +63,8 @@ NLLB_LANG_MAP = {
     "or": "ory_Orya", "en": "eng_Latn"
 }
 
+_translate_lock = threading.Lock()
+
 def translate_text(
     text: str,
     source_lang: str,
@@ -84,27 +86,32 @@ def translate_text(
             f"Only English and supported Indic languages are allowed."
         )
 
-    model, tokenizer = load_translation_model()
-    tokenizer.src_lang = NLLB_LANG_MAP[source_lang]
-    target_id = tokenizer.convert_tokens_to_ids(NLLB_LANG_MAP[target_lang])
-    device = next(model.parameters()).device
+    with _translate_lock:
+        model, tokenizer = load_translation_model()
+        tokenizer.src_lang = NLLB_LANG_MAP[source_lang]
+        target_id = tokenizer.convert_tokens_to_ids(NLLB_LANG_MAP[target_lang])
+        device = model.device
 
-    segments = [s for s in re.split(r'(?<=[.!?।॥])\s+', text) if s.strip()]
-    if not segments:
-        segments = [text]
+        segments = [s for s in re.split(r'(?<=[.!?।॥])\s+', text) if s.strip()]
+        if not segments:
+            segments = [text]
 
-    out = []
-    for i in range(0, len(segments), 8):
-        batch = segments[i:i + 8]
-        inputs = tokenizer(batch, return_tensors="pt", padding=True,
-                           truncation=True, max_length=max_length)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.inference_mode():
-            gen = model.generate(**inputs, forced_bos_token_id=target_id,
-                                 max_length=max_length, num_beams=2,
-                                 early_stopping=True)
-        out.extend(tokenizer.batch_decode(gen, skip_special_tokens=True))
-    return " ".join(out)
+        out = []
+        for i in range(0, len(segments), 8):
+            batch = segments[i:i + 8]
+            inputs = tokenizer(batch, return_tensors="pt", padding=True,
+                               truncation=True, max_length=max_length)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.inference_mode():
+                try:
+                    gen = model.generate(**inputs, forced_bos_token_id=target_id,
+                                         max_length=max_length, num_beams=2,
+                                         early_stopping=True)
+                except torch.cuda.OutOfMemoryError as e:
+                    logger.error("CUDA OOM during translation. Try reducing batch size or text length.")
+                    raise e
+            out.extend(tokenizer.batch_decode(gen, skip_special_tokens=True))
+        return " ".join(out)
 
 
 def translate_to_english(text: str, source_lang: str) -> str:

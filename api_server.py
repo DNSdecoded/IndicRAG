@@ -79,7 +79,7 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
             "messages": [],
             "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         }
-        return new_id, _sessions[new_id]["messages"]
+        return new_id, list(_sessions[new_id]["messages"])
 
 
 def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:
@@ -87,6 +87,9 @@ def _append_session_messages(session_id: str, user_text: str, assistant_text: st
         msgs = _sessions[session_id]["messages"]
         msgs.append({"role": "user", "content": user_text})
         msgs.append({"role": "assistant", "content": assistant_text})
+        max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
+        if len(msgs) > max_msgs:
+            del msgs[:len(msgs) - max_msgs]
 
 # Configure logging
 logging.basicConfig(
@@ -909,19 +912,22 @@ async def upload_pdf(
     
     try:
         MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
-        
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File too large (max 50MB)"
-            )
-            
-        # Save uploaded file
+
+        # Stream into file so a multi-GB upload never fits in RAM
+        received = 0
         with open(destination, "wb") as buffer:
-            buffer.write(content)
-        
-        file_size = destination.stat().st_size
+            while chunk := await file.read(65536):
+                received += len(chunk)
+                if received > MAX_UPLOAD_SIZE:
+                    buffer.close()
+                    destination.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="File too large (max 50MB)"
+                    )
+                buffer.write(chunk)
+
+        file_size = received
         logger.info(f"Uploaded file: {safe_filename} ({file_size} bytes)")
         
         return UploadResponse(

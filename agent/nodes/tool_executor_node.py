@@ -1,3 +1,4 @@
+import hashlib
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,11 +40,23 @@ def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
     return name, args, result, latency_ms
 
 
-def _collect_result(name, args, result, latency_ms, contexts, log):
+def _passage_key(p: dict) -> str:
+    return hashlib.sha256(p.get("text", "").encode()).hexdigest()
+
+
+def _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log):
     if "error" not in result and "passages" in result:
-        contexts.extend(result["passages"])
+        for p in result["passages"]:
+            h = _passage_key(p)
+            if h not in seen_hashes:
+                seen_hashes.add(h)
+                contexts.append(p)
     elif "error" not in result and "text" in result:
-        contexts.append({"text": result["text"], "source": name})
+        p = {"text": result["text"], "source": name}
+        h = _passage_key(p)
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            contexts.append(p)
     log.append({"tool": name, "args": args, "latency_ms": latency_ms})
 
 
@@ -51,6 +64,10 @@ def tool_executor_node(state: AgentState) -> dict:
     tool_calls = state.get("tool_calls_requested", [])
     contexts = list(state.get("retrieved_contexts", []))
     log = list(state.get("tool_calls_log", []))
+
+    # Seed the dedup set from passages already in state so reflexion loops
+    # never re-add the same passages fetched in earlier iterations.
+    seen_hashes = {_passage_key(p) for p in contexts}
 
     if len(tool_calls) > _MAX_PARALLEL_TOOLS:
         logger.warning(
@@ -61,7 +78,7 @@ def tool_executor_node(state: AgentState) -> dict:
     if len(tool_calls) <= 1:
         for call in tool_calls:
             name, args, result, latency_ms = _run_tool(call["name"], call.get("args", {}))
-            _collect_result(name, args, result, latency_ms, contexts, log)
+            _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log)
     else:
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
             futures = {
@@ -70,7 +87,7 @@ def tool_executor_node(state: AgentState) -> dict:
             }
             for future in as_completed(futures):
                 name, args, result, latency_ms = future.result()
-                _collect_result(name, args, result, latency_ms, contexts, log)
+                _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log)
 
     return {
         "retrieved_contexts": contexts,

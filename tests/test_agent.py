@@ -27,9 +27,11 @@ def test_tool_executor_dispatches_correctly():
 
 
 def test_answer_generator_reuses_rag_functions():
+    mock_resp = MagicMock()
+    mock_resp.text = "mock answer"
     with patch("rag.format_context", return_value=("mock context", 3)) as mock_fc, \
          patch("rag.build_prompt", return_value="mock prompt") as mock_bp, \
-         patch("rag.llm_generate", return_value="mock answer") as mock_gen:
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
         from agent.nodes.answer_generator import answer_generator_node
 
         state = {
@@ -251,9 +253,11 @@ def test_full_graph_terminates():
 # =============================================================================
 
 def test_answer_generator_prepends_history():
+    mock_resp = MagicMock()
+    mock_resp.text = "answer"
     with patch("rag.format_context", return_value=("ctx", 1)), \
-         patch("rag.build_prompt", return_value="base prompt") as mock_bp, \
-         patch("rag.llm_generate", return_value="answer") as mock_gen:
+         patch("rag.build_prompt", return_value="base prompt"), \
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
         from agent.nodes.answer_generator import answer_generator_node
 
         history = [
@@ -268,17 +272,19 @@ def test_answer_generator_prepends_history():
             "conversation_history": history,
         }
         result = answer_generator_node(state)
-        prompt_used = mock_gen.call_args[0][0]
-        assert "Prior conversation" in prompt_used
-        assert "BERT" in prompt_used
-        assert "base prompt" in prompt_used
+        contents = mock_gen.call_args[0][1]
+        history_texts = [p.text for c in contents[:-1] for p in c.parts]
+        assert any("BERT" in t for t in history_texts)
+        assert contents[-1].role == "user"
         assert result["draft_answer"] == "answer"
 
 
 def test_answer_generator_no_history_unchanged():
+    mock_resp = MagicMock()
+    mock_resp.text = "answer"
     with patch("rag.format_context", return_value=("ctx", 1)), \
          patch("rag.build_prompt", return_value="base prompt"), \
-         patch("rag.llm_generate", return_value="answer") as mock_gen:
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
         from agent.nodes.answer_generator import answer_generator_node
 
         state = {
@@ -289,14 +295,17 @@ def test_answer_generator_no_history_unchanged():
             "conversation_history": [],
         }
         answer_generator_node(state)
-        prompt_used = mock_gen.call_args[0][0]
-        assert "Prior conversation" not in prompt_used
+        contents = mock_gen.call_args[0][1]
+        assert len(contents) == 1
+        assert contents[0].role == "user"
 
 
 def test_answer_generator_history_capped_at_six_messages():
+    mock_resp = MagicMock()
+    mock_resp.text = "answer"
     with patch("rag.format_context", return_value=("ctx", 1)), \
          patch("rag.build_prompt", return_value="base prompt"), \
-         patch("rag.llm_generate", return_value="answer") as mock_gen:
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
         from agent.nodes.answer_generator import answer_generator_node
 
         history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg{i}"}
@@ -309,10 +318,12 @@ def test_answer_generator_history_capped_at_six_messages():
             "conversation_history": history,
         }
         answer_generator_node(state)
-        prompt_used = mock_gen.call_args[0][0]
-        # Only last 6 messages (msg4–msg9) should appear; msg0–msg3 excluded
-        assert "msg0" not in prompt_used
-        assert "msg9" in prompt_used
+        contents = mock_gen.call_args[0][1]
+        history_contents = contents[:-1]
+        assert len(history_contents) == 6
+        all_hist_text = " ".join(p.text for c in history_contents for p in c.parts)
+        assert "msg0" not in all_hist_text
+        assert "msg9" in all_hist_text
 
 
 # =============================================================================
@@ -420,6 +431,7 @@ def test_translate_calls_model_generate():
         "attention_mask": torch.ones(1, 5, dtype=torch.long),
     }
     mock_model.parameters.return_value = iter([torch.zeros(1)])
+    mock_model.device = "cpu"
     mock_model.generate.return_value = torch.zeros(1, 5, dtype=torch.long)
     mock_tokenizer.batch_decode.return_value = ["अनुवाद"]
 
@@ -441,6 +453,7 @@ def test_translate_long_text_is_segmented():
         "attention_mask": torch.ones(1, 5, dtype=torch.long),
     }
     mock_model.parameters.return_value = iter([torch.zeros(1)])
+    mock_model.device = "cpu"
     mock_model.generate.return_value = torch.zeros(1, 5, dtype=torch.long)
     mock_tokenizer.batch_decode.return_value = ["seg"]
 

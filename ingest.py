@@ -52,20 +52,17 @@ def ingest_paper(
         
     # Before embedding, check if paper already exists
     existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
+    needs_deletion = False
     if existing and existing.get('ids'):
         existing_metadata = existing['metadatas'][0]
         if 'file_hash' in metadata and existing_metadata.get('file_hash') == metadata['file_hash']:
             logger.info(f'Paper {paper_id} already indexed and unchanged, skipping')
             return 0
         else:
-            logger.info(f'Paper {paper_id} has changed or hash missing. Reindexing...')
-            try:
-                vector_store.delete_by_paper_id(paper_id, collection)
-            except Exception as del_err:
-                logger.error(f"Failed to delete existing chunks for paper {paper_id}: {del_err}")
-                raise RuntimeError(
-                    f"Aborting re-index of '{paper_id}' to prevent duplicate chunks: {del_err}"
-                ) from del_err
+            logger.info(f'Paper {paper_id} has changed or hash missing. Will delete old chunks after embedding.')
+            needs_deletion = True
+    
+    sections = list(sections)
     
     all_chunks = []
     all_metadata = []
@@ -120,6 +117,12 @@ def ingest_paper(
     # Embed all chunks
     logger.info(f"Embedding {len(all_chunks)} chunks from '{title}'...")
     chunk_embeddings = embeddings.embed_passages(all_chunks)
+    
+    if needs_deletion:
+        try:
+            vector_store.delete_by_paper_id(paper_id, collection)
+        except Exception as del_err:
+            logger.error(f"Failed to delete old chunks for paper {paper_id}: {del_err}")
     
     # Add to vector store
     vector_store.add_documents(

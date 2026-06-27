@@ -11,35 +11,66 @@ from agent.tool_declarations import TOOLS
 logger = logging.getLogger(__name__)
 
 _SYSTEM = """\
-You are a tool selector for a multilingual RAG agent.
+You are a routing broker for a multilingual scientific RAG agent. \
+Select tools to retrieve context that satisfies the pending sub-queries.
 
-Decision rules (follow in order):
-1. ALWAYS call indicrag_retrieval first for document questions about the indexed corpus.
-2. Call arxiv_search for questions about specific research papers, recent preprints,
-   or when the user asks about arXiv papers by topic, author, or ID.
-3. Call open_access_search for broad academic literature search across all disciplines,
-   when citation counts matter, or when looking for open-access PDFs beyond arXiv.
-4. Call web_search ONLY if the query needs current events or non-academic information.
-   Do NOT combine web_search with indicrag_retrieval for purely corpus-based questions.
-5. Call calculate for numeric computations.
-6. Call execute_python for complex data manipulation.
+REGISTERED TOOLS — use EXACT names as listed:
+  "indicrag_retrieval"  Hybrid BM25 + dense retrieval from the locally indexed \
+corpus. Supports: query (str), expand_query (bool, default false). \
+Use for corpus-specific questions. expand_query=true for ambiguous or broad queries.
+  "arxiv_search"  arXiv preprint search by topic keywords or author. \
+Supports: query (str), max_results (int, default 5), \
+year_from (int, e.g. 2022 to filter papers from 2022 onwards), \
+sort_by ("relevance"|"submitted_date"). \
+Use for cutting-edge research, recent preprints, or when the user requests arXiv.
+  "open_access_search"  Broad academic literature via Semantic Scholar + OpenAlex. \
+Supports: query (str), max_results (int), year_range (str "YYYY-YYYY" or "YYYY-"), \
+open_access_only (bool, default true). \
+Use for citation counts, peer-reviewed papers, or wide literature surveys.
+  "web_search"  Live web search. Use ONLY for current events, news, or \
+non-academic queries. Do NOT use for scientific literature.
+  "calculate"  Evaluate a mathematical expression.
+  "execute_python"  Run sandboxed Python for data manipulation.
 
-Retry rules:
-7. On retrieve_more retry: use indicrag_retrieval with expand_query=true,
-   OR add arxiv_search / open_access_search for supplementary academic context.
-8. On reformulate retry: use missing_aspects from feedback to craft sharper queries.
-9. On regenerate retry: do NOT call any retrieval tools — the existing passages are
-   adequate. Return an empty tool list so the answer generator runs again directly.
+ROUTING RULES — apply in order, stop at first match:
+0. USER OVERRIDE: If the user's message explicitly names tools \
+   (e.g. "use arxiv", "search open access", "use open search"), call ONLY \
+   those named tools. Skip rules 1–4.
+1. CORPUS FIRST: For document/corpus questions call indicrag_retrieval.
+2. ACADEMIC EXTERNAL: For research questions beyond the local corpus, \
+   call arxiv_search and/or open_access_search.
+3. TEMPORAL FORWARDING: If year_from is present in state, ALWAYS pass it \
+   as year_from to arxiv_search AND as year_range "YYYY-" to open_access_search. \
+   Never omit it on retry.
+4. COMBINED: For questions spanning local + external literature, combine \
+   indicrag_retrieval with arxiv_search or open_access_search.
 
-Multi-tool: Combine indicrag_retrieval with arxiv_search or open_access_search when
-the query spans both local corpus and broader literature. For single-source questions,
-call only the most relevant tool."""
+RETRY RULES:
+7. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
+   Never repeat the original query verbatim. Re-use year_from from state.
+8. reformulate: The query was misunderstood — build a corrected query \
+   from missing_aspects before selecting tools.
+9. regenerate: Context is adequate; answer needs rewriting. \
+   Return an EMPTY tool list so the answer generator runs without re-retrieval.\
+"""
 
 
 def tool_selector_node(state: AgentState) -> dict:
     queries = state.get("query_plan") or [state["original_query"]]
     n_ctx = len(state.get("retrieved_contexts", []))
     history = state.get("reflexion_history", [])
+    year_from = state.get("year_from")
+    domain_hints = state.get("domain_hints", [])
+
+    temporal_note = (
+        f"\nTemporal constraint: year_from={year_from} "
+        f"(pass to arxiv_search and as year_range '{year_from}-' to open_access_search)."
+        if year_from else ""
+    )
+    domain_note = (
+        f"\nDomain hints (arXiv categories): {domain_hints}."
+        if domain_hints else ""
+    )
 
     feedback_note = ""
     if history:
@@ -53,7 +84,8 @@ def tool_selector_node(state: AgentState) -> dict:
 
     user_content = (
         f"Queries to address: {queries}\n"
-        f"Already retrieved: {n_ctx} passages.{feedback_note}"
+        f"Already retrieved: {n_ctx} passages."
+        f"{temporal_note}{domain_note}{feedback_note}"
     )
 
     gen_cfg = types.GenerateContentConfig(

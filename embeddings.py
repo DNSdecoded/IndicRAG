@@ -45,6 +45,11 @@ def load_embedding_model(model_name: str = None) -> SentenceTransformer:
             device=device
         )
 
+        # ponytail: model.half() on CPU silently produces NaN on many architectures
+        if device == "cuda":
+            model.half()
+            logger.info("Using float16 precision on GPU")
+
         logger.info(f"Model loaded on device: {device}")
         logger.info(f"Embedding dimension: {model.get_embedding_dimension()}")
         _embedding_model = model
@@ -78,13 +83,14 @@ def embed_texts(
         texts = [prefix + text for text in texts]
     
     # Encode
-    embeddings = model.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=show_progress,
-        convert_to_numpy=True,
-        normalize_embeddings=True  # Normalize for cosine similarity
-    )
+    with torch.inference_mode():
+        embeddings = model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=show_progress,
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
     
     return embeddings
 
@@ -98,7 +104,7 @@ def embed_query(query: str) -> np.ndarray:
     """
     Embed a single query text (with LRU cache).
     """
-    key = query.strip().lower()
+    key = query.strip()
     with _query_cache_lock:
         if key in _query_cache:
             return _query_cache[key]

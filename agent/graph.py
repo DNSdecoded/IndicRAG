@@ -5,13 +5,13 @@ from agent.nodes.query_planner import query_planner_node
 from agent.nodes.tool_selector import tool_selector_node
 from agent.nodes.tool_executor_node import tool_executor_node
 from agent.nodes.answer_generator import answer_generator_node
-from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+from agent.nodes.reflexion_evaluator import reflexion_evaluator_node, MAX_REFLEXION
 from agent.nodes.finalizer import finalizer_node
 
 
 def _route_reflexion(state: AgentState) -> str:
     count = state.get("reflexion_count", 0)
-    if count >= 3 or state.get("final_answer"):
+    if count >= MAX_REFLEXION or state.get("final_answer"):
         return "finalizer"
 
     history = state.get("reflexion_history", [])

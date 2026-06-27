@@ -1,10 +1,19 @@
 import logging
 
+from google.genai import types
+
 import rag
 import config
 from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+_SAFETY_SETTINGS = [
+    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+]
 
 
 def answer_generator_node(state: AgentState) -> dict:
@@ -26,15 +35,26 @@ def answer_generator_node(state: AgentState) -> dict:
         strategy=state.get("strategy", "A"),
     )
 
+    # Build structured multi-turn contents to preserve role separation and prevent injection
     history = state.get("conversation_history", [])
-    if history:
-        lines = [
-            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:500]}"
-            for m in history[-6:]  # last 3 turns
-        ]
-        prompt = "Prior conversation:\n" + "\n".join(lines) + "\n\n---\n\n" + prompt
+    contents = []
+    for m in history[-6:]:  # last 3 turns
+        role = "user" if m["role"] == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part(text=m["content"][:500])]))
+    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
 
-    answer = rag.llm_generate(prompt, max_tokens=config.AGENT_MAX_TOKENS)
+    gen_config = types.GenerateContentConfig(
+        temperature=config.LLM_TEMPERATURE,
+        max_output_tokens=config.AGENT_MAX_TOKENS,
+        system_instruction=config.AGENT_SYSTEM_PROMPT,
+        safety_settings=_SAFETY_SETTINGS,
+    )
+    try:
+        resp = rag.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)
+        answer = rag.safe_extract_text(resp)
+    except Exception as e:
+        logger.error(f"[AnswerGenerator] LLM call failed: {e}", exc_info=True)
+        return {"draft_answer": "The AI model is temporarily unavailable. Please try again."}
 
     logger.info(f"[AnswerGenerator] chunks_used={chunks_used}, ans_len={len(answer)}")
     return {"draft_answer": answer}

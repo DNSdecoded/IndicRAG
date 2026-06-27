@@ -18,29 +18,105 @@ def _truncate_at_sentence(text: str, limit: int) -> str:
     pos = cut.rfind(". ")
     return cut[:pos + 1] if pos > limit // 2 else cut
 
+
 _COMPLETENESS_PROMPT = """\
-Evaluate if this answer completely addresses all parts of the query.
+You are a quality-control evaluator in a retrieval-augmented generation pipeline. \
+Assess whether the generated answer fully satisfies the original query.
 
-Query: {query}
-Answer: {answer}
+EVALUATION STEPS:
 
-Score completeness (0.0-1.0). If < 0.75, list what is missing.
+STEP 1 — SOURCE RELEVANCE:
+Examine the retrieved source titles. If the majority are clearly off-topic \
+relative to the query, the problem is a retrieval failure, not a writing failure.
 
-The system auto-accepts when both completeness and faithfulness are >= 0.75; your action is ignored then.
-When below threshold, choose the action that fixes the actual deficit:
-- "regenerate":    faithfulness is low but completeness is adequate — passages are fine, rewrite the answer
-- "retrieve_more": completeness is low because needed context was NOT retrieved
-- "reformulate":   the original query was misunderstood at the planning stage
+STEP 2 — COMPLETENESS SCORE:
+Score 0.0 (answer completely missing) to 1.0 (fully addresses every aspect).
 
-Return JSON only (example — use real values, not these):
-{{"completeness_score": 0.85, "action": "accept", "missing_aspects": ["methodology details"]}}"""
+STEP 3 — ACTION (choose the one action that fixes the actual deficit):
+  "accept"       Score >= 0.75 AND sources are relevant.
+  "regenerate"   Score < 0.75 BUT sources are relevant and adequate — \
+                 the answer is poorly written; rewrite without re-retrieving.
+  "retrieve_more" Score < 0.75 AND sources are on-topic but incomplete — \
+                 fetch additional context with a sharper query.
+  "reformulate"  Majority of source titles are OFF-TOPIC — the retrieval \
+                 query was wrong; replanning needed.
+
+OUTPUT FORMAT: Begin your response IMMEDIATELY with the opening brace `{`. \
+Raw JSON only — no markdown fences, no prose before or after the object. \
+Keep missing_aspects strings SHORT (max 8 words each) to avoid truncation.
+
+<schema>
+{{
+  "completeness_score": 0.85,
+  "action": "accept",
+  "missing_aspects": ["short description of gap"]
+}}
+</schema>
+
+<original_query>
+{query}
+</original_query>
+
+<retrieved_source_titles>
+{source_titles}
+</retrieved_source_titles>
+
+<generated_answer>
+{answer}
+</generated_answer>\
+"""
+
+
+def _extract_json(raw: str) -> dict:
+    """Extract the FIRST complete JSON object, then fall back to truncation repair."""
+    clean = raw.strip()
+    clean = re.sub(r"```[a-zA-Z]*\s*\n?", "", clean)
+    clean = re.sub(r"\n?\s*```", "", clean)
+    clean = clean.strip()
+
+    start = clean.find('{')
+    if start == -1:
+        raise ValueError(f"No JSON object found: {clean[:120]}")
+
+    depth, in_str, esc = 0, False, False
+    for i, ch in enumerate(clean[start:], start):
+        if esc:
+            esc = False; continue
+        if ch == '\\' and in_str:
+            esc = True; continue
+        if ch == '"':
+            in_str = not in_str; continue
+        if in_str:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(clean[start:i + 1])
+                except json.JSONDecodeError:
+                    break
+
+    fragment = clean[start:]
+    if fragment.count('"') % 2 == 1:
+        fragment += '"'
+    fragment = fragment.rstrip()
+    if fragment.count('[') > fragment.count(']'):
+        fragment = re.sub(r',\s*$', '', fragment) + ']'
+    fragment = re.sub(r',?\s*"[^"]*"\s*:\s*$', '', fragment.rstrip())
+    fragment = re.sub(r',\s*$', '', fragment.rstrip()) + '}'
+    try:
+        return json.loads(fragment)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"No JSON object found: {clean[:120]}") from e
 
 
 def reflexion_evaluator_node(state: AgentState) -> dict:
     count = state.get("reflexion_count", 0)
 
     if count >= MAX_REFLEXION:
-        logger.info(f"[Reflexion] Max iterations reached ({MAX_REFLEXION}), finalising.")
+        logger.info(f"[Reflexion] Max iterations ({MAX_REFLEXION}), finalising.")
         return {
             "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
             "reflexion_count": count,
@@ -51,34 +127,46 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
     claims = verify.check_claims(answer, chunks)
     if claims:
-        # ponytail: min not mean — one hallucinated claim can hide in a high average (BUG-013)
+        # ponytail: min not mean — one hallucinated claim can hide in a high average
         faithfulness_score = min(r["support"] for r in claims)
     else:
-        faithfulness_score = 0.0
+        faithfulness_score = 1.0  # absence of citable claims ≠ hallucination
 
+    titles = [c.get("title", "Unknown") for c in state.get("retrieved_contexts", [])]
+    source_titles = "\n".join(f"- {t}" for t in titles[:12]) or "None retrieved"
+
+    raw_text = ""
     try:
         resp = rag.generate_with_failover(
             model=config.LLM_MODEL_NAME,
             contents=_COMPLETENESS_PROMPT.format(
-                query=state["original_query"], answer=_truncate_at_sentence(answer, 4000)
+                query=state["original_query"],
+                source_titles=source_titles,
+                answer=_truncate_at_sentence(answer, 4000),
             ),
-            gen_config=types.GenerateContentConfig(temperature=0, max_output_tokens=256),
+            gen_config=types.GenerateContentConfig(
+                temperature=0,
+                max_output_tokens=1024,
+            ),
         )
-        raw = resp.text or ""
-        clean = re.sub(r"```(?:json)?|```", "", raw).strip()
-        parsed = json.loads(clean)
+        raw_text = rag.safe_extract_text(resp)
+        parsed = _extract_json(raw_text)
         completeness_score = float(parsed.get("completeness_score", 0.5))
         missing = parsed.get("missing_aspects", [])
 
         if not claims:
-            action = "regenerate"
+            action = parsed.get("action", "retrieve_more")
         elif faithfulness_score >= 0.75 and completeness_score >= 0.75:
             action = "accept"
         else:
             action = parsed.get("action", "retrieve_more")
+
     except Exception as e:
-        logger.warning(f"[Reflexion] Completeness check failed: {e}")
-        completeness_score, missing = 0.0, []
+        logger.warning(
+            f"[Reflexion] Completeness check failed ({type(e).__name__}): {e} "
+            f"| raw={raw_text[:300]!r}"
+        )
+        completeness_score, missing = 0.5, []
         action = "regenerate" if faithfulness_score >= 0.75 else "retrieve_more"
 
     feedback = ReflexionFeedback(
@@ -89,22 +177,22 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     )
     history = list(state.get("reflexion_history", [])) + [feedback]
 
-    # Detect stuck loop: if completeness didn't improve, stop looping
+    # Stuck-loop detection: threshold +0.10, only fires on last iteration
     prev = state.get("reflexion_history", [])
     if prev and action != "accept":
         prev_complete = prev[-1].get("completeness_score", 0.0)
-        if completeness_score <= prev_complete + 0.05:
+        if completeness_score <= prev_complete + 0.10 and count + 1 >= MAX_REFLEXION:
             if faithfulness_score < 0.75:
+                missing_str = ", ".join(missing) or "the requested details"
                 logger.info(
                     f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} "
                     f"faith={faithfulness_score:.2f} complete={completeness_score:.2f} "
                     f"action=safe_stop (stuck with low faithfulness)"
                 )
-                missing_str = (", ".join(missing) or "the requested details") if missing else "the requested details"
                 return {
                     "final_answer": (
-                        f"The retrieved context does not fully support answering this question. "
-                        f"The available sources do not contain sufficient information about: {missing_str}."
+                        "The retrieved context does not fully support answering this question. "
+                        f"Missing: {missing_str}."
                     ),
                     "reflexion_count": count + 1,
                     "reflexion_history": history,

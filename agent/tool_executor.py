@@ -21,6 +21,7 @@ import config
 
 logger = logging.getLogger(__name__)
 _tavily = None
+_S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
 
 
 def _get_tavily():
@@ -190,6 +191,10 @@ def _validate_ast(code: str) -> str | None:
 
 _SANDBOX_WRAPPER = '''\
 import sys as _sys
+for mod in list(_sys.modules.keys()):
+    if mod not in ["sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "encodings", "codecs", "io", "abc", "os", "site"]:
+        try: del _sys.modules[mod]
+        except KeyError: pass
 _SAFE_BUILTINS = {
     "abs", "all", "any", "bin", "bool", "bytes", "chr", "complex",
     "dict", "divmod", "enumerate", "filter", "float", "frozenset",
@@ -234,10 +239,14 @@ def execute_python(code: str) -> dict:
         with tempfile.NamedTemporaryFile(mode='w', suffix='_wrapper.py', delete=False, encoding='utf-8') as f:
             f.write(_SANDBOX_WRAPPER)
             wrapper_path = f.name
+        env = {
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+            "PYTHONDONTWRITEBYTECODE": "1"
+        }
         result = subprocess.run(
-            [sys.executable, "-u", wrapper_path, tmp_path],
+            [sys.executable, "-I", "-u", wrapper_path, tmp_path],
             capture_output=True, text=True, timeout=_SANDBOX_TIMEOUT,
-            env={"PATH": "", "PYTHONPATH": "", "PYTHONDONTWRITEBYTECODE": "1"},
+            env=env,
             cwd=tempfile.gettempdir(),
         )
         output = result.stdout.strip()
@@ -258,33 +267,64 @@ def execute_python(code: str) -> dict:
                     pass
 
 
-def execute_arxiv_search(query: str, max_results: int = 5, sort_by: str = "relevance") -> dict:
-    sort = arxiv.SortCriterion.Relevance if sort_by != "submitted_date" else arxiv.SortCriterion.SubmittedDate
-    client = arxiv.Client()
+_ARXIV_TIMEOUT = 20  # seconds
+
+
+def execute_arxiv_search(
+    query: str,
+    max_results: int = 5,
+    sort_by: str = "relevance",
+    year_from: int | None = None,
+) -> dict:
+    import datetime
+    import concurrent.futures as _cf
+
+    sort = (arxiv.SortCriterion.Relevance
+            if sort_by != "submitted_date"
+            else arxiv.SortCriterion.SubmittedDate)
+    client = arxiv.Client(num_retries=1)
     search = arxiv.Search(
         query=query,
-        max_results=min(max_results, 10),
+        max_results=min(max_results * 3, 30),  # over-fetch to absorb date filtering
         sort_by=sort,
     )
-    passages = []
-    for paper in client.results(search):
-        authors = ", ".join(a.name for a in paper.authors[:5])
-        if len(paper.authors) > 5:
-            authors += f" (+{len(paper.authors) - 5} more)"
-        text = (
-            f"Title: {paper.title}\n"
-            f"Authors: {authors}\n"
-            f"Published: {paper.published.strftime('%Y-%m-%d')}\n"
-            f"Abstract: {paper.summary[:600]}"
-        )
-        passages.append({
-            "text": text,
-            "title": paper.title,
-            "source": paper.entry_id,
-            "section": "arxiv",
-            "pdf_url": paper.pdf_url,
-            "arxiv_id": paper.entry_id.split("/")[-1],
-        })
+    cutoff = (
+        datetime.datetime(year_from, 1, 1, tzinfo=datetime.timezone.utc)
+        if year_from else None
+    )
+
+    def _fetch() -> list:
+        results = []
+        for paper in client.results(search):
+            if cutoff and paper.published.replace(tzinfo=datetime.timezone.utc) < cutoff:
+                continue
+            authors = ", ".join(a.name for a in paper.authors[:5])
+            if len(paper.authors) > 5:
+                authors += f" (+{len(paper.authors) - 5} more)"
+            text = (
+                f"Title: {paper.title}\n"
+                f"Authors: {authors}\n"
+                f"Published: {paper.published.strftime('%Y-%m-%d')}\n"
+                f"Abstract: {paper.summary[:600]}"
+            )
+            results.append({
+                "text": text,
+                "title": paper.title,
+                "source": paper.entry_id,
+                "section": "arxiv",
+                "pdf_url": paper.pdf_url,
+                "arxiv_id": paper.entry_id.split("/")[-1],
+            })
+            if len(results) >= max_results:
+                break
+        return results
+
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+            passages = pool.submit(_fetch).result(timeout=_ARXIV_TIMEOUT)
+    except _cf.TimeoutError:
+        logger.warning(f"[ArxivSearch] Timed out after {_ARXIV_TIMEOUT}s")
+        passages = []
     return {"passages": passages}
 
 
@@ -404,41 +444,43 @@ def execute_open_access_search(
     year_range: str = "",
     open_access_only: bool = True,
 ) -> dict:
-    # Try Semantic Scholar first with aggressive retry
-    params = {
-        "query": query,
-        "limit": min(max_results, 10),
-        "fields": _S2_FIELDS,
-    }
-    if open_access_only:
-        params["openAccessPdf"] = ""
-    if year_range:
-        params["year"] = year_range
+    # Try Semantic Scholar only when an API key is configured (avoids anonymous 429s)
+    if _S2_API_KEY:
+        params = {
+            "query": query,
+            "limit": min(max_results, 10),
+            "fields": _S2_FIELDS,
+        }
+        if open_access_only:
+            params["openAccessPdf"] = ""
+        if year_range:
+            params["year"] = year_range
+        url = f"{_S2_API}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(
+            url,
+            headers={"x-api-key": _S2_API_KEY, "User-Agent": "IndicRAG/2.0"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+            passages = _parse_s2_papers(data)
+            if passages:
+                return {"passages": passages}
+        except Exception as e:
+            logger.warning(f"[OpenAccessSearch] Semantic Scholar failed: {e}")
 
-    url = f"{_S2_API}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "IndicRAG/2.0"})
-
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        passages = _parse_s2_papers(data)
-        if passages:
-            return {"passages": passages}
-    except urllib.error.HTTPError as e:
-        logger.warning(f"[OpenAccessSearch] Semantic Scholar failed: {e}")
-    except Exception as e:
-        logger.warning(f"[OpenAccessSearch] Semantic Scholar failed: {e}")
-
-    # Fallback to OpenAlex (free, virtually no rate limits)
-    logger.info("[OpenAccessSearch] Falling back to OpenAlex API")
+    # Always fall through to OpenAlex (no key needed, no rate limit)
+    logger.info("[OpenAccessSearch] Using OpenAlex API")
     try:
         passages = _fetch_openalex(query, max_results, year_range, open_access_only)
         if passages:
             return {"passages": passages}
     except Exception as e:
-        logger.error(f"[OpenAccessSearch] OpenAlex also failed: {e}")
+        logger.error(f"[OpenAccessSearch] OpenAlex failed: {e}")
 
-    return {"passages": [{"text": "No open-access papers found for this query.", "source": "open_access_search", "title": "No results", "section": "none"}]}
+    return {"passages": [{"text": "No open-access papers found.",
+                          "source": "open_access_search",
+                          "title": "No results", "section": "none"}]}
 
 
 TOOL_DISPATCH = {
@@ -451,7 +493,10 @@ TOOL_DISPATCH = {
     "calculate": lambda args: execute_calculate(args["expression"]),
     "execute_python": lambda args: execute_python(args["code"]),
     "arxiv_search": lambda args: execute_arxiv_search(
-        args["query"], args.get("max_results", 5), args.get("sort_by", "relevance")
+        args["query"],
+        args.get("max_results", 5),
+        args.get("sort_by", "relevance"),
+        args.get("year_from"),
     ),
     "open_access_search": lambda args: execute_open_access_search(
         args["query"], args.get("max_results", 5),

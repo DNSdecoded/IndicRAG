@@ -76,9 +76,9 @@ class BM25Index:
 def rrf(dense_ids: List[str], sparse_ids: List[str], k: int = 60) -> List[str]:
     """Reciprocal Rank Fusion of two ranked lists."""
     scores: Dict[str, float] = {}
-    for rank, _id in enumerate(dense_ids):
+    for rank, _id in enumerate(dense_ids, 1):
         scores[_id] = scores.get(_id, 0) + 1 / (k + rank)
-    for rank, _id in enumerate(sparse_ids):
+    for rank, _id in enumerate(sparse_ids, 1):
         scores[_id] = scores.get(_id, 0) + 1 / (k + rank)
     return sorted(scores, key=scores.get, reverse=True)
 
