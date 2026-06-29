@@ -4,7 +4,7 @@ Production-ready REST API with authentication, validation, and monitoring.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -124,6 +124,14 @@ app = FastAPI(
     redoc_url="/api/redoc",
     lifespan=lifespan,
 )
+
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Prometheus Monitoring
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -375,8 +383,10 @@ async def health_check():
 
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
+@limiter.limit("30/minute")
 async def query_question(
-    request: QueryRequest,
+    request: Request,
+    body: QueryRequest,
     authenticated: bool = Depends(verify_api_key)
 ):
     """
@@ -388,19 +398,19 @@ async def query_question(
     
     try:
         # Log request (truncate question for privacy/brevity)
-        question_preview = request.question[:80] + "..." if len(request.question) > 80 else request.question
-        logger.info(f"Query received: strategy={request.strategy}, question='{question_preview}'")
-        
+        question_preview = body.question[:80] + "..." if len(body.question) > 80 else body.question
+        logger.info(f"Query received: strategy={body.strategy}, question='{question_preview}'")
+
         # Enforce top_k bounds even if client sends higher
-        top_k = request.top_k
+        top_k = body.top_k
         if top_k is not None:
             top_k = max(1, min(top_k, 20))  # Clamp to [1, 20]
-        
+
         # Process query (run in thread pool to avoid blocking event loop)
         result = await run_in_threadpool(
             rag.answer_question,
-            user_query=request.question,
-            strategy=request.strategy,
+            user_query=body.question,
+            strategy=body.strategy,
             top_k=top_k
         )
         
@@ -449,8 +459,10 @@ async def query_question(
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+@limiter.limit("30/minute")
 async def chat(
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
 ):
     """
@@ -462,21 +474,21 @@ async def chat(
     """
     start_time = time.time()
 
-    top_k = request.top_k
+    top_k = body.top_k
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(request.session_id)
+    session_id, messages = _get_or_create_session(body.session_id)
     turn_index = len(messages) // 2  # number of completed user+assistant pairs
 
     # Build the full message list the RAG function expects
-    full_messages = list(messages) + [{"role": "user", "content": request.message}]
+    full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
     try:
         result = await run_in_threadpool(
             rag.answer_with_history,
             messages=full_messages,
-            strategy=request.strategy,
+            strategy=body.strategy,
             top_k=top_k,
         )
     except ValueError as e:
@@ -486,7 +498,7 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
     # Persist both turns in session history
-    _append_session_messages(session_id, request.message, result["answer"])
+    _append_session_messages(session_id, body.message, result["answer"])
 
     processing_time = time.time() - start_time
     logger.info(
@@ -521,27 +533,29 @@ async def delete_session(
 
 
 @app.post("/ingest", response_model=IngestResponse, tags=["Management"])
+@limiter.limit("5/minute")
 async def ingest_document(
-    request: IngestRequest,
+    request: Request,
+    body: IngestRequest,
     authenticated: bool = Depends(verify_api_key)
 ):
     """
     Ingest a PDF document into the vector store.
-    
+
     Requires authentication if API keys are configured.
     """
     start_time = time.time()
-    
+
     try:
         import ingest as ingest_module
         from pathlib import Path
 
-        # At this point request.pdf_path is already sanitized by the Pydantic validator:
+        # At this point body.pdf_path is already sanitized by the Pydantic validator:
         # - not absolute, no '..' components, safe characters only.
         base_dir = Path(config.PAPERS_DIR).resolve()
 
         # Build and resolve the candidate path
-        candidate = (base_dir / request.pdf_path).resolve()
+        candidate = (base_dir / body.pdf_path).resolve()
 
         # Use Path.relative_to() as the authoritative containment check.
         # This raises ValueError if candidate is not inside base_dir, ensuring
@@ -550,7 +564,7 @@ async def ingest_document(
         try:
             relative_part = candidate.relative_to(base_dir)
         except ValueError:
-            logger.warning(f"Path traversal blocked after resolve: {request.pdf_path!r}")
+            logger.warning(f"Path traversal blocked after resolve: {body.pdf_path!r}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid pdf_path: path escapes the papers directory."
@@ -563,7 +577,7 @@ async def ingest_document(
         if not safe_pdf_path.exists() or not safe_pdf_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"PDF file not found: {request.pdf_path}"
+                detail=f"PDF file not found: {body.pdf_path}"
             )
 
         logger.info(f"Ingesting document: {safe_pdf_path}")
@@ -653,7 +667,9 @@ def _run_bulk_ingest(job_id: str):
 
 
 @app.post("/ingest/all", response_model=IngestJobResponse, status_code=202, tags=["Management"])
+@limiter.limit("2/minute")
 async def ingest_all_documents(
+    request: Request,
     background_tasks: BackgroundTasks,
     authenticated: bool = Depends(verify_api_key)
 ):
@@ -1173,8 +1189,10 @@ class AgentQueryResponse(BaseModel):
 
 
 @app.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
+@limiter.limit("10/minute")
 async def agent_query(
-    request: AgentQueryRequest,
+    request: Request,
+    body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
 ):
     """
@@ -1182,10 +1200,10 @@ async def agent_query(
     Supports the same 10+ languages as /query and /chat.
     """
     start_time = time.time()
-    session_id, messages = _get_or_create_session(request.session_id)
+    session_id, messages = _get_or_create_session(body.session_id)
 
     initial_state = AgentState(
-        original_query=request.question,
+        original_query=body.question,
         detected_language="",
         query_plan=[],
         tool_calls_requested=[],
@@ -1197,7 +1215,7 @@ async def agent_query(
         tool_calls_log=[],
         conversation_history=list(messages),
         session_id=session_id,
-        strategy=request.strategy,
+        strategy=body.strategy,
     )
 
     import asyncio
@@ -1207,7 +1225,7 @@ async def agent_query(
             timeout=float(config.AGENT_TIMEOUT),
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Agent timed out after {config.AGENT_TIMEOUT}s for query: {request.question[:80]}")
+        logger.warning(f"Agent timed out after {config.AGENT_TIMEOUT}s for query: {body.question[:80]}")
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail={"error": "Agent pipeline timed out. Try a simpler query or use Standard RAG mode.", "code": "AGENT_TIMEOUT"},
@@ -1238,7 +1256,7 @@ async def agent_query(
             detail={"error": "Agent pipeline failed. Please try again later.", "code": "AGENT_ERROR"},
         )
 
-    _append_session_messages(session_id, request.question, result["final_answer"])
+    _append_session_messages(session_id, body.question, result["final_answer"])
     processing_time = time.time() - start_time
 
     logger.info(
