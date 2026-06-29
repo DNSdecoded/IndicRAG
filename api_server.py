@@ -251,6 +251,7 @@ class HealthResponse(BaseModel):
     timestamp: str
     version: str
     gemini_configured: bool
+    checks: Optional[Dict[str, str]] = None
 
 
 import re as _re
@@ -376,13 +377,46 @@ async def root():
 
 
 @app.get("/health", response_model=HealthResponse, tags=["General"])
-async def health_check():
-    """Health check endpoint."""
+async def health_check(deep: bool = False):
+    """Health check endpoint. Add ?deep=true for component-level checks."""
+    checks = None
+    status = "healthy"
+    if deep:
+        import vector_store, embeddings, rerank
+        checks = {}
+
+        # ChromaDB (critical)
+        try:
+            await run_in_threadpool(vector_store.get_collection_stats)
+            checks["chromadb"] = "ok"
+        except Exception:
+            checks["chromadb"] = "error"
+            status = "unhealthy"
+
+        # Embeddings (non-critical — lazy singleton, None means not yet loaded)
+        try:
+            checks["embeddings"] = "ok" if embeddings._embedding_model is not None else "not_loaded"
+        except Exception:
+            checks["embeddings"] = "error"
+
+        # Reranker
+        try:
+            if not config.USE_RERANKER:
+                checks["reranker"] = "not_configured"
+            else:
+                checks["reranker"] = "ok" if rerank._model is not None else "not_loaded"
+        except Exception:
+            checks["reranker"] = "error"
+
+        if status != "unhealthy" and any(v == "error" for v in checks.values()):
+            status = "degraded"
+
     return HealthResponse(
-        status="healthy",
+        status=status,
         timestamp=datetime.now(timezone.utc).isoformat(),
         version=config.VERSION,
-        gemini_configured=bool(config.LLM_API_KEY_POOL)
+        gemini_configured=bool(config.LLM_API_KEY_POOL),
+        checks=checks,
     )
 
 
