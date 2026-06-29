@@ -27,7 +27,7 @@ class BM25Index:
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
-        return regex.findall(r'\w+', text.lower())
+        return regex.findall(r'[\p{L}\p{N}]+', text.lower())
 
     def build(self, ids: List[str], texts: List[str]):
         self.doc_ids = list(ids)

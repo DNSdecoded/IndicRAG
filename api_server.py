@@ -39,7 +39,7 @@ def _update_job(job_id: str, **kwargs):
         now = time.monotonic()
         if now - _last_job_eviction >= 3600:
             _last_job_eviction = now
-            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
             for jid in [j for j, v in _jobs.items()
                         if v.get("completed_at") and
                         datetime.fromisoformat(v["completed_at"]) < cutoff]:
@@ -61,7 +61,7 @@ def _evict_stale_sessions():
     if now - _last_session_eviction < 60:
         return
     _last_session_eviction = now
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
     for sid in [s for s, v in _sessions.items()
                 if datetime.fromisoformat(v["updated_at"]) < cutoff]:
         del _sessions[sid]
@@ -74,7 +74,7 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
         if session_id and session_id in _sessions:
             return session_id, list(_sessions[session_id]["messages"])
         new_id = session_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         _sessions[new_id] = {
             "id": new_id,
             "messages": [],
@@ -93,7 +93,7 @@ def _append_session_messages(session_id: str, user_text: str, assistant_text: st
         max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
         if len(msgs) > max_msgs:
             del msgs[:len(msgs) - max_msgs]
-        sess["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        sess["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 # Configure logging
 logging.basicConfig(
@@ -150,8 +150,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 # API Key authentication (optional)
@@ -368,7 +368,7 @@ async def health_check():
     """Health check endpoint."""
     return HealthResponse(
         status="healthy",
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         version=config.VERSION,
         gemini_configured=bool(config.LLM_API_KEY_POOL)
     )
@@ -427,7 +427,7 @@ async def query_question(
             chunks_used=result['chunks_used'],
             citations=citations,
             processing_time=processing_time,
-            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
     
     except ValueError as e:
@@ -503,7 +503,7 @@ async def chat(
         chunks_used=result["chunks_used"],
         citations=[Citation(**c) for c in result["citations"]],
         processing_time=processing_time,
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -637,7 +637,7 @@ def _run_bulk_ingest(job_id: str):
             failed=stats.get("failed", 0),
             chunks_ingested=stats.get("total_chunks", 0),
             processing_time=processing_time,
-            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
         logger.info(f"Bulk ingest job {job_id} finished: {status_value}")
     except Exception as e:
@@ -648,7 +648,7 @@ def _run_bulk_ingest(job_id: str):
             status="failed",
             processing_time=processing_time,
             error=str(e),
-            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
 
@@ -668,7 +668,7 @@ async def ingest_all_documents(
         _jobs[job_id] = {
             "job_id": job_id,
             "status": "pending",
-            "submitted_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
             "total_files": None,
             "successful": None,
@@ -853,7 +853,7 @@ async def search_documents(
             results=results,
             total_results=len(results),
             processing_time=processing_time,
-            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     except Exception as e:
@@ -1214,7 +1214,7 @@ async def agent_query(
         tool_calls=result.get("tool_calls_log", []),
         sources=sources,
         processing_time=processing_time,
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 

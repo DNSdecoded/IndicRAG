@@ -153,14 +153,10 @@ def search(
     # Convert embedding to list
     query_embedding_list = query_embedding.tolist()
     
-    actual_top_k = min(top_k, collection.count())
-    if actual_top_k == 0:
-        return {'ids': [], 'documents': [], 'metadatas': [], 'distances': []}
-    
     # Search
     results = collection.query(
         query_embeddings=[query_embedding_list],
-        n_results=actual_top_k,
+        n_results=top_k,
         where=filter_dict,
         include=["documents", "metadatas", "distances"]
     )
@@ -228,8 +224,9 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     """
     if collection is None:
         collection = get_or_create_collection()
+    ids = collection.get(where={'paper_id': paper_id}, include=[])['ids']
     collection.delete(where={'paper_id': paper_id})
-    return 0
+    return len(ids)
 
 if __name__ == "__main__":
     # Test vector store functionality

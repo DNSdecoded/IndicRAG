@@ -5,6 +5,7 @@ Document ingestion pipeline for scientific papers.
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import logging
+import os
 from tqdm import tqdm
 import hashlib
 import concurrent.futures
@@ -16,13 +17,13 @@ import config
 
 logger = logging.getLogger(__name__)
 
-def calculate_md5(file_path: str) -> str:
-    """Calculate MD5 hash of a file."""
-    hash_md5 = hashlib.md5()
+def calculate_sha256(file_path: str) -> str:
+    """Calculate SHA-256 hash of a file."""
+    h = hashlib.sha256()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def ingest_paper(
@@ -164,7 +165,7 @@ def ingest_pdf(
     
     if metadata is None:
         metadata = {}
-    metadata['file_hash'] = calculate_md5(pdf_path)
+    metadata['file_hash'] = calculate_sha256(pdf_path)
     
     result = pdf_utils.process_pdf(pdf_path)
     
@@ -187,13 +188,13 @@ def ingest_pdf(
 
 def _extract_worker(path: str, metadata: dict = None) -> tuple:
     """Worker function for parallel PDF extraction."""
-    hash_md5 = hashlib.md5()
+    h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    
+            h.update(chunk)
+
     m = dict(metadata) if metadata else {}
-    m['file_hash'] = hash_md5.hexdigest()
+    m['file_hash'] = h.hexdigest()
     
     paper_id = Path(path).stem
     res = pdf_utils.process_pdf(path)
@@ -262,7 +263,7 @@ def ingest_directory(
                 return {}
 
         # Bound in-flight tasks to avoid IPC queue bloat (PDF parse >> embedding speed)
-        max_workers = executor._max_workers or 4
+        max_workers = os.cpu_count() or 4
         sem = threading.Semaphore(max_workers * 2)
 
         future_to_pdf = {}
