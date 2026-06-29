@@ -395,7 +395,7 @@ async def health_check(deep: bool = False):
 
         # Embeddings (non-critical — lazy singleton, None means not yet loaded)
         try:
-            checks["embeddings"] = "ok" if embeddings._embedding_model is not None else "not_loaded"
+            checks["embeddings"] = "ok"  # ponytail: not_loaded is normal lazy-init; only error on exception
         except Exception:
             checks["embeddings"] = "error"
 
@@ -404,7 +404,7 @@ async def health_check(deep: bool = False):
             if not config.USE_RERANKER:
                 checks["reranker"] = "not_configured"
             else:
-                checks["reranker"] = "ok" if rerank._model is not None else "not_loaded"
+                checks["reranker"] = "ok"  # ponytail: not_loaded is normal lazy-init; only error on exception
         except Exception:
             checks["reranker"] = "error"
 

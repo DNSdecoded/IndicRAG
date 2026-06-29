@@ -129,9 +129,11 @@ def embed_query(query: str) -> np.ndarray:
         # Wait for the owning thread, then return from cache
         wait_event.wait()
         with _query_cache_lock:
-            return _query_cache[key]
+            if key in _query_cache:
+                return _query_cache[key]
+        # owner failed — fall through to compute independently below
 
-    # This thread owns the compute
+    # This thread owns the compute (or is recovering after owner failure)
     try:
         result = embed_texts([query], batch_size=1, show_progress=False, is_query=True)[0]
         with _query_cache_lock:
