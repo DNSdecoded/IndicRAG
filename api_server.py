@@ -976,6 +976,79 @@ def list_papers(authenticated: bool = Depends(verify_api_key)):
         )
 
 
+class DeletePaperResponse(BaseModel):
+    paper_id: str
+    chunks_deleted: int
+    status: str
+
+
+class PatchPaperRequest(BaseModel):
+    title: Optional[str] = None
+    authors: Optional[str] = None
+    year: Optional[str] = None
+    tags: Optional[str] = None
+
+    @field_validator("title", "authors", "year", "tags", mode="before")
+    @classmethod
+    def reject_empty_string(cls, v):
+        if v is not None and v == "":
+            raise ValueError("field must not be empty string")
+        return v
+
+
+class PatchPaperResponse(BaseModel):
+    paper_id: str
+    chunks_updated: int
+    updates: dict
+
+
+@app.delete("/papers/{paper_id}", response_model=DeletePaperResponse, tags=["Management"])
+async def delete_paper(
+    paper_id: str,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Delete all indexed chunks for a specific paper from the vector store."""
+    import vector_store
+    chunks_deleted = await run_in_threadpool(vector_store.delete_by_paper_id, paper_id)
+    if chunks_deleted == 0:
+        raise HTTPException(status_code=404, detail="paper not found or already deleted")
+    try:
+        import bm25_search
+        bm25_search.invalidate()
+        threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
+    except Exception:
+        pass
+    try:
+        from cache import retrieval_cache, tool_cache
+        retrieval_cache.invalidate()
+        tool_cache.invalidate()
+    except Exception:
+        logger.warning("Failed to invalidate caches after paper deletion", exc_info=True)
+    return DeletePaperResponse(paper_id=paper_id, chunks_deleted=chunks_deleted, status="deleted")
+
+
+@app.patch("/papers/{paper_id}", response_model=PatchPaperResponse, tags=["Management"])
+async def patch_paper(
+    paper_id: str,
+    request: PatchPaperRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Update metadata fields on all chunks for a specific paper."""
+    updates = {k: v for k, v in request.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="no valid fields to update")
+    import vector_store
+    chunks_updated = await run_in_threadpool(vector_store.update_paper_metadata, paper_id, updates)
+    if chunks_updated == 0:
+        raise HTTPException(status_code=404, detail="paper not found")
+    try:
+        from cache import retrieval_cache
+        retrieval_cache.invalidate()
+    except Exception:
+        logger.warning("Failed to invalidate retrieval cache after paper update", exc_info=True)
+    return PatchPaperResponse(paper_id=paper_id, chunks_updated=chunks_updated, updates=updates)
+
+
 @app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
 def purge_papers(authenticated: bool = Depends(verify_admin_key)):
     """

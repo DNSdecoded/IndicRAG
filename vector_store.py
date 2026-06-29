@@ -240,6 +240,19 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     _chroma_call(collection.delete, where={'paper_id': paper_id})
     return len(ids)
 
+
+def update_paper_metadata(paper_id: str, updates: dict, collection: chromadb.Collection = None) -> int:
+    """Update metadata fields on all chunks for a paper. Returns chunk count updated."""
+    if collection is None:
+        collection = get_or_create_collection()
+    result = _chroma_call(collection.get, where={'paper_id': paper_id}, include=['metadatas'])
+    ids = result.get('ids', [])
+    if not ids:
+        return 0
+    new_metadatas = [{**m, **updates} for m in result['metadatas']]
+    _chroma_call(collection.update, ids=ids, metadatas=new_metadatas)
+    return len(ids)
+
 if __name__ == "__main__":
     # Test vector store functionality
     print("Testing ChromaDB Vector Store")
