@@ -9,10 +9,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -517,6 +519,110 @@ async def chat(
         processing_time=processing_time,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+async def _sse_stream(prompt: str, metadatas: list, language: str, max_tokens: int = None):
+    """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue."""
+    q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        try:
+            for chunk in rag.llm_generate_stream(prompt, max_tokens):
+                loop.call_soon_threadsafe(q.put_nowait, ("chunk", chunk))
+        except Exception as exc:
+            loop.call_soon_threadsafe(q.put_nowait, ("error", str(exc)))
+        finally:
+            loop.call_soon_threadsafe(q.put_nowait, ("done", None))
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    full_answer: list[str] = []
+    while True:
+        kind, data = await q.get()
+        if kind == "chunk":
+            full_answer.append(data)
+            yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
+        elif kind == "error":
+            yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
+            break
+        else:  # done
+            break
+
+    citations = rag.extract_citations("".join(full_answer), metadatas)
+    yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/query/stream", tags=["Query"])
+async def query_stream(
+    request: Request,
+    body: QueryRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Stream a RAG answer as Server-Sent Events."""
+    top_k = body.top_k
+    if top_k is not None:
+        top_k = max(1, min(top_k, 20))
+
+    prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k)
+
+    if prepared["chunks_used"] == 0:
+        async def _no_docs():
+            yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang']})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_no_docs(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"]),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/chat/stream", tags=["Chat"])
+async def chat_stream(
+    request: Request,
+    body: ChatRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Stream a multi-turn chat answer as Server-Sent Events."""
+    top_k = body.top_k
+    if top_k is not None:
+        top_k = max(1, min(top_k, 20))
+
+    session_id, messages = _get_or_create_session(body.session_id)
+    full_messages = list(messages) + [{"role": "user", "content": body.message}]
+
+    prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k)
+
+    if prepared["chunks_used"] == 0:
+        async def _no_docs():
+            yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'session_id': session_id})}\n\n"
+            yield "data: [DONE]\n\n"
+        _append_session_messages(session_id, body.message, prepared["no_docs_msg"])
+        return StreamingResponse(_no_docs(), media_type="text/event-stream")
+
+    async def _stream_and_save():
+        full_answer: list[str] = []
+        async for event in _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"]):
+            # Inject session_id into the done event
+            if event.startswith('data: {"type": "done"'):
+                payload = json.loads(event[6:])
+                payload["session_id"] = session_id
+                yield f"data: {json.dumps(payload)}\n\n"
+            else:
+                # Accumulate chunks to persist in session history after streaming
+                if event.startswith('data: {"type": "chunk"'):
+                    try:
+                        full_answer.append(json.loads(event[6:])["text"])
+                    except Exception:
+                        pass
+                yield event
+        _append_session_messages(session_id, body.message, "".join(full_answer))
+
+    return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 
 
 @app.delete("/chat/{session_id}", tags=["Chat"])
