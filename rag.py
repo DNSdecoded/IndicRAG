@@ -307,30 +307,10 @@ def llm_generate(prompt: str, max_tokens: int = None,
         logger.debug("[LLM cache hit]")
         return cached
 
-    # Safety settings - set to BLOCK_NONE for scientific content
-    safety_settings = [
-        types.SafetySetting(
-            category="HARM_CATEGORY_HARASSMENT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_HATE_SPEECH",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold="BLOCK_NONE",
-        ),
-    ]
-
     generate_config = types.GenerateContentConfig(
         temperature=config.LLM_TEMPERATURE,
         max_output_tokens=max_tokens,
-        safety_settings=safety_settings,
+        safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
     )
 
