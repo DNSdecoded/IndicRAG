@@ -63,7 +63,7 @@ def _evict_stale_sessions():
     _last_session_eviction = now
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
     for sid in [s for s, v in _sessions.items()
-                if datetime.fromisoformat(v["created_at"]) < cutoff]:
+                if datetime.fromisoformat(v["updated_at"]) < cutoff]:
         del _sessions[sid]
 
 
@@ -74,22 +74,26 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
         if session_id and session_id in _sessions:
             return session_id, list(_sessions[session_id]["messages"])
         new_id = session_id or str(uuid.uuid4())
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         _sessions[new_id] = {
             "id": new_id,
             "messages": [],
-            "created_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "created_at": now,
+            "updated_at": now,
         }
         return new_id, list(_sessions[new_id]["messages"])
 
 
 def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:
     with _sessions_lock:
-        msgs = _sessions[session_id]["messages"]
+        sess = _sessions[session_id]
+        msgs = sess["messages"]
         msgs.append({"role": "user", "content": user_text})
         msgs.append({"role": "assistant", "content": assistant_text})
         max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
         if len(msgs) > max_msgs:
             del msgs[:len(msgs) - max_msgs]
+        sess["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 # Configure logging
 logging.basicConfig(

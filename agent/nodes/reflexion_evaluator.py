@@ -177,11 +177,11 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     )
     history = list(state.get("reflexion_history", [])) + [feedback]
 
-    # Stuck-loop detection: threshold +0.10, only fires on last iteration
+    # Stuck-loop detection: fires from iteration 2 onwards, not just the last one
     prev = state.get("reflexion_history", [])
     if prev and action != "accept":
         prev_complete = prev[-1].get("completeness_score", 0.0)
-        if completeness_score <= prev_complete + 0.10 and count + 1 >= MAX_REFLEXION:
+        if completeness_score <= prev_complete + 0.05 and count >= 1:
             if faithfulness_score < 0.75:
                 missing_str = ", ".join(missing) or "the requested details"
                 logger.info(

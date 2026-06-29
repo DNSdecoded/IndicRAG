@@ -19,7 +19,6 @@ class BM25Index:
         self.k1 = k1
         self.b = b
         self.doc_ids: List[str] = []
-        self.doc_texts: List[str] = []
         self.doc_freqs: List[Counter] = []
         self.doc_lens: List[int] = []
         self.avg_dl: float = 0.0
@@ -32,7 +31,6 @@ class BM25Index:
 
     def build(self, ids: List[str], texts: List[str]):
         self.doc_ids = list(ids)
-        self.doc_texts = list(texts)
         self.doc_freqs = []
         self.doc_lens = []
         self.df = Counter()
@@ -115,4 +113,5 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
 def invalidate():
     """Clear all cached indices (call after ingestion)."""
     global _indices
-    _indices = {}
+    with _lock:
+        _indices = {}

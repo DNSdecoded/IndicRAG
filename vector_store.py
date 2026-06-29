@@ -228,11 +228,7 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     """
     if collection is None:
         collection = get_or_create_collection()
-        
-    results = collection.get(where={'paper_id': paper_id})
-    if results and results.get('ids'):
-        collection.delete(ids=results['ids'])
-        return len(results['ids'])
+    collection.delete(where={'paper_id': paper_id})
     return 0
 
 if __name__ == "__main__":

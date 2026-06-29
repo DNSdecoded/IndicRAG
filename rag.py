@@ -68,34 +68,16 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
     """
     import re
     
-    citations = []
     seen_nums = set()
-    
-    # Match [1], [1, 2], [1-3], [1,2,3], etc.
-    raw_citations = re.findall(r'\[([\d\s,\-]+)\]', answer)
-    
-    for raw in raw_citations:
-        # Parse comma-separated and ranges
-        parts = raw.replace(' ', '').split(',')
-        for part in parts:
-            if '-' in part:
-                try:
-                    start, end = part.split('-')
-                    s, e = int(start), int(end)
-                    if e - s > 50:
-                        continue
-                    for num in range(s, e + 1):
-                        seen_nums.add(num)
-                except ValueError:
-                    pass
-            else:
-                # Single number
-                try:
-                    seen_nums.add(int(part))
-                except ValueError:
-                    pass
-    
-    # Build citations list (sorted for consistent ordering)
+
+    # Only match the explicit [Cite:N] prefix to avoid over-matching ranges like [10-15] mg
+    for m in re.finditer(r'\[Cite:\s*(\d+)\]', answer):
+        try:
+            seen_nums.add(int(m.group(1)))
+        except ValueError:
+            pass
+
+    citations = []
     for num in sorted(seen_nums):
         idx = num - 1
         if 0 <= idx < len(metadatas):
@@ -105,8 +87,8 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
                 'section': metadatas[idx].get('section', 'body')
             })
             if chunks and idx < len(chunks):
-                logger.debug(f"Citation [{num}] refers to paragraph: {chunks[idx][:200]}...")
-    
+                logger.debug(f"Citation [Cite:{num}] refers to paragraph: {chunks[idx][:200]}...")
+
     return citations
 
 
@@ -252,7 +234,7 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
         section = metadata.get('section', 'body')
         
         # Build context part FIRST to get accurate length
-        context_part = f"[{i}] {title} - {section}:\n{chunk}\n"
+        context_part = f"[Cite:{i}] {title} - {section}:\n{chunk}\n"
         
         # Check if adding this would exceed length limit
         if total_length + len(context_part) > config.MAX_CONTEXT_LENGTH:

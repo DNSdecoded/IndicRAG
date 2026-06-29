@@ -8,6 +8,7 @@ import logging
 from tqdm import tqdm
 import hashlib
 import concurrent.futures
+import threading
 import pdf_utils
 import embeddings
 import vector_store
@@ -260,11 +261,17 @@ def ingest_directory(
                 logger.warning(f"metadata_fn failed for {p}, using empty metadata: {meta_err}")
                 return {}
 
-        future_to_pdf = {
-            executor.submit(_extract_worker, str(p), _get_metadata(p)): str(p)
-            for p in pdf_files
-        }
-        
+        # Bound in-flight tasks to avoid IPC queue bloat (PDF parse >> embedding speed)
+        max_workers = executor._max_workers or 4
+        sem = threading.Semaphore(max_workers * 2)
+
+        future_to_pdf = {}
+        for p in pdf_files:
+            sem.acquire()
+            f = executor.submit(_extract_worker, str(p), _get_metadata(p))
+            f.add_done_callback(lambda _: sem.release())
+            future_to_pdf[f] = str(p)
+
         for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=len(pdf_files), desc="Ingesting PDFs"):
             pdf_path = future_to_pdf[future]
             try:
