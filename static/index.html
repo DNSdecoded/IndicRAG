@@ -407,7 +407,16 @@
         .toast-error   { background: var(--te-bg); color: var(--te-c); border-color: var(--te-br); }
         .toast-info    { background: var(--ti-bg); color: var(--ti-c); border-color: var(--ti-br); }
 
-        @media (max-width: 640px) { .sidebar{display:none} .chat-area{padding:1rem} .input-area{padding:.75rem 1rem} }
+        .mobile-menu-btn { display: none; }
+        @media (max-width: 768px) {
+            .mobile-menu-btn { display: flex; }
+            .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 1000; transform: translateX(-100%); transition: transform 0.3s ease; }
+            .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; z-index: 999; background: rgba(0,0,0,.3); }
+            .sidebar-overlay.active { display: block; }
+            .chat-area { padding: 1rem; }
+            .input-area { padding: .75rem 1rem; }
+        }
     </style>
 </head>
 <body>
@@ -504,6 +513,9 @@
 
 <main class="main">
     <header class="main-header">
+        <button class="icon-btn mobile-menu-btn" onclick="toggleSidebar()" title="Menu">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <button class="icon-btn" onclick="newConversation()" title="New conversation">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
@@ -591,6 +603,7 @@
     </div>
 </div>
 
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 <div class="toast-wrap" id="toastWrap"></div>
 
 <script>
@@ -601,6 +614,7 @@ let strategy    = 'A';
 let pipelineMode = 'standard';
 let isLoading   = false;
 let pendingPurge = null;
+let currentController = null;
 
 const botAvatarSvg = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/><line x1="10" y1="21" x2="14" y2="21"/></svg>`;
 
@@ -880,9 +894,18 @@ function appendErrorBubble(msg) {
     document.getElementById('chatArea').appendChild(row);
     scrollBottom();
 }
-function scrollBottom() { const a=document.getElementById('chatArea'); a.scrollTop=a.scrollHeight; }
+function scrollBottom() { const a=document.getElementById('chatArea'); if(a.scrollHeight-a.scrollTop-a.clientHeight<100) a.scrollTo({top:a.scrollHeight,behavior:'smooth'}); }
+function toggleSidebar() { document.querySelector('.sidebar').classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('active'); }
+function formatError(data) { if(!data||!data.detail) return null; if(Array.isArray(data.detail)) return data.detail.map(e=>`${e.loc.join('.')}: ${e.msg}`).join(' | '); return data.detail.error||data.detail; }
 
 // ── SEND ───────────────────────────────────────────────────────
+const STOP_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
+const SEND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
+function resetSendButton() {
+    isLoading = false; currentController = null;
+    const btn = document.getElementById('sendBtn');
+    btn.disabled = false; btn.innerHTML = SEND_ICON; btn.onclick = sendMessage;
+}
 async function sendMessage() {
     if (isLoading) return;
     const input = document.getElementById('chatInput');
@@ -890,31 +913,36 @@ async function sendMessage() {
     if (!text) { showInputError('Please enter a question.'); return; }
     hideInputError();
     isLoading = true; input.value = ''; autoResize();
-    document.getElementById('sendBtn').disabled = true;
+    currentController = new AbortController();
+    const btn = document.getElementById('sendBtn');
+    btn.innerHTML = STOP_ICON; btn.disabled = false;
+    btn.onclick = () => { currentController.abort(); resetSendButton(); removeTyping(); appendErrorBubble('Generation stopped.'); };
     appendUserBubble(text); appendTyping();
     try {
         let res, data;
         if (pipelineMode === 'agent') {
             res = await fetch(`${API}/agent/query`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ question: text, session_id: sessionId, strategy })
+                body: JSON.stringify({ question: text, session_id: sessionId, strategy }),
+                signal: currentController.signal
             });
             data = await res.json();
-            if (!res.ok) throw new Error(data.detail?.error||data.detail||'Request failed');
+            if (!res.ok) throw new Error(formatError(data)||'Request failed');
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAgentBubble(data);
         } else {
             res = await fetch(`${API}/chat`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 })
+                body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 }),
+                signal: currentController.signal
             });
             data = await res.json();
-            if (!res.ok) throw new Error(data.detail?.error||data.detail||'Request failed');
+            if (!res.ok) throw new Error(formatError(data)||'Request failed');
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAssistantBubble(data);
         }
-    } catch(e) { removeTyping(); appendErrorBubble(e.message); }
-    finally { isLoading=false; document.getElementById('sendBtn').disabled=false; input.focus(); }
+    } catch(e) { if(e.name==='AbortError') return; removeTyping(); appendErrorBubble(e.message); }
+    finally { resetSendButton(); input.focus(); }
 }
 
 // ── INPUT ──────────────────────────────────────────────────────
@@ -941,7 +969,7 @@ async function uploadFiles(files) {
             const fd=new FormData(); fd.append('file',file);
             const r=await fetch(`${API}/upload`,{method:'POST',body:fd});
             const d=await r.json();
-            if(!r.ok) throw new Error(d.detail||'Upload failed');
+            if(!r.ok) throw new Error(formatError(d)||'Upload failed');
             showToast(`✓ Uploaded: ${d.filename}`,'success');
         } catch(e){showToast(`✗ ${file.name}: ${e.message}`,'error');}
     }
@@ -974,7 +1002,7 @@ async function ingestOne(filename,sid) {
     try {
         const r=await fetch(`${API}/ingest`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pdf_path:filename})});
         const d=await r.json();
-        if(!r.ok) throw new Error(d.detail||'Ingest failed');
+        if(!r.ok) throw new Error(formatError(d)||'Ingest failed');
         showToast(`✓ Ingested ${d.chunks_ingested} chunks`,'success');
         btn.textContent='✓'; btn.style.background='#16a34a'; refreshKB();
     } catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent=orig;}
@@ -985,19 +1013,22 @@ async function ingestAll() {
     try {
         const r=await fetch(`${API}/ingest/all`,{method:'POST',headers:{'Content-Type':'application/json'}});
         const d=await r.json();
-        if(!r.ok) throw new Error(d.detail||'Failed');
+        if(!r.ok) throw new Error(formatError(d)||'Failed');
         showToast('Job started — polling for completion…','info');
+        let attempts=0;
+        const resetIngestBtn=()=>{btn.disabled=false;btn.textContent='⚡ Ingest All PDFs';};
         const poll=setInterval(async()=>{
+            if(++attempts>300){clearInterval(poll);showToast('Ingest timed out.','error');resetIngestBtn();return;}
             try {
                 const s=await fetch(`${API}/ingest/status/${d.job_id}`); if(!s.ok)return;
                 const st=await s.json();
                 if(['success','partial','failed'].includes(st.status)){
-                    clearInterval(poll); btn.disabled=false; btn.textContent='⚡ Ingest All PDFs';
+                    clearInterval(poll); resetIngestBtn();
                     if(st.status==='failed')showToast(`Ingest failed: ${st.error||'unknown'}`,'error');
                     else showToast(`✓ ${st.chunks_ingested||0} chunks from ${st.successful||0}/${st.total_files||0} files`,'success');
                     refreshKB();
                 }
-            }catch{}
+            }catch(err){console.warn('Polling error:',err);}
         },2000);
     }catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent='⚡ Ingest All PDFs';}
 }
@@ -1020,7 +1051,7 @@ async function confirmPurge(){
         if(apiKey) headers['X-API-Key']=apiKey;
         const r=await fetch(`${API}${ep}`,{method:'DELETE',headers});
         const d=await r.json();
-        if(!r.ok) throw new Error(d.detail||'Purge failed');
+        if(!r.ok) throw new Error(formatError(d)||'Purge failed');
         showToast(d.message,'success'); refreshKB();
     }catch(e){showToast(`Purge failed: ${e.message}`,'error');}
     hidePurgeModal();

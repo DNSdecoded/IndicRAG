@@ -186,6 +186,34 @@ def _validate_ast(code: str) -> str | None:
                 if _DUNDER_IN_STRING.search(node.left.value):
                     return "%-formatting with dunder patterns is not allowed"
 
+        # Block large literal integers/floats written directly
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            if abs(node.value) > 1e8:
+                return f"Numeric literal too large (max 1e8): {node.value}"
+
+        # Block ** where both operands are constants and the result would be huge.
+        # ast.walk visits the inner Pow node of e.g. "A" * 10**10, so this also
+        # prevents the string-multiplication variant without needing nested evaluation.
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            if (isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant)
+                    and isinstance(node.left.value, (int, float))
+                    and isinstance(node.right.value, (int, float))):
+                try:
+                    if node.left.value ** node.right.value > 1e8:
+                        return f"Exponentiation result too large: {node.left.value}**{node.right.value}"
+                except (OverflowError, TypeError):
+                    return f"Exponentiation overflow: {node.left.value}**{node.right.value}"
+
+        # Block string * large_int (memory exhaustion via "A" * 10**10)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            left, right = node.left, node.right
+            if isinstance(left, ast.Constant) and isinstance(left.value, str):
+                if isinstance(right, ast.Constant) and isinstance(right.value, int) and right.value > 10_000:
+                    return f"String multiplication too large (max 10000): {right.value}"
+            if isinstance(right, ast.Constant) and isinstance(right.value, str):
+                if isinstance(left, ast.Constant) and isinstance(left.value, int) and left.value > 10_000:
+                    return f"String multiplication too large (max 10000): {left.value}"
+
     return None
 
 

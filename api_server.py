@@ -574,6 +574,7 @@ async def ingest_document(
         try:
             import bm25_search
             bm25_search.invalidate()
+            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
         except Exception:
             pass
         try:
@@ -613,6 +614,7 @@ def _run_bulk_ingest(job_id: str):
         try:
             import bm25_search
             bm25_search.invalidate()
+            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
         except Exception:
             pass
         try:
@@ -946,7 +948,7 @@ async def upload_pdf(
 
 
 @app.get("/papers", response_model=List[PaperInfo], tags=["Management"])
-async def list_papers(authenticated: bool = Depends(verify_api_key)):
+def list_papers(authenticated: bool = Depends(verify_api_key)):
     """
     List all PDF files in the papers directory.
     """
@@ -971,7 +973,7 @@ async def list_papers(authenticated: bool = Depends(verify_api_key)):
 
 
 @app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
-async def purge_papers(authenticated: bool = Depends(verify_admin_key)):
+def purge_papers(authenticated: bool = Depends(verify_admin_key)):
     """
     Delete all PDF files from the papers directory.
     
@@ -1004,7 +1006,7 @@ async def purge_papers(authenticated: bool = Depends(verify_admin_key)):
 
 
 @app.delete("/purge/database", response_model=PurgeResponse, tags=["Management"])
-async def purge_database(authenticated: bool = Depends(verify_admin_key)):
+def purge_database(authenticated: bool = Depends(verify_admin_key)):
     """
     Clear the vector database (delete all indexed chunks).
     
@@ -1167,12 +1169,27 @@ async def agent_query(
         f"reflexion={result['reflexion_count']} time={processing_time:.2f}s"
     )
 
-    # Extract unique sources from retrieved contexts
-    seen_titles = set()
+    # Extract sources: prefer only those actually cited in the final answer
+    all_contexts = result.get("retrieved_contexts", [])
+    final_answer = result["final_answer"]
+    cited_titles: set[str] = set()
+    try:
+        metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+                 for c in all_contexts]
+        chunks = [c.get("text", "") for c in all_contexts]
+        for cit in rag.extract_citations(final_answer, metas, chunks):
+            cited_titles.add(cit["title"].strip())
+    except Exception:
+        pass  # fall through to dedup-only logic below
+
+    seen_titles: set[str] = set()
     sources = []
-    for ctx in result.get("retrieved_contexts", []):
+    for ctx in all_contexts:
         title = ctx.get("title", "").strip()
         if not title or title in seen_titles or title in ("Unknown", "No results"):
+            continue
+        # When citation extraction succeeded, skip uncited sources
+        if cited_titles and title not in cited_titles:
             continue
         seen_titles.add(title)
         sources.append(AgentSource(

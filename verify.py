@@ -34,11 +34,11 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         if not cited:
             continue
         pairs = [(chunks[i], sent) for i in cited]
-        raw = np.atleast_2d(model.predict(pairs))  # (n, 3): contradiction, neutral, entailment
-        # softmax → probabilities; entailment is label index 1
+        raw = np.atleast_2d(model.predict(pairs))  # (n, 3): contradiction, entailment, neutral
+        # softmax → probabilities; entailment is label index 1 for nli-deberta-v3-base
         e = np.exp(raw - raw.max(axis=1, keepdims=True))
         probs = e / e.sum(axis=1, keepdims=True)
-        score = float(probs[:, 2].max())
+        score = float(probs[:, 1].max())
         results.append({"claim": sent, "support": score,
                         "grounded": score >= config.FAITHFULNESS_THRESHOLD})
     return results

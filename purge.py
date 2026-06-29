@@ -125,17 +125,22 @@ def purge_database(confirmed: bool = False) -> bool:
             logger.info("Cancelled database deletion")
             return False
     
-    # Delete entire ChromaDB directory directly
+    # Use ChromaDB's own client.reset() so it respects its own file locks
+    # rather than deleting files out from under an active server connection.
+    # NOTE: stop the API server before running this; if the server holds the
+    # SQLite WAL write lock, the reset will raise an error rather than corrupt.
     try:
-        if db_dir.exists():
-            shutil.rmtree(db_dir)
-            logger.info(f"Deleted database directory: {db_dir}")
-            
-            # Recreate empty directory
-            db_dir.mkdir(exist_ok=True)
-            logger.info(f"Recreated empty database directory")
+        import chromadb
+        from chromadb.config import Settings
+        client = chromadb.PersistentClient(
+            path=str(db_dir),
+            settings=Settings(anonymized_telemetry=False, allow_reset=True)
+        )
+        client.reset()
+        logger.info(f"ChromaDB reset via client.reset() (collection wiped, directory kept)")
     except Exception as e:
-        logger.error(f"Failed to delete database directory: {e}")
+        logger.error(f"Failed to reset database via ChromaDB client: {e}")
+        logger.error("Ensure the API server is stopped before running --db purge.")
         return False
     
     return True

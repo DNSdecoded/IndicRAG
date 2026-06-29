@@ -57,7 +57,16 @@ def _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log):
         if h not in seen_hashes:
             seen_hashes.add(h)
             contexts.append(p)
-    log.append({"tool": name, "args": args, "latency_ms": latency_ms})
+    else:
+        # Surface the error so the LLM knows to try a different tool/approach
+        error_msg = result.get("error", "no results returned")
+        p = {"text": f"[Tool '{name}' failed: {error_msg}. Try a different query or tool.]", "source": name}
+        h = _passage_key(p)
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            contexts.append(p)
+    log.append({"tool": name, "args": args, "latency_ms": latency_ms,
+                "error": result.get("error") if "error" in result else None})
 
 
 def tool_executor_node(state: AgentState) -> dict:
