@@ -219,6 +219,12 @@ def _validate_ast(code: str) -> str | None:
 
 _SANDBOX_WRAPPER = '''\
 import sys as _sys
+# ponytail: RLIMIT_AS caps address space on Linux; silently skipped on Windows
+try:
+    import resource as _r
+    _r.setrlimit(_r.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+except Exception:
+    pass
 for mod in list(_sys.modules.keys()):
     if mod not in ["sys", "builtins", "_imp", "_thread", "_warnings", "_weakref", "encodings", "codecs", "io", "abc", "os", "site"]:
         try: del _sys.modules[mod]

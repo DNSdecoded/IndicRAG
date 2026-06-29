@@ -93,13 +93,28 @@ def translate_text(
         target_id = tokenizer.convert_tokens_to_ids(NLLB_LANG_MAP[target_lang])
     device = model.device
 
-    segments = [s for s in re.split(r'(?<=[.!?।॥])\s+', text) if s.strip()]
-    if not segments:
-        segments = [text]
+    sents = [s for s in re.split(r'(?<=[.!?।॥])\s+', text) if s.strip()]
+    if not sents:
+        sents = [text]
+
+    # Group consecutive sentences into ~2000-char chunks so NLLB sees cross-sentence
+    # context for coreference resolution instead of isolated single sentences.
+    _MAX_CHUNK_CHARS = 2000
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    for s in sents:
+        if buf_len + len(s) > _MAX_CHUNK_CHARS and buf:
+            chunks.append(" ".join(buf))
+            buf, buf_len = [], 0
+        buf.append(s)
+        buf_len += len(s)
+    if buf:
+        chunks.append(" ".join(buf))
 
     out = []
-    for i in range(0, len(segments), 8):
-        batch = segments[i:i + 8]
+    for i in range(0, len(chunks), 4):
+        batch = chunks[i:i + 4]
         with _translate_lock:
             tokenizer.src_lang = NLLB_LANG_MAP[source_lang]
             inputs = tokenizer(batch, return_tensors="pt", padding=True,
@@ -113,7 +128,9 @@ def translate_text(
             except torch.cuda.OutOfMemoryError as e:
                 logger.error("CUDA OOM during translation. Try reducing batch size or text length.")
                 raise e
-        out.extend(tokenizer.batch_decode(gen, skip_special_tokens=True))
+        # batch_decode inside lock: SentencePiece Python backend shares internal state
+        with _translate_lock:
+            out.extend(tokenizer.batch_decode(gen, skip_special_tokens=True))
     return " ".join(out)
 
 

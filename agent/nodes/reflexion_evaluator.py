@@ -125,12 +125,17 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     answer = state.get("draft_answer", "")
     chunks = [c.get("text", "") for c in state.get("retrieved_contexts", [])]
 
-    claims = verify.check_claims(answer, chunks)
-    if claims:
-        # ponytail: min not mean — one hallucinated claim can hide in a high average
-        faithfulness_score = min(r["support"] for r in claims)
-    else:
-        faithfulness_score = 1.0  # absence of citable claims ≠ hallucination
+    try:
+        claims = verify.check_claims(answer, chunks)
+        if claims:
+            # ponytail: min not mean — one hallucinated claim can hide in a high average
+            faithfulness_score = min(r["support"] for r in claims)
+        else:
+            faithfulness_score = 1.0  # absence of citable claims ≠ hallucination
+    except Exception as e:
+        logger.warning(f"[Reflexion] check_claims failed ({type(e).__name__}): {e}; failing closed")
+        claims = []
+        faithfulness_score = 0.0  # fail closed: NLI crash forces regeneration
 
     titles = [c.get("title", "Unknown") for c in state.get("retrieved_contexts", [])]
     source_titles = "\n".join(f"- {t}" for t in titles[:12]) or "None retrieved"

@@ -29,7 +29,7 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
     model = _load()
     results = []
     for sent in re.split(r'(?<=[.!?])\s+', answer):
-        cited = [int(n) - 1 for n in re.findall(r'\[(\d+)\]', sent)]
+        cited = [int(n) - 1 for n in re.findall(r'\[Cite:\s*(\d+)\]', sent)]
         cited = [i for i in cited if 0 <= i < len(chunks)]
         if not cited:
             continue
