@@ -69,8 +69,28 @@ def test_patch_paper_invalid_field(client):
 # Rate limiting wired up
 # ---------------------------------------------------------------------------
 
-def test_rate_limit_wired_up():
-    """The slowapi limiter is attached to app.state so endpoints can use it."""
-    import api_server
-    assert hasattr(api_server.app.state, "limiter")
-    assert api_server.app.state.limiter is not None
+def test_rate_limit_headers_present(client):
+    """Rate-limited endpoints enforce rate limits and return 429 when exceeded."""
+    with patch("rag.answer_question") as mock_query:
+        # Mock the query handler to return a dummy response
+        mock_query.return_value = {
+            "answer": "Test answer",
+            "language": "en",
+            "language_name": "English",
+            "chunks_used": 1,
+            "citations": [],
+            "processing_time": 0.1,
+            "timestamp": "2026-06-30T00:00:00Z"
+        }
+
+        # Make 31 POST requests to /query (rate limit is 30/minute)
+        # The 31st request should be rate limited
+        rate_limit_exceeded = False
+        for i in range(31):
+            resp = client.post("/query", json={"question": "What is IndicRAG?"})
+            if resp.status_code == 429:
+                rate_limit_exceeded = True
+                break
+
+        # Verify that we did hit the rate limit (at least on the 31st request)
+        assert rate_limit_exceeded, "Expected to hit rate limit after 31 requests"
