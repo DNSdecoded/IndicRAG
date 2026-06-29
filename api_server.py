@@ -24,6 +24,8 @@ import threading
 
 import rag
 import config
+import translation
+import lang_utils
 
 # ---------------------------------------------------------------------------
 # In-memory job store for background ingestion tasks
@@ -521,10 +523,14 @@ async def chat(
     )
 
 
-async def _sse_stream(prompt: str, metadatas: list, language: str, max_tokens: int = None):
-    """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue."""
+async def _sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A", max_tokens: int = None):
+    """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
+
+    Strategy B + Indic target language: buffers all chunks, translates the full
+    English answer, then emits a single translated chunk before the done event.
+    """
     q: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
 
     def _run():
         try:
@@ -537,19 +543,30 @@ async def _sse_stream(prompt: str, metadatas: list, language: str, max_tokens: i
 
     threading.Thread(target=_run, daemon=True).start()
 
+    # ponytail: buffer when translation needed, stream otherwise
+    needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
     full_answer: list[str] = []
     while True:
         kind, data = await q.get()
         if kind == "chunk":
             full_answer.append(data)
-            yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
+            if not needs_translation:
+                yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
         elif kind == "error":
             yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
             break
         else:  # done
             break
 
-    citations = rag.extract_citations("".join(full_answer), metadatas)
+    assembled = "".join(full_answer)
+    if needs_translation and assembled:
+        try:
+            translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
+            yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
+        except Exception:
+            yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
+
+    citations = rag.extract_citations(assembled, metadatas)
     yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language})}\n\n"
     yield "data: [DONE]\n\n"
 
@@ -575,7 +592,7 @@ async def query_stream(
         return StreamingResponse(_no_docs(), media_type="text/event-stream")
 
     return StreamingResponse(
-        _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"]),
+        _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"], strategy=body.strategy),
         media_type="text/event-stream",
     )
 
@@ -606,7 +623,7 @@ async def chat_stream(
 
     async def _stream_and_save():
         full_answer: list[str] = []
-        async for event in _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"]):
+        async for event in _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"], strategy=body.strategy):
             # Inject session_id into the done event
             if event.startswith('data: {"type": "done"'):
                 payload = json.loads(event[6:])
