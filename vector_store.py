@@ -16,12 +16,15 @@ logger = logging.getLogger(__name__)
 
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
     """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         fut = ex.submit(fn, *args, **kwargs)
         try:
             return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError(f"ChromaDB operation timed out after {timeout}s")
+        except concurrent.futures.TimeoutError as err:
+            raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 # Global client cache
@@ -214,7 +217,7 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     if collection is None:
         collection = get_or_create_collection()
     
-    count = collection.count()
+    count = _chroma_call(collection.count)
     
     # Get a sample to inspect metadata
     sample = _chroma_call(collection.peek, limit=1)

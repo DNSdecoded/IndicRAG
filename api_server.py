@@ -395,7 +395,10 @@ async def health_check(deep: bool = False):
 
         # Embeddings (non-critical — lazy singleton, None means not yet loaded)
         try:
-            checks["embeddings"] = "ok"  # ponytail: not_loaded is normal lazy-init; only error on exception
+            if getattr(embeddings, '_embedding_model', None) is None:
+                checks["embeddings"] = "not_loaded"
+            else:
+                checks["embeddings"] = "ok"
         except Exception:
             checks["embeddings"] = "error"
 
@@ -403,8 +406,10 @@ async def health_check(deep: bool = False):
         try:
             if not config.USE_RERANKER:
                 checks["reranker"] = "not_configured"
+            elif getattr(rerank, '_model', None) is None:
+                checks["reranker"] = "not_loaded"
             else:
-                checks["reranker"] = "ok"  # ponytail: not_loaded is normal lazy-init; only error on exception
+                checks["reranker"] = "ok"
         except Exception:
             checks["reranker"] = "error"
 
@@ -436,8 +441,11 @@ async def query_question(
     
     try:
         # Log request (truncate question for privacy/brevity)
-        question_preview = body.question[:80] + "..." if len(body.question) > 80 else body.question
-        logger.info(f"Query received: strategy={body.strategy}, question='{question_preview}'")
+        logger.info(
+            "Query received: strategy=%s, question_len=%d",
+            body.strategy,
+            len(body.question),
+        )
 
         # Enforce top_k bounds even if client sends higher
         top_k = body.top_k
@@ -563,12 +571,15 @@ async def _sse_stream(prompt: str, metadatas: list, language: str, strategy: str
     Strategy B + Indic target language: buffers all chunks, translates the full
     English answer, then emits a single translated chunk before the done event.
     """
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=128)
     loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
+    stop_event = threading.Event()
 
     def _run():
         try:
             for chunk in rag.llm_generate_stream(prompt, max_tokens):
+                if stop_event.is_set():
+                    break
                 loop.call_soon_threadsafe(q.put_nowait, ("chunk", chunk))
         except Exception as exc:
             loop.call_soon_threadsafe(q.put_nowait, ("error", str(exc)))
@@ -580,32 +591,37 @@ async def _sse_stream(prompt: str, metadatas: list, language: str, strategy: str
     # ponytail: buffer when translation needed, stream otherwise
     needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
     full_answer: list[str] = []
-    while True:
-        kind, data = await q.get()
-        if kind == "chunk":
-            full_answer.append(data)
-            if not needs_translation:
-                yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
-        elif kind == "error":
-            yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
-            break
-        else:  # done
-            break
+    try:
+        while True:
+            kind, data = await q.get()
+            if kind == "chunk":
+                full_answer.append(data)
+                if not needs_translation:
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
+            elif kind == "error":
+                yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            else:  # done
+                break
 
-    assembled = "".join(full_answer)
-    if needs_translation and assembled:
-        try:
-            translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
-            yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
-        except Exception:
-            yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
+        assembled = "".join(full_answer)
+        if needs_translation and assembled:
+            try:
+                translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
+                yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
+            except Exception:
+                yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
 
-    citations = rag.extract_citations(assembled, metadatas)
-    yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language})}\n\n"
-    yield "data: [DONE]\n\n"
+        citations = rag.extract_citations(assembled, metadatas)
+        yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language})}\n\n"
+        yield "data: [DONE]\n\n"
+    finally:
+        stop_event.set()
 
 
 @app.post("/query/stream", tags=["Query"])
+@limiter.limit("30/minute")
 async def query_stream(
     request: Request,
     body: QueryRequest,
@@ -632,6 +648,7 @@ async def query_stream(
 
 
 @app.post("/chat/stream", tags=["Chat"])
+@limiter.limit("30/minute")
 async def chat_stream(
     request: Request,
     body: ChatRequest,
@@ -657,7 +674,10 @@ async def chat_stream(
 
     async def _stream_and_save():
         full_answer: list[str] = []
+        hit_error = False
         async for event in _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"], strategy=body.strategy):
+            if event.startswith('data: {"type": "error"'):
+                hit_error = True
             # Inject session_id into the done event
             if event.startswith('data: {"type": "done"'):
                 payload = json.loads(event[6:])
@@ -671,7 +691,8 @@ async def chat_stream(
                     except Exception:
                         pass
                 yield event
-        _append_session_messages(session_id, body.message, "".join(full_answer))
+        if not hit_error:
+            _append_session_messages(session_id, body.message, "".join(full_answer))
 
     return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 

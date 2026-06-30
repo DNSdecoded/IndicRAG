@@ -373,14 +373,18 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
     )
 
     client = _get_client()
+    emitted = False
     for chunk in client.models.generate_content_stream(
         model=config.LLM_MODEL_NAME, contents=prompt, config=gen_config
     ):
         try:
             if chunk.text:
+                emitted = True
                 yield chunk.text
-        except (ValueError, AttributeError):
-            pass  # skip blocked/empty chunks
+        except (ValueError, AttributeError) as exc:
+            logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+    if not emitted:
+        raise RuntimeError("No text generated from Gemini stream")
 
 
 def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None) -> dict:
@@ -411,7 +415,8 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
                 pass
         return {"chunks_used": 0, "no_docs_msg": no_docs_msg, "detected_lang": detected_lang, "lang_name": lang_name}
 
-    prompt = build_prompt(user_query=user_query, context=context_data["formatted_context"],
+    prompt_query = retrieval_query if strategy == "B" else user_query
+    prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
                           target_lang=detected_lang, strategy=strategy)
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
@@ -466,7 +471,8 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
         else:
             i += 1
 
-    prompt = build_prompt(user_query=user_query, context=context_data["formatted_context"],
+    prompt_query = retrieval_query if strategy == "B" else user_query
+    prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
                           target_lang=detected_lang, strategy=strategy)
     history_str = "\n\n".join(history_lines)
     if history_str:
