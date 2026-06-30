@@ -165,8 +165,7 @@ def ingest_pdf(
     
     if metadata is None:
         metadata = {}
-    if not metadata.get('file_hash'):  # ponytail: skip recompute if _extract_worker already set it
-        metadata['file_hash'] = calculate_sha256(pdf_path)
+    metadata['file_hash'] = calculate_sha256(pdf_path)
     
     result = pdf_utils.process_pdf(pdf_path)
     
