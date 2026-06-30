@@ -1,5 +1,7 @@
 # 🌐 IndicRAG — Multilingual Agentic Scientific RAG
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/DNSdecoded/IndicRAG)
+[![Code Wiki](https://img.shields.io/badge/Code%20Wiki-Documentation-blue)](https://codewiki.google/github.com/dnsdecoded/indicrag)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-00a393.svg)](https://fastapi.tiangolo.com/)
