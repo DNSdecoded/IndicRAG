@@ -14,17 +14,17 @@ import config
 logger = logging.getLogger(__name__)
 
 
+_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="chroma-timeout")
+
+
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
     """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs."""
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = _chroma_executor.submit(fn, *args, **kwargs)
     try:
-        fut = ex.submit(fn, *args, **kwargs)
-        try:
-            return fut.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as err:
-            raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+        return fut.result(timeout=timeout)
+    except concurrent.futures.TimeoutError as err:
+        fut.cancel()
+        raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
 
 
 # Global client cache
