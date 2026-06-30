@@ -307,30 +307,10 @@ def llm_generate(prompt: str, max_tokens: int = None,
         logger.debug("[LLM cache hit]")
         return cached
 
-    # Safety settings - set to BLOCK_NONE for scientific content
-    safety_settings = [
-        types.SafetySetting(
-            category="HARM_CATEGORY_HARASSMENT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_HATE_SPEECH",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold="BLOCK_NONE",
-        ),
-        types.SafetySetting(
-            category="HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold="BLOCK_NONE",
-        ),
-    ]
-
     generate_config = types.GenerateContentConfig(
         temperature=config.LLM_TEMPERATURE,
         max_output_tokens=max_tokens,
-        safety_settings=safety_settings,
+        safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
     )
 
@@ -369,6 +349,137 @@ def llm_generate(prompt: str, max_tokens: int = None,
     except Exception as e:
         logger.error(f"Error calling Gemini API: {e}")
         raise
+
+
+def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction: str = None):
+    """Generator: stream LLM response chunks using primary model with key cycling.
+
+    Yields non-empty text chunks as they arrive. No model failover — primary model only.
+    ponytail: single-model streaming; add failover if primary is unreliable.
+    """
+    if max_tokens is None:
+        max_tokens = config.LLM_MAX_TOKENS
+
+    if not _client_pool:
+        with _client_lock:
+            if not _client_pool:
+                _init_client_pool()
+
+    gen_config = types.GenerateContentConfig(
+        temperature=config.LLM_TEMPERATURE,
+        max_output_tokens=max_tokens,
+        safety_settings=config.SAFETY_SETTINGS,
+        system_instruction=system_instruction or config.SYSTEM_PROMPT,
+    )
+
+    client = _get_client()
+    emitted = False
+    for chunk in client.models.generate_content_stream(
+        model=config.LLM_MODEL_NAME, contents=prompt, config=gen_config
+    ):
+        try:
+            if chunk.text:
+                emitted = True
+                yield chunk.text
+        except (ValueError, AttributeError) as exc:
+            logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+    if not emitted:
+        raise RuntimeError("No text generated from Gemini stream")
+
+
+def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None) -> dict:
+    """Retrieve context and build prompt for /query/stream.
+
+    Returns dict with keys:
+      chunks_used, prompt, metadatas, detected_lang, lang_name
+    If no docs: chunks_used=0, no_docs_msg set instead of prompt/metadatas.
+    """
+    detected_lang = lang_utils.detect_language(user_query) or "en"
+    lang_name = lang_utils.get_language_name(detected_lang)
+
+    retrieval_query = user_query
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            retrieval_query = translation.translate_to_english(user_query, detected_lang)
+        except Exception:
+            pass
+
+    context_data = retrieve_context(retrieval_query, top_k)
+
+    if context_data["chunks_used"] == 0:
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+            try:
+                no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+            except Exception:
+                pass
+        return {"chunks_used": 0, "no_docs_msg": no_docs_msg, "detected_lang": detected_lang, "lang_name": lang_name}
+
+    prompt_query = retrieval_query if strategy == "B" else user_query
+    prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
+                          target_lang=detected_lang, strategy=strategy)
+    return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
+
+
+def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None) -> dict:
+    """Retrieve context and build prompt for /chat/stream (mirrors answer_with_history).
+
+    Returns same shape as prepare_query_for_stream.
+    """
+    if not messages or messages[-1]["role"] != "user":
+        raise ValueError("Last message must be from the user")
+
+    user_query = messages[-1]["content"]
+    prior = messages[:-1]
+    detected_lang = lang_utils.detect_language(user_query) or "en"
+    lang_name = lang_utils.get_language_name(detected_lang)
+
+    retrieval_query = user_query
+    if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+        try:
+            retrieval_query = translation.translate_to_english(user_query, detected_lang)
+        except Exception:
+            pass
+
+    context_data = retrieve_context(retrieval_query, top_k)
+
+    if context_data["chunks_used"] == 0:
+        no_docs_msg = config.NO_DOCUMENTS_RESPONSE
+        if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
+            try:
+                no_docs_msg = translation.translate_from_english(no_docs_msg, detected_lang)
+            except Exception:
+                pass
+        return {"chunks_used": 0, "no_docs_msg": no_docs_msg, "detected_lang": detected_lang, "lang_name": lang_name}
+
+    # Build history string (same as answer_with_history)
+    max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
+    trimmed = prior[-max_msgs:] if len(prior) > max_msgs else prior
+    history_lines = []
+    turn, i = 1, 0
+    while i < len(trimmed):
+        if trimmed[i]["role"] == "user":
+            user_line = f"[Turn {turn}] User: {trimmed[i]['content']}"
+            if i + 1 < len(trimmed) and trimmed[i + 1]["role"] == "assistant":
+                history_lines.append(f"{user_line}\n[Turn {turn}] Assistant: {trimmed[i + 1]['content']}")
+                i += 2
+            else:
+                history_lines.append(user_line)
+                i += 1
+            turn += 1
+        else:
+            i += 1
+
+    prompt_query = retrieval_query if strategy == "B" else user_query
+    prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
+                          target_lang=detected_lang, strategy=strategy)
+    history_str = "\n\n".join(history_lines)
+    if history_str:
+        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
+
+    return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
 
 
 def _is_transient(exc: Exception) -> bool:

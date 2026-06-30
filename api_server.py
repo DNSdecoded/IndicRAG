@@ -4,15 +4,17 @@ Production-ready REST API with authentication, validation, and monitoring.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Security, status, BackgroundTasks, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,8 @@ import threading
 
 import rag
 import config
+import translation
+import lang_utils
 
 # ---------------------------------------------------------------------------
 # In-memory job store for background ingestion tasks
@@ -39,7 +43,7 @@ def _update_job(job_id: str, **kwargs):
         now = time.monotonic()
         if now - _last_job_eviction >= 3600:
             _last_job_eviction = now
-            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
             for jid in [j for j, v in _jobs.items()
                         if v.get("completed_at") and
                         datetime.fromisoformat(v["completed_at"]) < cutoff]:
@@ -61,7 +65,7 @@ def _evict_stale_sessions():
     if now - _last_session_eviction < 60:
         return
     _last_session_eviction = now
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.SESSION_MAX_AGE_HOURS)
     for sid in [s for s, v in _sessions.items()
                 if datetime.fromisoformat(v["updated_at"]) < cutoff]:
         del _sessions[sid]
@@ -74,7 +78,7 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
         if session_id and session_id in _sessions:
             return session_id, list(_sessions[session_id]["messages"])
         new_id = session_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         _sessions[new_id] = {
             "id": new_id,
             "messages": [],
@@ -93,7 +97,7 @@ def _append_session_messages(session_id: str, user_text: str, assistant_text: st
         max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
         if len(msgs) > max_msgs:
             del msgs[:len(msgs) - max_msgs]
-        sess["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        sess["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 # Configure logging
 logging.basicConfig(
@@ -125,6 +129,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Prometheus Monitoring
 from prometheus_fastapi_instrumentator import Instrumentator
 Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)
@@ -150,8 +162,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 # API Key authentication (optional)
@@ -239,6 +251,7 @@ class HealthResponse(BaseModel):
     timestamp: str
     version: str
     gemini_configured: bool
+    checks: Optional[Dict[str, str]] = None
 
 
 import re as _re
@@ -364,19 +377,59 @@ async def root():
 
 
 @app.get("/health", response_model=HealthResponse, tags=["General"])
-async def health_check():
-    """Health check endpoint."""
+async def health_check(deep: bool = False):
+    """Health check endpoint. Add ?deep=true for component-level checks."""
+    checks = None
+    status = "healthy"
+    if deep:
+        import vector_store, embeddings, rerank
+        checks = {}
+
+        # ChromaDB (critical)
+        try:
+            await run_in_threadpool(vector_store.get_collection_stats)
+            checks["chromadb"] = "ok"
+        except Exception:
+            checks["chromadb"] = "error"
+            status = "unhealthy"
+
+        # Embeddings (non-critical — lazy singleton, None means not yet loaded)
+        try:
+            if getattr(embeddings, '_embedding_model', None) is None:
+                checks["embeddings"] = "not_loaded"
+            else:
+                checks["embeddings"] = "ok"
+        except Exception:
+            checks["embeddings"] = "error"
+
+        # Reranker
+        try:
+            if not config.USE_RERANKER:
+                checks["reranker"] = "not_configured"
+            elif getattr(rerank, '_model', None) is None:
+                checks["reranker"] = "not_loaded"
+            else:
+                checks["reranker"] = "ok"
+        except Exception:
+            checks["reranker"] = "error"
+
+        if status != "unhealthy" and any(v == "error" for v in checks.values()):
+            status = "degraded"
+
     return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        status=status,
+        timestamp=datetime.now(timezone.utc).isoformat(),
         version=config.VERSION,
-        gemini_configured=bool(config.LLM_API_KEY_POOL)
+        gemini_configured=bool(config.LLM_API_KEY_POOL),
+        checks=checks,
     )
 
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
+@limiter.limit("30/minute")
 async def query_question(
-    request: QueryRequest,
+    request: Request,
+    body: QueryRequest,
     authenticated: bool = Depends(verify_api_key)
 ):
     """
@@ -388,19 +441,22 @@ async def query_question(
     
     try:
         # Log request (truncate question for privacy/brevity)
-        question_preview = request.question[:80] + "..." if len(request.question) > 80 else request.question
-        logger.info(f"Query received: strategy={request.strategy}, question='{question_preview}'")
-        
+        logger.info(
+            "Query received: strategy=%s, question_len=%d",
+            body.strategy,
+            len(body.question),
+        )
+
         # Enforce top_k bounds even if client sends higher
-        top_k = request.top_k
+        top_k = body.top_k
         if top_k is not None:
             top_k = max(1, min(top_k, 20))  # Clamp to [1, 20]
-        
+
         # Process query (run in thread pool to avoid blocking event loop)
         result = await run_in_threadpool(
             rag.answer_question,
-            user_query=request.question,
-            strategy=request.strategy,
+            user_query=body.question,
+            strategy=body.strategy,
             top_k=top_k
         )
         
@@ -427,7 +483,7 @@ async def query_question(
             chunks_used=result['chunks_used'],
             citations=citations,
             processing_time=processing_time,
-            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
     
     except ValueError as e:
@@ -449,8 +505,10 @@ async def query_question(
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+@limiter.limit("30/minute")
 async def chat(
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
 ):
     """
@@ -462,21 +520,21 @@ async def chat(
     """
     start_time = time.time()
 
-    top_k = request.top_k
+    top_k = body.top_k
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(request.session_id)
+    session_id, messages = _get_or_create_session(body.session_id)
     turn_index = len(messages) // 2  # number of completed user+assistant pairs
 
     # Build the full message list the RAG function expects
-    full_messages = list(messages) + [{"role": "user", "content": request.message}]
+    full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
     try:
         result = await run_in_threadpool(
             rag.answer_with_history,
             messages=full_messages,
-            strategy=request.strategy,
+            strategy=body.strategy,
             top_k=top_k,
         )
     except ValueError as e:
@@ -486,7 +544,7 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
     # Persist both turns in session history
-    _append_session_messages(session_id, request.message, result["answer"])
+    _append_session_messages(session_id, body.message, result["answer"])
 
     processing_time = time.time() - start_time
     logger.info(
@@ -503,8 +561,145 @@ async def chat(
         chunks_used=result["chunks_used"],
         citations=[Citation(**c) for c in result["citations"]],
         processing_time=processing_time,
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+async def _sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A", max_tokens: int = None):
+    """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
+
+    Strategy B + Indic target language: buffers all chunks, translates the full
+    English answer, then emits a single translated chunk before the done event.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=128)
+    loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
+    stop_event = threading.Event()
+
+    def _enqueue(item):
+        """Block until queue has space, ensuring terminal events are never dropped."""
+        fut = asyncio.run_coroutine_threadsafe(q.put(item), loop)
+        fut.result(timeout=30)
+
+    def _run():
+        try:
+            for chunk in rag.llm_generate_stream(prompt, max_tokens):
+                if stop_event.is_set():
+                    break
+                _enqueue(("chunk", chunk))
+        except Exception as exc:
+            _enqueue(("error", str(exc)))
+        finally:
+            _enqueue(("done", None))
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    # ponytail: buffer when translation needed, stream otherwise
+    needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
+    full_answer: list[str] = []
+    try:
+        while True:
+            kind, data = await q.get()
+            if kind == "chunk":
+                full_answer.append(data)
+                if not needs_translation:
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
+            elif kind == "error":
+                yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            else:  # done
+                break
+
+        assembled = "".join(full_answer)
+        if needs_translation and assembled:
+            try:
+                translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
+                yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
+            except Exception:
+                yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
+
+        citations = rag.extract_citations(assembled, metadatas)
+        yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language})}\n\n"
+        yield "data: [DONE]\n\n"
+    finally:
+        stop_event.set()
+
+
+@app.post("/query/stream", tags=["Query"])
+@limiter.limit("30/minute")
+async def query_stream(
+    request: Request,
+    body: QueryRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Stream a RAG answer as Server-Sent Events."""
+    top_k = body.top_k
+    if top_k is not None:
+        top_k = max(1, min(top_k, 20))
+
+    prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k)
+
+    if prepared["chunks_used"] == 0:
+        async def _no_docs():
+            yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang']})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(_no_docs(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"], strategy=body.strategy),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/chat/stream", tags=["Chat"])
+@limiter.limit("30/minute")
+async def chat_stream(
+    request: Request,
+    body: ChatRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Stream a multi-turn chat answer as Server-Sent Events."""
+    top_k = body.top_k
+    if top_k is not None:
+        top_k = max(1, min(top_k, 20))
+
+    session_id, messages = _get_or_create_session(body.session_id)
+    full_messages = list(messages) + [{"role": "user", "content": body.message}]
+
+    prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k)
+
+    if prepared["chunks_used"] == 0:
+        async def _no_docs():
+            yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'session_id': session_id})}\n\n"
+            yield "data: [DONE]\n\n"
+        _append_session_messages(session_id, body.message, prepared["no_docs_msg"])
+        return StreamingResponse(_no_docs(), media_type="text/event-stream")
+
+    async def _stream_and_save():
+        full_answer: list[str] = []
+        hit_error = False
+        async for event in _sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"], strategy=body.strategy):
+            if event.startswith('data: {"type": "error"'):
+                hit_error = True
+            # Inject session_id into the done event
+            if event.startswith('data: {"type": "done"'):
+                payload = json.loads(event[6:])
+                payload["session_id"] = session_id
+                yield f"data: {json.dumps(payload)}\n\n"
+            else:
+                # Accumulate chunks to persist in session history after streaming
+                if event.startswith('data: {"type": "chunk"'):
+                    try:
+                        full_answer.append(json.loads(event[6:])["text"])
+                    except Exception:
+                        pass
+                yield event
+        if not hit_error:
+            _append_session_messages(session_id, body.message, "".join(full_answer))
+
+    return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 
 
 @app.delete("/chat/{session_id}", tags=["Chat"])
@@ -521,27 +716,29 @@ async def delete_session(
 
 
 @app.post("/ingest", response_model=IngestResponse, tags=["Management"])
+@limiter.limit("5/minute")
 async def ingest_document(
-    request: IngestRequest,
+    request: Request,
+    body: IngestRequest,
     authenticated: bool = Depends(verify_api_key)
 ):
     """
     Ingest a PDF document into the vector store.
-    
+
     Requires authentication if API keys are configured.
     """
     start_time = time.time()
-    
+
     try:
         import ingest as ingest_module
         from pathlib import Path
 
-        # At this point request.pdf_path is already sanitized by the Pydantic validator:
+        # At this point body.pdf_path is already sanitized by the Pydantic validator:
         # - not absolute, no '..' components, safe characters only.
         base_dir = Path(config.PAPERS_DIR).resolve()
 
         # Build and resolve the candidate path
-        candidate = (base_dir / request.pdf_path).resolve()
+        candidate = (base_dir / body.pdf_path).resolve()
 
         # Use Path.relative_to() as the authoritative containment check.
         # This raises ValueError if candidate is not inside base_dir, ensuring
@@ -550,7 +747,7 @@ async def ingest_document(
         try:
             relative_part = candidate.relative_to(base_dir)
         except ValueError:
-            logger.warning(f"Path traversal blocked after resolve: {request.pdf_path!r}")
+            logger.warning(f"Path traversal blocked after resolve: {body.pdf_path!r}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid pdf_path: path escapes the papers directory."
@@ -563,7 +760,7 @@ async def ingest_document(
         if not safe_pdf_path.exists() or not safe_pdf_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"PDF file not found: {request.pdf_path}"
+                detail=f"PDF file not found: {body.pdf_path}"
             )
 
         logger.info(f"Ingesting document: {safe_pdf_path}")
@@ -637,7 +834,7 @@ def _run_bulk_ingest(job_id: str):
             failed=stats.get("failed", 0),
             chunks_ingested=stats.get("total_chunks", 0),
             processing_time=processing_time,
-            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
         logger.info(f"Bulk ingest job {job_id} finished: {status_value}")
     except Exception as e:
@@ -648,12 +845,14 @@ def _run_bulk_ingest(job_id: str):
             status="failed",
             processing_time=processing_time,
             error=str(e),
-            completed_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
 
 @app.post("/ingest/all", response_model=IngestJobResponse, status_code=202, tags=["Management"])
+@limiter.limit("2/minute")
 async def ingest_all_documents(
+    request: Request,
     background_tasks: BackgroundTasks,
     authenticated: bool = Depends(verify_api_key)
 ):
@@ -668,7 +867,7 @@ async def ingest_all_documents(
         _jobs[job_id] = {
             "job_id": job_id,
             "status": "pending",
-            "submitted_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
             "total_files": None,
             "successful": None,
@@ -853,7 +1052,7 @@ async def search_documents(
             results=results,
             total_results=len(results),
             processing_time=processing_time,
-            timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     except Exception as e:
@@ -974,6 +1173,79 @@ def list_papers(authenticated: bool = Depends(verify_api_key)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"}
         )
+
+
+class DeletePaperResponse(BaseModel):
+    paper_id: str
+    chunks_deleted: int
+    status: str
+
+
+class PatchPaperRequest(BaseModel):
+    title: Optional[str] = None
+    authors: Optional[str] = None
+    year: Optional[str] = None
+    tags: Optional[str] = None
+
+    @field_validator("title", "authors", "year", "tags", mode="before")
+    @classmethod
+    def reject_empty_string(cls, v):
+        if v is not None and v == "":
+            raise ValueError("field must not be empty string")
+        return v
+
+
+class PatchPaperResponse(BaseModel):
+    paper_id: str
+    chunks_updated: int
+    updates: dict
+
+
+@app.delete("/papers/{paper_id}", response_model=DeletePaperResponse, tags=["Management"])
+async def delete_paper(
+    paper_id: str,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Delete all indexed chunks for a specific paper from the vector store."""
+    import vector_store
+    chunks_deleted = await run_in_threadpool(vector_store.delete_by_paper_id, paper_id)
+    if chunks_deleted == 0:
+        raise HTTPException(status_code=404, detail="paper not found or already deleted")
+    try:
+        import bm25_search
+        bm25_search.invalidate()
+        threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
+    except Exception:
+        pass
+    try:
+        from cache import retrieval_cache, tool_cache
+        retrieval_cache.invalidate()
+        tool_cache.invalidate()
+    except Exception:
+        logger.warning("Failed to invalidate caches after paper deletion", exc_info=True)
+    return DeletePaperResponse(paper_id=paper_id, chunks_deleted=chunks_deleted, status="deleted")
+
+
+@app.patch("/papers/{paper_id}", response_model=PatchPaperResponse, tags=["Management"])
+async def patch_paper(
+    paper_id: str,
+    request: PatchPaperRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Update metadata fields on all chunks for a specific paper."""
+    updates = {k: v for k, v in request.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="no valid fields to update")
+    import vector_store
+    chunks_updated = await run_in_threadpool(vector_store.update_paper_metadata, paper_id, updates)
+    if chunks_updated == 0:
+        raise HTTPException(status_code=404, detail="paper not found")
+    try:
+        from cache import retrieval_cache
+        retrieval_cache.invalidate()
+    except Exception:
+        logger.warning("Failed to invalidate retrieval cache after paper update", exc_info=True)
+    return PatchPaperResponse(paper_id=paper_id, chunks_updated=chunks_updated, updates=updates)
 
 
 @app.delete("/purge/papers", response_model=PurgeResponse, tags=["Management"])
@@ -1100,8 +1372,10 @@ class AgentQueryResponse(BaseModel):
 
 
 @app.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
+@limiter.limit("10/minute")
 async def agent_query(
-    request: AgentQueryRequest,
+    request: Request,
+    body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
 ):
     """
@@ -1109,10 +1383,10 @@ async def agent_query(
     Supports the same 10+ languages as /query and /chat.
     """
     start_time = time.time()
-    session_id, messages = _get_or_create_session(request.session_id)
+    session_id, messages = _get_or_create_session(body.session_id)
 
     initial_state = AgentState(
-        original_query=request.question,
+        original_query=body.question,
         detected_language="",
         query_plan=[],
         tool_calls_requested=[],
@@ -1124,7 +1398,7 @@ async def agent_query(
         tool_calls_log=[],
         conversation_history=list(messages),
         session_id=session_id,
-        strategy=request.strategy,
+        strategy=body.strategy,
     )
 
     import asyncio
@@ -1134,7 +1408,10 @@ async def agent_query(
             timeout=float(config.AGENT_TIMEOUT),
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Agent timed out after {config.AGENT_TIMEOUT}s for query: {request.question[:80]}")
+        logger.warning(
+            "Agent timed out after %ds: strategy=%s, question_len=%d",
+            config.AGENT_TIMEOUT, body.strategy, len(body.question),
+        )
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail={"error": "Agent pipeline timed out. Try a simpler query or use Standard RAG mode.", "code": "AGENT_TIMEOUT"},
@@ -1165,7 +1442,7 @@ async def agent_query(
             detail={"error": "Agent pipeline failed. Please try again later.", "code": "AGENT_ERROR"},
         )
 
-    _append_session_messages(session_id, request.question, result["final_answer"])
+    _append_session_messages(session_id, body.question, result["final_answer"])
     processing_time = time.time() - start_time
 
     logger.info(
@@ -1214,7 +1491,7 @@ async def agent_query(
         tool_calls=result.get("tool_calls_log", []),
         sources=sources,
         processing_time=processing_time,
-        timestamp=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 

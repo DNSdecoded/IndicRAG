@@ -8,9 +8,24 @@ from typing import List, Dict, Optional, Any
 import numpy as np
 import logging
 import threading
+import concurrent.futures
 import config
 
 logger = logging.getLogger(__name__)
+
+
+_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="chroma-timeout")
+
+
+def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
+    """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs."""
+    fut = _chroma_executor.submit(fn, *args, **kwargs)
+    try:
+        return fut.result(timeout=timeout)
+    except concurrent.futures.TimeoutError as err:
+        fut.cancel()
+        raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
+
 
 # Global client cache
 _chroma_client = None
@@ -112,7 +127,7 @@ def add_documents(
         logger.error(f"Duplicate IDs detected before upsert: {duplicates}")
     
     # Add to collection (upsert replaces existing, inserts new)
-    collection.upsert(
+    _chroma_call(collection.upsert,
         documents=texts,
         embeddings=embeddings_list,
         metadatas=metadatas,
@@ -153,14 +168,10 @@ def search(
     # Convert embedding to list
     query_embedding_list = query_embedding.tolist()
     
-    actual_top_k = min(top_k, collection.count())
-    if actual_top_k == 0:
-        return {'ids': [], 'documents': [], 'metadatas': [], 'distances': []}
-    
     # Search
-    results = collection.query(
+    results = _chroma_call(collection.query,
         query_embeddings=[query_embedding_list],
-        n_results=actual_top_k,
+        n_results=top_k,
         where=filter_dict,
         include=["documents", "metadatas", "distances"]
     )
@@ -206,10 +217,10 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     if collection is None:
         collection = get_or_create_collection()
     
-    count = collection.count()
+    count = _chroma_call(collection.count)
     
     # Get a sample to inspect metadata
-    sample = collection.peek(limit=1)
+    sample = _chroma_call(collection.peek, limit=1)
     
     stats = {
         'name': collection.name,
@@ -228,8 +239,22 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     """
     if collection is None:
         collection = get_or_create_collection()
-    collection.delete(where={'paper_id': paper_id})
-    return 0
+    ids = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[])['ids']
+    _chroma_call(collection.delete, where={'paper_id': paper_id})
+    return len(ids)
+
+
+def update_paper_metadata(paper_id: str, updates: dict, collection: chromadb.Collection = None) -> int:
+    """Update metadata fields on all chunks for a paper. Returns chunk count updated."""
+    if collection is None:
+        collection = get_or_create_collection()
+    result = _chroma_call(collection.get, where={'paper_id': paper_id}, include=['metadatas'])
+    ids = result.get('ids', [])
+    if not ids:
+        return 0
+    new_metadatas = [{**m, **updates} for m in result['metadatas']]
+    _chroma_call(collection.update, ids=ids, metadatas=new_metadatas)
+    return len(ids)
 
 if __name__ == "__main__":
     # Test vector store functionality

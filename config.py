@@ -299,3 +299,16 @@ VERSION = "2.0.1"
 # ============================================================================
 CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "10"))
 SESSION_MAX_AGE_HOURS = int(os.getenv("SESSION_MAX_AGE_HOURS", "24"))
+
+# ============================================================================
+# Safety Settings (shared across rag.py and agent nodes)
+# ============================================================================
+from google.genai import types as _genai_types  # noqa: E402 — lazy-ish, underscore keeps it private
+_dev_mode = os.getenv("DEV_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+_safety_threshold = "BLOCK_NONE" if _dev_mode else "BLOCK_MEDIUM_AND_ABOVE"
+SAFETY_SETTINGS = [
+    _genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=_safety_threshold),
+    _genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=_safety_threshold),
+    _genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=_safety_threshold),
+    _genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=_safety_threshold),
+]
