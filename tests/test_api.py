@@ -86,7 +86,7 @@ def test_rate_limit_headers_present(client):
         # Make 31 POST requests to /query (rate limit is 30/minute)
         # The 31st request should be rate limited
         rate_limit_exceeded = False
-        for i in range(31):
+        for _ in range(31):
             resp = client.post("/query", json={"question": "What is IndicRAG?"})
             if resp.status_code == 429:
                 rate_limit_exceeded = True

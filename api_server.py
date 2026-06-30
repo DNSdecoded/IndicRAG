@@ -575,16 +575,21 @@ async def _sse_stream(prompt: str, metadatas: list, language: str, strategy: str
     loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
     stop_event = threading.Event()
 
+    def _enqueue(item):
+        """Block until queue has space, ensuring terminal events are never dropped."""
+        fut = asyncio.run_coroutine_threadsafe(q.put(item), loop)
+        fut.result(timeout=30)
+
     def _run():
         try:
             for chunk in rag.llm_generate_stream(prompt, max_tokens):
                 if stop_event.is_set():
                     break
-                loop.call_soon_threadsafe(q.put_nowait, ("chunk", chunk))
+                _enqueue(("chunk", chunk))
         except Exception as exc:
-            loop.call_soon_threadsafe(q.put_nowait, ("error", str(exc)))
+            _enqueue(("error", str(exc)))
         finally:
-            loop.call_soon_threadsafe(q.put_nowait, ("done", None))
+            _enqueue(("done", None))
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -1403,7 +1408,10 @@ async def agent_query(
             timeout=float(config.AGENT_TIMEOUT),
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Agent timed out after {config.AGENT_TIMEOUT}s for query: {body.question[:80]}")
+        logger.warning(
+            "Agent timed out after %ds: strategy=%s, question_len=%d",
+            config.AGENT_TIMEOUT, body.strategy, len(body.question),
+        )
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail={"error": "Agent pipeline timed out. Try a simpler query or use Standard RAG mode.", "code": "AGENT_TIMEOUT"},
