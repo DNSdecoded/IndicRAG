@@ -931,15 +931,53 @@ async function sendMessage() {
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAgentBubble(data);
         } else {
-            res = await fetch(`${API}/chat`, {
+            const res = await fetch(`${API}/chat/stream`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 }),
                 signal: currentController.signal
             });
-            data = await res.json();
-            if (!res.ok) throw new Error(formatError(data)||'Request failed');
-            sessionId = data.session_id; updateSessionBadge();
-            removeTyping(); appendAssistantBubble(data);
+            if (!res.ok) { const d=await res.json().catch(()=>({})); throw new Error(formatError(d)||'Stream failed'); }
+            removeTyping();
+            const sRow = document.createElement('div');
+            sRow.className = 'msg-row assistant';
+            sRow.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="asst-bubble"><div class="asst-meta" id="_sMeta"></div><div class="asst-text" id="_sText"><span style="opacity:.35">▍</span></div><div id="_sCites"></div></div>`;
+            document.getElementById('chatArea').appendChild(sRow);
+            scrollBottom();
+            const sText = document.getElementById('_sText');
+            const sMeta = document.getElementById('_sMeta');
+            const sCites = document.getElementById('_sCites');
+            let acc = '', buf = '';
+            const t0 = Date.now();
+            const reader = res.body.getReader(), dec = new TextDecoder();
+            outer: while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                const lines = buf.split('\n'); buf = lines.pop();
+                for (const ln of lines) {
+                    if (!ln.startsWith('data: ')) continue;
+                    const raw = ln.slice(6);
+                    if (raw === '[DONE]') break outer;
+                    let evt; try { evt = JSON.parse(raw); } catch { continue; }
+                    if (evt.type === 'chunk') {
+                        acc += evt.text;
+                        sText.innerHTML = renderContent(acc) + '<span style="opacity:.35">▍</span>';
+                        scrollBottom();
+                    } else if (evt.type === 'done') {
+                        sText.innerHTML = renderContent(acc);
+                        if (evt.session_id) { sessionId = evt.session_id; updateSessionBadge(); }
+                        const cites = evt.citations || [];
+                        const elapsed = ((Date.now()-t0)/1000).toFixed(1);
+                        sMeta.innerHTML =
+                            `<span class="meta-chip chip-lang">${esc(evt.language_name||evt.language||'en')}</span>` +
+                            (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
+                            `<span class="meta-chip chip-time">${elapsed}s</span>`;
+                        if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}</div>`;
+                        scrollBottom();
+                    }
+                }
+            }
+            ['_sMeta','_sText','_sCites'].forEach(id=>{const el=document.getElementById(id);if(el)el.removeAttribute('id');});
         }
     } catch(e) { if(e.name==='AbortError') return; removeTyping(); appendErrorBubble(e.message); }
     finally { resetSendButton(); input.focus(); }

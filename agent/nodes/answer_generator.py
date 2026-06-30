@@ -8,13 +8,6 @@ from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
 
-_SAFETY_SETTINGS = [
-    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-]
-
 
 def answer_generator_node(state: AgentState) -> dict:
     contexts = state.get("retrieved_contexts", [])
@@ -47,7 +40,7 @@ def answer_generator_node(state: AgentState) -> dict:
         temperature=config.LLM_TEMPERATURE,
         max_output_tokens=config.AGENT_MAX_TOKENS,
         system_instruction=config.AGENT_SYSTEM_PROMPT,
-        safety_settings=_SAFETY_SETTINGS,
+        safety_settings=config.SAFETY_SETTINGS,
     )
     try:
         resp = rag.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)

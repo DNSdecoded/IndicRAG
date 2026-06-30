@@ -579,3 +579,29 @@ def test_jobs_concurrent_updates_no_corruption():
 
     with api_server._jobs_lock:
         assert all(j["status"] == "done" for j in api_server._jobs.values())
+
+
+# =============================================================================
+# T2: agent/json_utils.extract_json
+# =============================================================================
+
+def test_extract_json_valid():
+    from agent.json_utils import extract_json
+    assert extract_json('{"key": "val"}') == {"key": "val"}
+
+
+def test_extract_json_fenced():
+    from agent.json_utils import extract_json
+    assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+
+
+# =============================================================================
+# T1: BM25 Indic tokenisation (regex Unicode categories)
+# =============================================================================
+
+def test_bm25_indic_tokenize():
+    from bm25_search import BM25Index
+    tokens = BM25Index._tokenize("नमस्ते दुनिया")
+    assert isinstance(tokens, list)
+    assert len(tokens) > 0
+    assert all(isinstance(t, str) for t in tokens)

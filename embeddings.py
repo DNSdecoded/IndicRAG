@@ -99,21 +99,52 @@ _query_cache: dict = {}
 _QUERY_CACHE_MAX = 128
 _query_cache_lock = threading.Lock()
 
+# ponytail: coalesce concurrent identical queries — one compute, rest wait on Event
+_in_flight: dict = {}
+_in_flight_lock = threading.Lock()
+
 
 def embed_query(query: str) -> np.ndarray:
     """
-    Embed a single query text (with LRU cache).
+    Embed a single query text (with LRU cache + in-flight dedup).
     """
     key = query.strip()
+
+    # Fast path: already cached
     with _query_cache_lock:
         if key in _query_cache:
             return _query_cache[key]
-    result = embed_texts([query], batch_size=1, show_progress=False, is_query=True)[0]
-    with _query_cache_lock:
-        if len(_query_cache) >= _QUERY_CACHE_MAX:
-            _query_cache.pop(next(iter(_query_cache)))
-        _query_cache[key] = result
-    return result
+
+    # Check if another thread is computing the same key
+    with _in_flight_lock:
+        if key in _in_flight:
+            wait_event = _in_flight[key]
+            owns_compute = False
+        else:
+            wait_event = threading.Event()
+            _in_flight[key] = wait_event
+            owns_compute = True
+
+    if not owns_compute:
+        # Wait for the owning thread, then return from cache
+        wait_event.wait()
+        with _query_cache_lock:
+            if key in _query_cache:
+                return _query_cache[key]
+        # owner failed — fall through to compute independently below
+
+    # This thread owns the compute (or is recovering after owner failure)
+    try:
+        result = embed_texts([query], batch_size=1, show_progress=False, is_query=True)[0]
+        with _query_cache_lock:
+            if len(_query_cache) >= _QUERY_CACHE_MAX:
+                _query_cache.pop(next(iter(_query_cache)))
+            _query_cache[key] = result
+        return result
+    finally:
+        with _in_flight_lock:
+            _in_flight.pop(key, None)
+        wait_event.set()
 
 
 def embed_passages(passages: List[str], batch_size: int = 32) -> np.ndarray:
