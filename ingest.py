@@ -51,7 +51,7 @@ def ingest_paper(
         
     if metadata is None:
         metadata = {}
-        
+
     # Before embedding, check if paper already exists
     existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
     needs_deletion = False
@@ -63,7 +63,17 @@ def ingest_paper(
         else:
             logger.info(f'Paper {paper_id} has changed or hash missing. Will delete old chunks after embedding.')
             needs_deletion = True
-    
+
+    # Cross-ingestion dedup: same paper re-uploaded under a different filename/paper_id
+    if config.DEDUP_PAPERS and not needs_deletion:
+        dup_id = vector_store.find_similar_paper(
+            title, year=metadata.get('year'),
+            threshold=config.DEDUP_TITLE_THRESHOLD, collection=collection,
+        )
+        if dup_id and dup_id != paper_id:
+            logger.info(f"Paper '{title[:80]}' looks like a duplicate of existing paper_id={dup_id}, skipping")
+            return 0
+
     sections = list(sections)
     
     all_chunks = []
@@ -168,11 +178,18 @@ def ingest_pdf(
     metadata['file_hash'] = calculate_sha256(pdf_path)
     
     result = pdf_utils.process_pdf(pdf_path)
-    
+
     if result is None:
         logger.error(f"Failed to process PDF: {pdf_path}")
         return 0, ""
-    
+
+    if config.ENRICH_METADATA:
+        import metadata_enrich
+        enriched = metadata_enrich.enrich_from_arxiv(result['title'])
+        if enriched:
+            # Don't overwrite metadata the caller explicitly provided
+            metadata = {**enriched, **metadata}
+
     # Ingest the paper
     num_chunks = ingest_paper(
         paper_id=paper_id,
@@ -195,9 +212,16 @@ def _extract_worker(path: str, metadata: dict = None) -> tuple:
 
     m = dict(metadata) if metadata else {}
     m['file_hash'] = h.hexdigest()
-    
+
     paper_id = Path(path).stem
     res = pdf_utils.process_pdf(path)
+
+    if res is not None and config.ENRICH_METADATA:
+        import metadata_enrich
+        enriched = metadata_enrich.enrich_from_arxiv(res['title'])
+        if enriched:
+            m = {**enriched, **m}
+
     return path, paper_id, res, m
 
 

@@ -6,7 +6,6 @@ No Docker required - just Python!
 
 import sys
 import os
-import subprocess
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -99,44 +98,37 @@ def check_documents():
 
 
 def start_server(mode='production', port=8080):
-    """Start the API server"""
+    """Start the API server.
+
+    Runs uvicorn in-process (not via subprocess.run) so SIGTERM/Ctrl+C reach
+    uvicorn's own signal handlers directly instead of being lost across a
+    subprocess boundary — uvicorn then drains in-flight requests and runs
+    the FastAPI `lifespan` shutdown before exiting.
+    """
+    import uvicorn
+
     logger.info("\n" + "="*60)
     logger.info("Starting Multilingual RAG API Server")
     logger.info("="*60)
-    
-    if mode == 'development':
-        logger.info("Mode: Development (auto-reload enabled)")
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "api_server:app",
-            "--host", "0.0.0.0",
-            "--port", str(port),
-            "--reload",
-            "--log-level", "info"
-        ]
-    else:
-        logger.info("Mode: Production")
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "api_server:app",
-            "--host", "0.0.0.0",
-            "--port", str(port),
-            "--workers", "1",
-            "--log-level", "info"
-        ]
-    
+
+    reload = mode == 'development'
+    logger.info("Mode: %s%s", "Development" if reload else "Production",
+                " (auto-reload enabled)" if reload else "")
+
     logger.info(f"\nAPI will be available at:")
     logger.info(f"  → http://localhost:{port}")
     logger.info(f"  → http://localhost:{port}/api/docs (interactive docs)")
     logger.info("\nPress Ctrl+C to stop\n")
     logger.info("="*60 + "\n")
-    
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Server exited with error: {e}")
-    except KeyboardInterrupt:
-        logger.info("\nShutting down gracefully...")
+
+    uvicorn.run(
+        "api_server:app",
+        host="0.0.0.0",
+        port=port,
+        reload=reload,
+        workers=1,
+        log_level="info",
+    )
 
 
 def main():

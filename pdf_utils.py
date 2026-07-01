@@ -233,13 +233,35 @@ def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
             blocks = page.get_text('dict').get('blocks', [])
             candidates = []
             for b in blocks:
+                lines_info = []
                 for line in b.get('lines', []):
-                    for span in line.get('spans', []):
-                        text = span.get('text', '').strip()
-                        size = span.get('size', 0)
-                        if text:
-                            candidates.append((size, text))
-            
+                    spans = line.get('spans', [])
+                    if not spans:
+                        continue
+                    # Join spans within the line — a title often splits across
+                    # multiple font runs (bold/italic segments, kerning), so
+                    # scoring individual spans picks a single fragment word
+                    # instead of the full title text.
+                    line_text = ''.join(s.get('text', '') for s in spans).strip()
+                    line_size = max(s.get('size', 0) for s in spans)
+                    if line_text:
+                        lines_info.append((line_size, line_text))
+                if not lines_info:
+                    continue
+
+                # Titles often wrap across 2+ lines at the same font size —
+                # merge the leading run of same-size lines in this block
+                # (stops at the first line that drops to a smaller size,
+                # e.g. authors/affiliations below the title).
+                max_size = max(sz for sz, _ in lines_info)
+                merged = []
+                for sz, text in lines_info:
+                    if abs(sz - max_size) < 0.5:
+                        merged.append(text)
+                    else:
+                        break
+                candidates.append((max_size, ' '.join(merged)))
+
             candidates.sort(reverse=True, key=lambda x: x[0])
             for size, text in candidates[:10]:
                 if 5 < len(text) < 300:

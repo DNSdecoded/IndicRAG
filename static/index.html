@@ -940,12 +940,13 @@ async function sendMessage() {
             removeTyping();
             const sRow = document.createElement('div');
             sRow.className = 'msg-row assistant';
-            sRow.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="asst-bubble"><div class="asst-meta" id="_sMeta"></div><div class="asst-text" id="_sText"><span style="opacity:.35">▍</span></div><div id="_sCites"></div></div>`;
+            sRow.innerHTML = `<div class="bot-avatar">${botAvatarSvg}</div><div class="asst-bubble"><div class="asst-meta" id="_sMeta"></div><div class="asst-text" id="_sText"><span style="opacity:.35">▍</span></div><div id="_sCites"></div><div id="_sFeedback"></div></div>`;
             document.getElementById('chatArea').appendChild(sRow);
             scrollBottom();
             const sText = document.getElementById('_sText');
             const sMeta = document.getElementById('_sMeta');
             const sCites = document.getElementById('_sCites');
+            const sFeedback = document.getElementById('_sFeedback');
             let acc = '', buf = '';
             const t0 = Date.now();
             const reader = res.body.getReader(), dec = new TextDecoder();
@@ -973,11 +974,12 @@ async function sendMessage() {
                             (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
                             `<span class="meta-chip chip-time">${elapsed}s</span>`;
                         if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}</div>`;
+                        if (evt.query_id) renderFeedbackButtons(sFeedback, evt.query_id);
                         scrollBottom();
                     }
                 }
             }
-            ['_sMeta','_sText','_sCites'].forEach(id=>{const el=document.getElementById(id);if(el)el.removeAttribute('id');});
+            ['_sMeta','_sText','_sCites','_sFeedback'].forEach(id=>{const el=document.getElementById(id);if(el)el.removeAttribute('id');});
         }
     } catch(e) { if(e.name==='AbortError') return; removeTyping(); appendErrorBubble(e.message); }
     finally { resetSendButton(); input.focus(); }
@@ -1103,6 +1105,24 @@ document.querySelectorAll('.overlay').forEach(o=>{
 });
 
 // ── TOAST ──────────────────────────────────────────────────────
+function renderFeedbackButtons(el, queryId) {
+    if (!el) return;
+    el.innerHTML = `<div class="feedback-row" style="margin-top:.5rem;display:flex;gap:.4rem;">
+        <button class="meta-chip" style="cursor:pointer;border:1px solid var(--border);background:none;" onclick="sendFeedback('${queryId}','up',this)">👍</button>
+        <button class="meta-chip" style="cursor:pointer;border:1px solid var(--border);background:none;" onclick="sendFeedback('${queryId}','down',this)">👎</button>
+    </div>`;
+}
+async function sendFeedback(queryId, rating, btn) {
+    const row = btn.closest('.feedback-row');
+    try {
+        const r = await fetch(`${API}/feedback`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ query_id: queryId, rating })
+        });
+        if (!r.ok) throw new Error('Feedback failed');
+        row.innerHTML = `<span class="meta-chip">${rating==='up'?'👍':'👎'} Thanks for the feedback</span>`;
+    } catch (e) { showToast('Could not record feedback', 'error'); }
+}
 function showToast(msg,type='info'){
     const wrap=document.getElementById('toastWrap');
     const t=document.createElement('div'); t.className=`toast toast-${type}`; t.textContent=msg;

@@ -66,15 +66,25 @@ def execute_indicrag(query: str, expand_query: bool = False) -> dict:
 
     if should_expand:
         variants = _expand_query_variants(query)
-        passages, seen = [], set()
+        chunks, metas, seen = [], [], set()
         for q in [query] + variants:
             result = rag.retrieve_context(q)
             for chunk, meta in zip(result["chunks"], result["metadatas"]):
                 key = hashlib.sha256(chunk.encode()).hexdigest()
                 if key not in seen:
-                    passages.append({"text": chunk, **meta})
+                    chunks.append(chunk)
+                    metas.append(meta)
                     seen.add(key)
-        return {"passages": passages[: config.MAX_CONTEXT_CHUNKS]}
+
+        # Re-rank the merged pool against the ORIGINAL query before truncating —
+        # each variant's retrieve_context() already ranked by its own phrasing,
+        # so appending in variant order and slicing at MAX_CONTEXT_CHUNKS could
+        # drop a highly relevant chunk just because it scored lower under one
+        # variant's wording early in the list.
+        import rerank
+        top_chunks, top_metas, _ = rerank.rerank(query, chunks, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        passages = [{"text": chunk, **meta} for chunk, meta in zip(top_chunks, top_metas)]
+        return {"passages": passages}
     else:
         result = rag.retrieve_context(query)
         passages = [

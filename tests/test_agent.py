@@ -539,13 +539,13 @@ def test_query_cache_concurrent_reads_writes():
 
 
 def test_client_pool_idx_stays_in_bounds_under_concurrency():
-    import rag
+    import llm_client
 
-    rag._client_pool = [MagicMock(), MagicMock(), MagicMock()]
-    rag._client_index = itertools.cycle(range(3))
+    llm_client._client_pool = [MagicMock(), MagicMock(), MagicMock()]
+    llm_client._client_index = itertools.cycle(range(3))
 
     with ThreadPoolExecutor(max_workers=30) as ex:
-        indices = [f.result() for f in [ex.submit(rag._next_client_idx) for _ in range(300)]]
+        indices = [f.result() for f in [ex.submit(llm_client._next_client_idx) for _ in range(300)]]
 
     assert all(0 <= i < 3 for i in indices)
     assert len(indices) == 300

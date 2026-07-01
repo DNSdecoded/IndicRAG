@@ -38,6 +38,11 @@ env/
 # ChromaDB data
 chroma_db/
 
+# Session/job persistence (v2.2)
+sessions.db
+sessions.db-wal
+sessions.db-shm
+
 # Model cache
 models/
 

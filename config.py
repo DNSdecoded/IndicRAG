@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).parent
 PAPERS_DIR = PROJECT_ROOT / "papers"
 CHROMA_DB_DIR = PROJECT_ROOT / "chroma_db"
 MODELS_CACHE_DIR = PROJECT_ROOT / "models"
+SESSIONS_DB_PATH = Path(os.getenv("SESSIONS_DB_PATH", PROJECT_ROOT / "sessions.db"))
 
 
 def ensure_directories():
@@ -86,6 +87,23 @@ MIN_CHUNK_SIZE = 200  # minimum chunk size to keep
 # ============================================================================
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
 RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+
+# ColBERT MaxSim reranking (query-time, no persistent index — see colbert_rerank.py)
+USE_COLBERT_RERANK = os.getenv("USE_COLBERT_RERANK", "false").lower() == "true"
+COLBERT_WEIGHT = float(os.getenv("COLBERT_WEIGHT", "0.5"))  # dense-vs-colbert fusion weight
+
+# HyDE: embed a drafted hypothetical answer instead of the bare query
+USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
+
+# Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
+ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
+DEDUP_PAPERS = os.getenv("DEDUP_PAPERS", "true").lower() == "true"
+DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
+
+# Opt-in per-user preference storage (GET/PUT /prefs/{user_id}) — caller
+# supplies user_id; not wired into agent prompts (no user-identity system
+# exists elsewhere in this app to link it to yet).
+ENABLE_USER_PREFS = os.getenv("ENABLE_USER_PREFS", "false").lower() == "true"
 
 # ============================================================================
 # Retrieval Parameters
@@ -292,7 +310,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # ============================================================================
 # Version
 # ============================================================================
-VERSION = "2.0.1"
+VERSION = "2.2.0"
 
 # ============================================================================
 # Chat / Session

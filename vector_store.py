@@ -256,6 +256,40 @@ def update_paper_metadata(paper_id: str, updates: dict, collection: chromadb.Col
     _chroma_call(collection.update, ids=ids, metadatas=new_metadatas)
     return len(ids)
 
+
+def find_similar_paper(
+    title: str,
+    year: str = None,
+    threshold: float = 0.9,
+    collection: chromadb.Collection = None,
+) -> Optional[str]:
+    """Return an existing paper_id whose title is a near-duplicate of `title`, or None.
+
+    Cross-ingestion dedup for re-uploads under a different filename. Uses
+    difflib.SequenceMatcher (stdlib) rather than a fuzzy-matching dependency —
+    good enough for near-identical title comparison at this corpus scale.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    result = _chroma_call(collection.get, include=['metadatas'])
+    seen: Dict[str, dict] = {}
+    for meta in result.get('metadatas', []):
+        pid = meta.get('paper_id')
+        if pid and pid not in seen:
+            seen[pid] = meta
+
+    from difflib import SequenceMatcher
+    norm_title = title.strip().lower()
+    best_pid, best_ratio = None, 0.0
+    for pid, meta in seen.items():
+        if year and meta.get('year') and str(meta['year']) != str(year):
+            continue
+        ratio = SequenceMatcher(None, norm_title, str(meta.get('title', '')).strip().lower()).ratio()
+        if ratio > best_ratio:
+            best_pid, best_ratio = pid, ratio
+
+    return best_pid if best_ratio >= threshold else None
+
 if __name__ == "__main__":
     # Test vector store functionality
     print("Testing ChromaDB Vector Store")
