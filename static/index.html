@@ -844,7 +844,7 @@ function appendAgentBubble(data) {
                 const pdfLink = pdfHref ? `<a class="source-pdf-link" href="${esc(pdfHref)}" target="_blank" rel="noopener noreferrer">PDF ↗</a>` : '';
                 return `<div class="source-card">
                     <div class="source-header">
-                        <span class="cite-num">[${i+1}]</span>
+                        <span class="cite-num">[${s.number || i+1}]</span>
                         <span class="source-badge ${badgeCls}">${badgeLabel}</span>
                         <span class="source-title">${titleLink}</span>
                         ${pdfLink}

@@ -138,6 +138,9 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
         max_output_tokens=max_tokens,
         safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
+        # Disable thinking: gemini-3.5-flash otherwise spends most of max_output_tokens
+        # on thoughts (measured 1962/2048), truncating the visible answer to a few lines.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
     client = _get_client()

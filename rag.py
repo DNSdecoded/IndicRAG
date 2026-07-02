@@ -15,28 +15,44 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
+def citation_number_map(metadatas: List[Dict]) -> Dict[int, Dict]:
+    """Map a per-paper citation number → representative metadata.
+
+    Citations are numbered by unique paper (first-seen title order), NOT by
+    chunk index. Several chunks of the same paper share one [Cite:N], so the
+    marker in the answer resolves to exactly one source in the panel. This is
+    the single source of truth used by format_context, extract_citations, and
+    the agent sources builder — they MUST agree or citation numbers drift.
+    """
+    title_to_num: Dict[str, int] = {}
+    num_to_meta: Dict[int, Dict] = {}
+    for meta in metadatas:
+        title = (meta.get('title') or 'Unknown').strip() or 'Unknown'
+        if title not in title_to_num:
+            num = len(title_to_num) + 1
+            title_to_num[title] = num
+            num_to_meta[num] = meta
+    return num_to_meta
+
+
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
     """
-    Extract and parse citations from answer text, handling multiple formats.
-    
-    Supports:
-        - Single citations: [1]
-        - Comma-separated: [1, 2] or [1,2,3]
-        - Ranges: [1-3]
-        - Consecutive: [1][2]
-    
+    Extract [Cite:N] citations from answer text and resolve them to papers.
+
+    Numbers are per unique paper (see citation_number_map), so [Cite:2] means
+    "the 2nd distinct paper in the context", not "the 2nd chunk".
+
     Args:
         answer: Generated answer text containing citations
         metadatas: List of metadata dictionaries from retrieved chunks
-        chunks: Optional list of text chunks for logging cited paragraphs
-        
+        chunks: Unused; kept for backwards-compatible call sites
+
     Returns:
         List of citation dictionaries with number, title, and section
     """
     import re
-    
-    seen_nums = set()
 
+    seen_nums = set()
     # Only match the explicit [Cite:N] prefix to avoid over-matching ranges like [10-15] mg
     for m in re.finditer(r'\[Cite:\s*(\d+)\]', answer):
         try:
@@ -44,18 +60,16 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         except ValueError:
             pass
 
+    num_to_meta = citation_number_map(metadatas)
     citations = []
     for num in sorted(seen_nums):
-        idx = num - 1
-        if 0 <= idx < len(metadatas):
+        meta = num_to_meta.get(num)
+        if meta:
             citations.append({
                 'number': str(num),
-                'title': metadatas[idx].get('title', 'Unknown'),
-                'section': metadatas[idx].get('section', 'body')
+                'title': meta.get('title', 'Unknown'),
+                'section': meta.get('section', 'body'),
             })
-            if chunks and idx < len(chunks):
-                logger.debug(f"Citation [Cite:{num}] refers to paragraph: {chunks[idx][:200]}...")
-
     return citations
 
 
@@ -229,27 +243,29 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
     context_parts = []
     total_length = 0
     chunks_used = 0
-    
-    for i, (chunk, metadata) in enumerate(zip(chunks, metadatas), 1):
+    title_to_num: Dict[str, int] = {}  # per-paper citation numbers; see citation_number_map
+
+    for chunk, metadata in zip(chunks, metadatas):
         # Enforce maximum number of chunks
         if chunks_used >= config.MAX_CONTEXT_CHUNKS:
             break
-        
-        # Format: [i] Title - Section: chunk text
-        title = metadata.get('title', 'Unknown')
+
+        title = (metadata.get('title') or 'Unknown').strip() or 'Unknown'
         section = metadata.get('section', 'body')
-        
-        # Build context part FIRST to get accurate length
-        context_part = f"[Cite:{i}] {title} - {section}:\n{chunk}\n"
-        
+
+        # One citation number per unique paper — chunks of the same paper reuse it.
+        num = title_to_num.get(title, len(title_to_num) + 1)
+        context_part = f"[Cite:{num}] {title} - {section}:\n{chunk}\n"
+
         # Check if adding this would exceed length limit
         if total_length + len(context_part) > config.MAX_CONTEXT_LENGTH:
             break
-        
+
+        title_to_num.setdefault(title, num)
         context_parts.append(context_part)
         total_length += len(context_part)
         chunks_used += 1
-    
+
     return "\n".join(context_parts), chunks_used
 
 
@@ -318,6 +334,8 @@ def llm_generate(prompt: str, max_tokens: int = None,
         max_output_tokens=max_tokens,
         safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
+        # Disable thinking so the full token budget goes to the answer, not thoughts.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
     try:

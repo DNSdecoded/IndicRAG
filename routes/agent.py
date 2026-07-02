@@ -47,6 +47,7 @@ class AgentQueryRequest(BaseModel):
 
 
 class AgentSource(BaseModel):
+    number: int = 0  # per-paper citation number matching [Cite:N] in the answer
     title: str
     source: str = ""
     section: str = ""
@@ -147,11 +148,15 @@ async def agent_query(
     all_contexts = result.get("retrieved_contexts", [])
     final_answer = result["final_answer"]
     cited_titles: set[str] = set()
+    title_to_num: dict[str, int] = {}
     try:
         metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                  for c in all_contexts]
-        chunks = [c.get("text", "") for c in all_contexts]
-        for cit in rag.extract_citations(final_answer, metas, chunks):
+        # Same per-paper numbering the LLM saw in the context, so the source
+        # panel's [N] matches [Cite:N] in the answer text.
+        for num, meta in rag.citation_number_map(metas).items():
+            title_to_num[(meta.get("title") or "Unknown").strip()] = num
+        for cit in rag.extract_citations(final_answer, metas):
             cited_titles.add(cit["title"].strip())
     except Exception:
         pass  # fall through to dedup-only logic below
@@ -166,6 +171,7 @@ async def agent_query(
             continue
         seen_titles.add(title)
         sources.append(AgentSource(
+            number=title_to_num.get(title, len(sources) + 1),
             title=title,
             source=ctx.get("source", ""),
             section=ctx.get("section", ""),
@@ -174,6 +180,8 @@ async def agent_query(
             authors=ctx.get("authors", ""),
             citations=ctx.get("citations", 0),
         ))
+    # Order the panel by citation number so [1],[2],... read in sequence.
+    sources.sort(key=lambda s: s.number)
 
     return AgentQueryResponse(
         answer=result["final_answer"],

@@ -141,9 +141,16 @@ def main():
     parser.add_argument('--port', type=int, default=8080, help='Port to run server on (default: 8080)')
     args = parser.parse_args()
     
+    # Load .env early (before any huggingface_hub import) and quiet HF Hub HTTP
+    # cache-check noise. Set HF_HUB_OFFLINE=1 in .env to skip the checks entirely.
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
     logger.info("Multilingual Scientific RAG System")
     logger.info("="*60)
-    
+
     if not args.skip_checks:
         logger.info("\nRunning pre-flight checks...")
         logger.info("-"*60)

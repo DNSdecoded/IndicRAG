@@ -22,6 +22,11 @@ import config
 logger = logging.getLogger(__name__)
 _tavily = None
 _S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+# OpenAlex rate-limits anonymous search under load (HTTP 503). A contact email
+# joins the polite pool; a free API key (https://openalex.org/rest-api) is the
+# only fully reliable path. Both optional — the tool degrades to [] if missing.
+_OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO", "indicrag@example.com")
+_OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")
 
 
 def _get_tavily():
@@ -421,8 +426,13 @@ def _fetch_openalex(query: str, max_results: int, year_range: str, open_access_o
                 f += f",to_publication_date:{parts[1]}-12-31"
             params["filter"] = params.get("filter", "") + ("," if "filter" in params else "") + f
 
+    if _OPENALEX_MAILTO:
+        params["mailto"] = _OPENALEX_MAILTO  # polite pool (query param, not header)
+    if _OPENALEX_API_KEY:
+        params["api_key"] = _OPENALEX_API_KEY  # authenticated pool: avoids anonymous 503s
+
     url = f"{_OPENALEX_API}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "mailto:indicrag@example.com"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"IndicRAG/2.0 (mailto:{_OPENALEX_MAILTO})"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode())
 

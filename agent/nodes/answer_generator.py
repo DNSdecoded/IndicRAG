@@ -41,6 +41,8 @@ def answer_generator_node(state: AgentState) -> dict:
         max_output_tokens=config.AGENT_MAX_TOKENS,
         system_instruction=config.AGENT_SYSTEM_PROMPT,
         safety_settings=config.SAFETY_SETTINGS,
+        # Disable thinking so the full token budget goes to the answer, not thoughts.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
     try:
         resp = rag.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)

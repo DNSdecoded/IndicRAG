@@ -605,3 +605,131 @@ def test_bm25_indic_tokenize():
     assert isinstance(tokens, list)
     assert len(tokens) > 0
     assert all(isinstance(t, str) for t in tokens)
+
+
+# =============================================================================
+# Reflexion faithfulness scoring: long multi-claim answers must not be nuked
+# =============================================================================
+
+def _mk_eval_resp(complete, action):
+    resp = MagicMock()
+    resp.text = f'{{"completeness_score": {complete}, "action": "{action}", "missing_aspects": []}}'
+    return resp
+
+
+def _eval_state(**over):
+    state = {
+        "reflexion_count": 0,
+        "draft_answer": "Long detailed answer. " * 20,
+        "reflexion_history": [],
+        "original_query": "compare the papers",
+        "retrieved_contexts": [{"text": "chunk", "title": "T", "section": "body"}],
+    }
+    state.update(over)
+    return state
+
+
+def test_faithfulness_is_grounded_fraction_not_min():
+    """One weakly-entailed claim among many grounded ones must not force faith to ~0."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    claims = [{"claim": f"c{i}", "support": 0.9, "grounded": True} for i in range(9)]
+    claims.append({"claim": "c9", "support": 0.02, "grounded": False})
+
+    with patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.9, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(_eval_state())
+
+    # 9/10 grounded => faith 0.9 => accept branch fires
+    assert "final_answer" in result
+    assert result["reflexion_history"][-1]["faithfulness_score"] >= 0.75
+
+
+def test_safe_stop_preserves_draft_answer():
+    """Stuck loop with low faithfulness must return the draft with a caveat, not discard it."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Substantive answer about antennas."
+    claims = [{"claim": "c", "support": 0.01, "grounded": False}]
+    prev = [{"faithfulness_score": 0.0, "completeness_score": 0.3,
+             "action": "retrieve_more", "missing_aspects": []}]
+
+    with patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.3, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(
+            _eval_state(draft_answer=draft, reflexion_count=1, reflexion_history=prev))
+
+    assert "final_answer" in result
+    assert draft in result["final_answer"], "draft answer must survive safe_stop"
+
+
+def test_evaluator_sees_full_long_answer():
+    """Completeness evaluator must not judge only the first 4000 chars of a long answer."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    sentinel = "UNIQUE_TAIL_SENTINEL_XYZ."
+    long_answer = ("Filler sentence for padding. " * 400) + sentinel  # ~11.6k chars
+
+    captured = {}
+
+    def capture(model, contents, gen_config=None, **kw):
+        captured["prompt"] = contents
+        return _mk_eval_resp(0.9, "accept")
+
+    with patch("verify.check_claims", return_value=[]), \
+         patch("rag.generate_with_failover", side_effect=capture), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        reflexion_evaluator_node(_eval_state(draft_answer=long_answer))
+
+    assert sentinel in captured["prompt"], "tail of long answer was truncated away from evaluator"
+
+
+# =============================================================================
+# Corpus fairness: fast web tools must not truncate slow corpus out of the
+# MAX_CONTEXT_CHUNKS budget. Passages are interleaved round-robin by retriever.
+# =============================================================================
+
+def test_interleave_by_retriever_round_robins():
+    from agent.nodes.tool_executor_node import _interleave_by_retriever
+
+    contexts = (
+        [{"text": f"web{i}", "retriever": "arxiv_search"} for i in range(10)]
+        + [{"text": f"corpus{i}", "retriever": "indicrag_retrieval"} for i in range(3)]
+    )
+    out = _interleave_by_retriever(contexts)
+
+    first12 = out[:12]
+    corpus_in_budget = sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval")
+    # All 3 corpus chunks must survive the first-12 cut, not be tail-truncated
+    assert corpus_in_budget == 3
+    assert len(out) == len(contexts)
+
+
+def test_tool_executor_tags_and_interleaves():
+    def fake_corpus(args):
+        return {"passages": [{"text": f"c{i}", "title": "Corpus Paper", "section": "body"}
+                             for i in range(3)]}
+
+    def fake_arxiv(args):
+        return {"passages": [{"text": f"a{i}", "title": f"Arxiv {i}", "source": "arxiv"}
+                             for i in range(10)]}
+
+    import agent.nodes.tool_executor_node as node
+    with patch.object(node, "TOOL_DISPATCH",
+                      {"indicrag_retrieval": fake_corpus, "arxiv_search": fake_arxiv}):
+        state = {
+            "tool_calls_requested": [
+                {"name": "arxiv_search", "args": {}},
+                {"name": "indicrag_retrieval", "args": {}},
+            ],
+            "retrieved_contexts": [],
+            "tool_calls_log": [],
+        }
+        result = node.tool_executor_node(state)
+
+    ctxs = result["retrieved_contexts"]
+    assert all("retriever" in c for c in ctxs), "every passage must be tagged with its tool"
+    first12 = ctxs[:12]
+    assert sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval") == 3
