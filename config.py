@@ -82,6 +82,20 @@ CHUNK_SIZE = 1000  # characters per chunk
 CHUNK_OVERLAP = 200  # overlap between chunks (~20%, was 300/30%)
 MIN_CHUNK_SIZE = 200  # minimum chunk size to keep
 
+# Per-section chunk-size overrides (chars). Dense sections (abstract, methods,
+# conclusion) chunk smaller for retrieval precision; narrative sections
+# (results, discussion) chunk larger to preserve context. Falls back to CHUNK_SIZE.
+SECTION_CHUNK_SIZES = {
+    "abstract": 500,
+    "methods": 500,
+    "methodology": 500,
+    "materials and methods": 500,
+    "approach": 500,
+    "conclusion": 500,
+    "results": 1500,
+    "discussion": 1500,
+}
+
 # ============================================================================
 # Reranking
 # ============================================================================
@@ -301,6 +315,31 @@ SECTION_HEADERS = _patterns.get("SECTION_HEADERS", [
     "future work",
     "appendix",
 ])
+
+# Indic-script section headers (Hindi/Marathi + Tamil), appended so
+# extract_sections detects sections in Indic-language papers, not just Latin
+# headers. Appended unconditionally so it applies even when patterns.json
+# overrides SECTION_HEADERS above.
+INDIC_SECTION_HEADERS = [
+    # Hindi / Marathi (Devanagari)
+    "सारांश",      # abstract / summary
+    "प्रस्तावना",   # introduction
+    "परिचय",       # introduction
+    "पृष्ठभूमि",     # background
+    "कार्यप्रणाली",  # methodology
+    "विधि",        # method
+    "परिणाम",      # results
+    "चर्चा",        # discussion
+    "निष्कर्ष",      # conclusion
+    "संदर्भ",       # references
+    # Tamil
+    "முன்னுரை",    # introduction
+    "முறை",        # method
+    "முடிவுகள்",    # results
+    "முடிவு",       # conclusion
+    "மேற்கோள்கள்",  # references
+]
+SECTION_HEADERS = list(SECTION_HEADERS) + INDIC_SECTION_HEADERS
 
 # ============================================================================
 # Logging

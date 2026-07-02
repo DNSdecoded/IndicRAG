@@ -26,43 +26,57 @@ def calculate_sha256(file_path: str) -> str:
     return h.hexdigest()
 
 
-def ingest_paper(
+def _content_hash(text: str) -> str:
+    """SHA-256 of the leading cleaned text, for content-based dedup — catches the
+    same paper re-uploaded under a different filename/title."""
+    return hashlib.sha256(text[:2000].encode("utf-8", "ignore")).hexdigest()
+
+
+def _build_paper_chunks(
     paper_id: str,
     title: str,
     sections: List[tuple],
-    metadata: Optional[Dict[str, Any]] = None,
-    collection=None
-) -> int:
-    """
-    Ingest a single paper into the vector store.
-    
-    Args:
-        paper_id: Unique identifier for the paper (e.g., "arxiv:2101.00001")
-        title: Paper title
-        sections: List of (section_name, section_text) tuples
-        metadata: Additional metadata (e.g., year, authors, domain)
-        collection: ChromaDB collection (uses default if None)
-        
-    Returns:
-        Number of chunks ingested
-    """
-    if collection is None:
-        collection = vector_store.get_or_create_collection()
-        
-    if metadata is None:
-        metadata = {}
+    metadata: Dict[str, Any],
+    collection,
+    seen_hashes: Optional[set] = None,
+) -> Optional[Dict[str, Any]]:
+    """Run dedup checks and build chunk/metadata/id lists for one paper.
 
-    # Before embedding, check if paper already exists
+    Does NOT embed or write to the store — embedding is batched by the caller so
+    BGE-M3 sees one large batch instead of one call per paper.
+
+    Returns {'paper_id', 'chunks', 'metadatas', 'ids', 'needs_deletion'}, or
+    None when the paper should be skipped (unchanged, or a duplicate).
+
+    seen_hashes: optional set of content hashes already prepared in this batch,
+    so two identical papers in one bulk run don't both get ingested.
+    """
+    sections = list(sections)
+
+    # Unchanged paper → skip. Changed paper → delete old chunks after embedding.
     existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
     needs_deletion = False
     if existing and existing.get('ids'):
         existing_metadata = existing['metadatas'][0]
         if 'file_hash' in metadata and existing_metadata.get('file_hash') == metadata['file_hash']:
             logger.info(f'Paper {paper_id} already indexed and unchanged, skipping')
-            return 0
-        else:
-            logger.info(f'Paper {paper_id} has changed or hash missing. Will delete old chunks after embedding.')
-            needs_deletion = True
+            return None
+        logger.info(f'Paper {paper_id} has changed or hash missing. Will delete old chunks after embedding.')
+        needs_deletion = True
+
+    content_hash = metadata.get('content_hash')
+
+    # Content-based dedup: same body text re-uploaded under a different paper_id.
+    if config.DEDUP_PAPERS and not needs_deletion and content_hash:
+        if seen_hashes is not None and content_hash in seen_hashes:
+            logger.info(f"Paper '{title[:80]}' duplicates another paper in this batch (content hash), skipping")
+            return None
+        existing_c = collection.get(where={'content_hash': content_hash}, limit=1, include=['metadatas'])
+        if existing_c and existing_c.get('ids'):
+            dup_pid = existing_c['metadatas'][0].get('paper_id')
+            if dup_pid and dup_pid != paper_id:
+                logger.info(f"Paper '{title[:80]}' duplicates existing paper_id={dup_pid} (content hash), skipping")
+                return None
 
     # Cross-ingestion dedup: same paper re-uploaded under a different filename/paper_id
     if config.DEDUP_PAPERS and not needs_deletion:
@@ -72,13 +86,11 @@ def ingest_paper(
         )
         if dup_id and dup_id != paper_id:
             logger.info(f"Paper '{title[:80]}' looks like a duplicate of existing paper_id={dup_id}, skipping")
-            return 0
+            return None
 
-    sections = list(sections)
-    
-    all_chunks = []
-    all_metadata = []
-    all_ids = []
+    all_chunks: List[str] = []
+    all_metadata: List[dict] = []
+    all_ids: List[str] = []
     chunk_counter = 0
 
     def _build_chunks(sections_iter, skip_refs: bool):
@@ -91,21 +103,20 @@ def ingest_paper(
             # Skip very short sections
             if len(section_text) < config.MIN_CHUNK_SIZE:
                 continue
-            # Chunk the section
-            chunks = pdf_utils.simple_chunk(section_text)
+            # Per-section chunk size: dense sections smaller, narrative larger.
+            max_chars = config.SECTION_CHUNK_SIZES.get(section_name.lower(), config.CHUNK_SIZE)
+            chunks = pdf_utils.simple_chunk(section_text, max_chars=max_chars)
             for chunk in chunks:
                 safe_section = section_name.replace(' ', '_').lower()
-                chunk_id = f"{paper_id}_{safe_section}_{chunk_counter}"
-                chunk_metadata = {
+                all_chunks.append(chunk)
+                all_metadata.append({
                     "paper_id": paper_id,
                     "title": title,
                     "section": section_name,
                     "chunk_index": chunk_counter,
                     **metadata
-                }
-                all_chunks.append(chunk)
-                all_metadata.append(chunk_metadata)
-                all_ids.append(chunk_id)
+                })
+                all_ids.append(f"{paper_id}_{safe_section}_{chunk_counter}")
                 chunk_counter += 1
 
     # First pass: normal behaviour — skip references/bibliography
@@ -124,28 +135,96 @@ def ingest_paper(
 
     if not all_chunks:
         logger.warning(f"No chunks created for paper {paper_id}")
+        return None
+
+    if seen_hashes is not None and content_hash:
+        seen_hashes.add(content_hash)
+
+    return {
+        'paper_id': paper_id,
+        'chunks': all_chunks,
+        'metadatas': all_metadata,
+        'ids': all_ids,
+        'needs_deletion': needs_deletion,
+    }
+
+
+def ingest_paper(
+    paper_id: str,
+    title: str,
+    sections: List[tuple],
+    metadata: Optional[Dict[str, Any]] = None,
+    collection=None
+) -> int:
+    """
+    Ingest a single paper into the vector store.
+
+    Args:
+        paper_id: Unique identifier for the paper (e.g., "arxiv:2101.00001")
+        title: Paper title
+        sections: List of (section_name, section_text) tuples
+        metadata: Additional metadata (e.g., year, authors, domain)
+        collection: ChromaDB collection (uses default if None)
+
+    Returns:
+        Number of chunks ingested
+    """
+    if collection is None:
+        collection = vector_store.get_or_create_collection()
+
+    prepared = _build_paper_chunks(paper_id, title, sections, metadata or {}, collection)
+    if prepared is None:
         return 0
-    
-    # Embed all chunks
-    logger.info(f"Embedding {len(all_chunks)} chunks from '{title}'...")
-    chunk_embeddings = embeddings.embed_passages(all_chunks)
-    
-    if needs_deletion:
+
+    logger.info(f"Embedding {len(prepared['chunks'])} chunks from '{title}'...")
+    chunk_embeddings = embeddings.embed_passages(prepared['chunks'])
+
+    if prepared['needs_deletion']:
         try:
             vector_store.delete_by_paper_id(paper_id, collection)
         except Exception as del_err:
             logger.error(f"Failed to delete old chunks for paper {paper_id}: {del_err}")
-    
-    # Add to vector store
+
     vector_store.add_documents(
-        texts=all_chunks,
+        texts=prepared['chunks'],
         embeddings=chunk_embeddings,
-        metadatas=all_metadata,
-        ids=all_ids,
+        metadatas=prepared['metadatas'],
+        ids=prepared['ids'],
         collection=collection
     )
-    
-    return len(all_chunks)
+
+    return len(prepared['chunks'])
+
+
+def dry_run_pdf(pdf_path: str) -> Optional[Dict[str, Any]]:
+    """Process a PDF (extract, section, count chunks) WITHOUT embedding or storing.
+
+    Returns per-section chunk stats for debugging ingestion quality before
+    committing, or None if the PDF can't be processed (scanned/image PDF).
+    """
+    result = pdf_utils.process_pdf(pdf_path)
+    if result is None:
+        return None
+
+    section_stats = []
+    total_chunks = 0
+    for section_name, section_text in result['sections']:
+        if len(section_text) < config.MIN_CHUNK_SIZE:
+            n = 0
+        else:
+            max_chars = config.SECTION_CHUNK_SIZES.get(section_name.lower(), config.CHUNK_SIZE)
+            n = len(pdf_utils.simple_chunk(section_text, max_chars=max_chars))
+        total_chunks += n
+        section_stats.append({"section": section_name, "chars": len(section_text), "chunks": n})
+
+    return {
+        "title": result['title'],
+        "text_length": len(result['text']),
+        "num_sections": len(result['sections']),
+        "total_chunks": total_chunks,
+        "sections": section_stats,
+        "content_hash": _content_hash(result['text']),
+    }
 
 
 def ingest_pdf(
@@ -183,6 +262,8 @@ def ingest_pdf(
         logger.error(f"Failed to process PDF: {pdf_path}")
         return 0, ""
 
+    metadata['content_hash'] = _content_hash(result['text'])
+
     if config.ENRICH_METADATA:
         import metadata_enrich
         enriched = metadata_enrich.enrich_from_arxiv(result['title'])
@@ -216,11 +297,13 @@ def _extract_worker(path: str, metadata: dict = None) -> tuple:
     paper_id = Path(path).stem
     res = pdf_utils.process_pdf(path)
 
-    if res is not None and config.ENRICH_METADATA:
-        import metadata_enrich
-        enriched = metadata_enrich.enrich_from_arxiv(res['title'])
-        if enriched:
-            m = {**enriched, **m}
+    if res is not None:
+        m['content_hash'] = _content_hash(res['text'])
+        if config.ENRICH_METADATA:
+            import metadata_enrich
+            enriched = metadata_enrich.enrich_from_arxiv(res['title'])
+            if enriched:
+                m = {**enriched, **m}
 
     return path, paper_id, res, m
 
@@ -230,18 +313,22 @@ def ingest_directory(
     pattern: str = "*.pdf",
     metadata_fn=None,
     collection=None,
-    reset: bool = False
+    reset: bool = False,
+    progress_cb=None,
 ) -> Dict[str, int]:
     """
     Ingest all PDFs from a directory.
-    
+
     Args:
         pdf_dir: Directory containing PDF files
         pattern: Glob pattern for PDF files (default: "*.pdf")
         metadata_fn: Optional function that takes pdf_path and returns metadata dict
         collection: ChromaDB collection (uses default if None)
         reset: If True, reset collection before ingesting
-        
+        progress_cb: Optional callable(done:int, total:int, message:str) invoked
+            per paper during extraction and once before the batch-embed step, for
+            live progress reporting (e.g. an SSE stream).
+
     Returns:
         Dictionary with ingestion statistics
     """
@@ -297,32 +384,70 @@ def ingest_directory(
             f.add_done_callback(lambda _: sem.release())
             future_to_pdf[f] = str(p)
 
-        for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=len(pdf_files), desc="Ingesting PDFs"):
+        prepared_papers: List[Dict[str, Any]] = []
+        seen_hashes: set = set()
+        total = len(pdf_files)
+        done = 0
+
+        for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=total, desc="Extracting PDFs"):
             pdf_path = future_to_pdf[future]
+            done += 1
             try:
                 path, paper_id, result, metadata = future.result()
-                
+
                 if result is None:
                     stats["failed"] += 1
                     stats["failed_files"].append(path)
                     continue
-                    
-                num_chunks = ingest_paper(
-                    paper_id=paper_id,
-                    title=result['title'],
-                    sections=result['sections'],
-                    metadata=metadata,
-                    collection=collection
+
+                # Build chunks + dedup now; embedding is batched below.
+                prepared = _build_paper_chunks(
+                    paper_id, result['title'], result['sections'],
+                    metadata, collection, seen_hashes,
                 )
-                
                 stats["successful"] += 1
-                stats["total_chunks"] += num_chunks
-                
+                if prepared is not None:
+                    prepared_papers.append(prepared)
+
+                if progress_cb:
+                    progress_cb(done, total, f"Ingesting {Path(path).name} ({done}/{total})")
+
             except Exception as e:
                 logger.error(f"\nError processing {pdf_path}: {e}")
                 stats["failed"] += 1
                 stats["failed_files"].append(str(pdf_path))
-    
+
+    # Batch-embed every chunk across all papers in one pass — BGE-M3 is far more
+    # efficient on one large batch than on one embed call per paper.
+    if prepared_papers:
+        for p in prepared_papers:
+            if p['needs_deletion']:
+                try:
+                    vector_store.delete_by_paper_id(p['paper_id'], collection)
+                except Exception as del_err:
+                    logger.error(f"Failed to delete old chunks for {p['paper_id']}: {del_err}")
+
+        all_chunks = [c for p in prepared_papers for c in p['chunks']]
+        all_metadata = [m for p in prepared_papers for m in p['metadatas']]
+        all_ids = [i for p in prepared_papers for i in p['ids']]
+
+        if progress_cb:
+            progress_cb(total, total, f"Embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
+        logger.info(f"Batch-embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
+
+        all_embeddings = embeddings.embed_passages(all_chunks)
+        # ponytail: one array of shape (n_chunks, 1024) in memory — fine at corpus
+        # scale; embed_passages already mini-batches internally. Chunk the add if
+        # a single corpus ever exceeds tens of thousands of chunks.
+        vector_store.add_documents(
+            texts=all_chunks,
+            embeddings=all_embeddings,
+            metadatas=all_metadata,
+            ids=all_ids,
+            collection=collection,
+        )
+        stats["total_chunks"] = len(all_chunks)
+
     # Print summary
     logger.info("\n" + "=" * 60)
     logger.info("Ingestion Summary:")

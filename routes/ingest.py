@@ -11,6 +11,7 @@ import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import config
@@ -23,6 +24,48 @@ router = APIRouter()
 # We rely on the is_absolute() + relative_to() checks for traversal; the regex
 # only needs to reject characters that can't appear in safe filenames.
 _UNSAFE_CHARS_RE = _re.compile(r'[\x00\|;&`$<>"\'\!\*\?\{\}\[\]\\~]')
+
+
+def _post_ingest_refresh():
+    """Rebuild BM25 index (async) and invalidate retrieval/tool caches after an ingest."""
+    try:
+        import bm25_search
+        bm25_search.invalidate()
+        threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
+    except Exception:
+        pass
+    try:
+        from cache import retrieval_cache, tool_cache
+        retrieval_cache.invalidate()
+        tool_cache.invalidate()
+    except Exception:
+        logger.warning("Failed to invalidate caches after ingestion", exc_info=True)
+
+
+def _resolve_papers_path(rel_path: str) -> Path:
+    """Resolve a papers-relative path safely and confirm the file exists.
+
+    Reconstructs from the trusted base after a relative_to() check so a resolved
+    path can't escape the papers directory (breaks taint chain for CodeQL).
+    Raises HTTPException(400) on traversal, 404 when the file is missing.
+    """
+    base_dir = Path(config.PAPERS_DIR).resolve()
+    candidate = (base_dir / rel_path).resolve()
+    try:
+        relative_part = candidate.relative_to(base_dir)
+    except ValueError:
+        logger.warning(f"Path traversal blocked after resolve: {rel_path!r}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path: path escapes the papers directory."
+        )
+    safe_path = base_dir / relative_part
+    if not safe_path.exists() or not safe_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PDF file not found: {rel_path}"
+        )
+    return safe_path
 
 
 class IngestRequest(BaseModel):
@@ -84,6 +127,9 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
     submitted_at: str
     completed_at: Optional[str] = None
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
+    progress_message: Optional[str] = None
 
 
 class UploadResponse(BaseModel):
@@ -111,26 +157,7 @@ async def ingest_document(
     try:
         import ingest as ingest_module
 
-        base_dir = Path(config.PAPERS_DIR).resolve()
-        candidate = (base_dir / body.pdf_path).resolve()
-
-        try:
-            relative_part = candidate.relative_to(base_dir)
-        except ValueError:
-            logger.warning(f"Path traversal blocked after resolve: {body.pdf_path!r}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid pdf_path: path escapes the papers directory."
-            )
-
-        # Reconstruct from trusted base only (breaks taint chain for CodeQL)
-        safe_pdf_path = base_dir / relative_part
-
-        if not safe_pdf_path.exists() or not safe_pdf_path.is_file():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"PDF file not found: {body.pdf_path}"
-            )
+        safe_pdf_path = _resolve_papers_path(body.pdf_path)
 
         logger.info(f"Ingesting document: {safe_pdf_path}")
 
@@ -140,18 +167,7 @@ async def ingest_document(
             paper_id=safe_pdf_path.stem
         )
 
-        try:
-            import bm25_search
-            bm25_search.invalidate()
-            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
-        except Exception:
-            pass
-        try:
-            from cache import retrieval_cache, tool_cache
-            retrieval_cache.invalidate()
-            tool_cache.invalidate()
-        except Exception:
-            logger.warning("Failed to invalidate caches after ingestion", exc_info=True)
+        _post_ingest_refresh()
 
         processing_time = time.time() - start_time
 
@@ -173,25 +189,33 @@ async def ingest_document(
         )
 
 
+def _make_progress_cb(job_id: str):
+    """Return a progress callback that writes live progress into the in-memory job.
+
+    In-memory only (no persistence write) so per-paper updates don't hammer
+    SQLite; progress is transient and surfaced via the SSE stream / status poll.
+    """
+    def _cb(current: int, total: int, message: str):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["progress_current"] = current
+                job["progress_total"] = total
+                job["progress_message"] = message
+    return _cb
+
+
 def _run_bulk_ingest(job_id: str):
     """Background worker: runs ingest_directory and updates the job store."""
     import ingest as ingest_module
     start_time = time.time()
     _update_job(job_id, status="running")
     try:
-        stats = ingest_module.ingest_directory(pdf_dir=str(config.PAPERS_DIR))
-        try:
-            import bm25_search
-            bm25_search.invalidate()
-            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
-        except Exception:
-            pass
-        try:
-            from cache import retrieval_cache, tool_cache
-            retrieval_cache.invalidate()
-            tool_cache.invalidate()
-        except Exception:
-            logger.warning("Failed to invalidate caches after bulk ingestion", exc_info=True)
+        stats = ingest_module.ingest_directory(
+            pdf_dir=str(config.PAPERS_DIR),
+            progress_cb=_make_progress_cb(job_id),
+        )
+        _post_ingest_refresh()
         processing_time = time.time() - start_time
         status_value = "partial" if stats.get("failed", 0) > 0 else "success"
         _update_job(
@@ -243,6 +267,9 @@ async def ingest_all_documents(
             "chunks_ingested": None,
             "processing_time": None,
             "error": None,
+            "progress_current": 0,
+            "progress_total": None,
+            "progress_message": "Queued",
         }
     background_tasks.add_task(_run_bulk_ingest, job_id)
     logger.info(f"Bulk ingest job {job_id} queued")
@@ -271,6 +298,137 @@ async def get_ingest_status(
             detail=f"Job '{job_id}' not found."
         )
     return JobStatusResponse(**job)
+
+
+@router.get("/ingest/stream/{job_id}", tags=["Management"])
+async def stream_ingest_progress(
+    job_id: str,
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Server-Sent Events stream of a bulk ingestion job's live progress.
+
+    Emits one `data:` event per progress change (e.g. "Ingesting foo.pdf (3/50)"),
+    then a final event when the job reaches a terminal state, and closes.
+    """
+    import asyncio
+    import json
+
+    with _jobs_lock:
+        if job_id not in _jobs:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job '{job_id}' not found."
+            )
+
+    _FIELDS = ("status", "progress_current", "progress_total",
+               "progress_message", "chunks_ingested", "successful", "failed")
+    _TERMINAL = {"success", "partial", "failed"}
+
+    async def event_gen():
+        last = None
+        while True:
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                snapshot = {k: job.get(k) for k in _FIELDS} if job else None
+            if snapshot is None:
+                break
+            key = (snapshot["status"], snapshot["progress_current"], snapshot["progress_message"])
+            if key != last:
+                last = key
+                yield f"data: {json.dumps(snapshot)}\n\n"
+            if snapshot["status"] in _TERMINAL:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+class DryRunResponse(BaseModel):
+    """Result of a dry-run ingest: what WOULD be ingested, without storing it."""
+    title: str
+    text_length: int
+    num_sections: int
+    total_chunks: int
+    content_hash: str
+    sections: list
+
+
+@router.post("/ingest/dry-run", response_model=DryRunResponse, tags=["Management"])
+@limiter.limit("10/minute")
+async def dry_run_document(
+    request: Request,
+    body: IngestRequest,
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Process a PDF (extract text, detect sections, count chunks) WITHOUT embedding
+    or storing it. Useful for debugging ingestion quality before committing.
+    """
+    import ingest as ingest_module
+
+    safe_pdf_path = _resolve_papers_path(body.pdf_path)
+    result = await run_in_threadpool(ingest_module.dry_run_pdf, str(safe_pdf_path))
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not process PDF (possibly a scanned/image PDF needing OCR)."
+        )
+    return DryRunResponse(**result)
+
+
+class ReindexRequest(BaseModel):
+    """Request model for in-place re-ingestion of an existing paper."""
+    paper_id: str = Field(..., description="paper_id (PDF filename stem) to re-embed in place")
+
+    @field_validator('paper_id')
+    @classmethod
+    def sanitize_paper_id(cls, v: str) -> str:
+        """paper_id maps to '<paper_id>.pdf' in papers/; reject anything path-like."""
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("paper_id must not be empty.")
+        if '/' in v or '\\' in v or '..' in v or _UNSAFE_CHARS_RE.search(v):
+            raise ValueError("paper_id contains invalid characters.")
+        return v
+
+
+@router.post("/ingest/reindex", response_model=IngestResponse, tags=["Management"])
+@limiter.limit("5/minute")
+async def reindex_document(
+    request: Request,
+    body: ReindexRequest,
+    authenticated: bool = Depends(verify_api_key)
+):
+    """
+    Re-embed a single already-ingested paper in place (e.g. after changing chunk
+    parameters). Deletes the paper's existing chunks first so re-embedding runs
+    even when the source file is unchanged, then re-ingests from papers/.
+    """
+    start_time = time.time()
+    import ingest as ingest_module
+    import vector_store
+
+    safe_pdf_path = _resolve_papers_path(f"{body.paper_id}.pdf")
+
+    # Delete first so ingest_pdf's unchanged-file-hash check doesn't skip it.
+    await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
+
+    num_chunks, title = await run_in_threadpool(
+        ingest_module.ingest_pdf,
+        pdf_path=str(safe_pdf_path),
+        paper_id=body.paper_id,
+    )
+
+    _post_ingest_refresh()
+
+    return IngestResponse(
+        status="success",
+        chunks_ingested=num_chunks,
+        paper_id=body.paper_id,
+        title=title,
+        processing_time=time.time() - start_time,
+    )
 
 
 @router.post("/upload", response_model=UploadResponse, tags=["Management"])
