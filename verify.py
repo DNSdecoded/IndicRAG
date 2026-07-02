@@ -24,7 +24,7 @@ def _load():
     return _model
 
 
-_CITE_ONLY_RE = re.compile(r'^(\[(?:Cite:\s*\d+|NOT FOUND[^\]]*)\]\s*)+$')
+_CITE_ONLY_RE = re.compile(r'^(\[(?:\d+|NOT FOUND[^\]]*)\]\s*)+$')
 
 
 def check_claims(answer: str, chunks: List[str]) -> List[dict]:
@@ -46,7 +46,7 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
 
     results = []
     for sent in sentences:
-        cited = [int(n) - 1 for n in re.findall(r'\[Cite:\s*(\d+)\]', sent)]
+        cited = [int(n) - 1 for n in re.findall(r'\[(\d+)\]', sent)]
         cited = [i for i in cited if 0 <= i < len(chunks)]
         if not cited:
             continue
@@ -58,7 +58,7 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         # flips the model's dominant class to "neutral"). This was silently
         # forcing faithfulness scores toward 0 on essentially every answer,
         # since every cited claim carries a [Cite:N] marker by construction.
-        clean_sent = re.sub(r'\[(?:Cite:\s*\d+|NOT FOUND[^\]]*)\]', '', sent).strip()
+        clean_sent = re.sub(r'\[(?:\d+|NOT FOUND[^\]]*)\]', '', sent).strip()
         if not clean_sent:
             continue
         pairs = [(chunks[i], clean_sent) for i in cited]

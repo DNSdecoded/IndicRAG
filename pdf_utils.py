@@ -183,8 +183,13 @@ def extract_sections(text: str) -> List[Tuple[str, str]]:
     """
     sections = []
     
-    # Create regex pattern for section headers (must be exact lines)
-    header_pattern = r'(?:^|\n)[ \t]*(?:\d+\.?\s*|[A-Z]\.\s*)?(' + '|'.join(config.SECTION_HEADERS) + r')[ \t]*(?:\n|$)'
+    # Create regex pattern for section headers (must be exact lines).
+    # Optional numbering prefix handles Arabic ("3. "), multi-char Roman numerals
+    # ("III. ", "IV. " — IEEE papers number sections this way), and single-letter
+    # subsections ("A. "). Roman branch precedes the single-letter branch so
+    # "III." matches fully instead of just the leading "I".
+    header_pattern = (r'(?:^|\n)[ \t]*(?:\d+\.?\s*|[IVXLC]{1,7}\.\s*|[A-Z]\.\s*)?('
+                      + '|'.join(config.SECTION_HEADERS) + r')[ \t]*(?:\n|$)')
     
     # Find all section headers
     matches = list(re.finditer(header_pattern, text, re.IGNORECASE))

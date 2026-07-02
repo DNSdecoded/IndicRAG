@@ -931,9 +931,11 @@ async function sendMessage() {
             sessionId = data.session_id; updateSessionBadge();
             removeTyping(); appendAgentBubble(data);
         } else {
+            const paperIds = [...document.querySelectorAll('.paper-scope:checked')].map(c => c.dataset.pid);
             const res = await fetch(`${API}/chat/stream`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8 }),
+                body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8,
+                                       paper_ids: paperIds.length ? paperIds : null }),
                 signal: currentController.signal
             });
             if (!res.ok) { const d=await res.json().catch(()=>({})); throw new Error(formatError(d)||'Stream failed'); }
@@ -1026,9 +1028,11 @@ async function refreshKB() {
         document.getElementById('chunkCount').textContent=stats.document_count??'0';
         const list=document.getElementById('papersList');
         if(!papers.length){list.innerHTML='<div class="papers-empty">No documents ingested yet.<br>ChromaDB is empty.</div>';return;}
-        list.innerHTML=papers.map(p=>{
+        list.innerHTML='<div class="scope-hint" style="font-size:11px;opacity:.7;padding:4px 6px">☑ Check papers to answer <b>only</b> from them. None checked = search all.</div>'+papers.map(p=>{
             const sid=p.filename.replace(/[^a-zA-Z0-9]/g,'_');
+            const pid=p.filename.replace(/\.pdf$/i,'');
             return `<div class="paper-item" id="pi-${sid}">
+                <input type="checkbox" class="paper-scope" data-pid="${esc(pid)}" title="Restrict answers to this paper">
                 <span class="paper-icon">📄</span>
                 <span class="paper-name" title="${esc(p.filename)}">${esc(p.filename)}</span>
                 <button class="paper-ingest-btn" id="ib-${sid}" onclick="ingestOne('${esc(p.filename).replace(/'/g,"\\'")}','${sid}')">Ingest</button>

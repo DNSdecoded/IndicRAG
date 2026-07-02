@@ -20,11 +20,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def build_paper_filter(paper_ids: Optional[List[str]]) -> Optional[Dict]:
+    """Build a ChromaDB metadata filter that scopes retrieval to specific papers.
+
+    Returns {'paper_id': {'$in': [...]}} for a non-empty list, else None (no
+    scoping). This is what enforces the document boundary — without it, retrieval
+    spans the whole corpus and "only this paper" can't be honoured.
+    """
+    ids = [p.strip() for p in (paper_ids or []) if p and p.strip()]
+    if not ids:
+        return None
+    return {"paper_id": {"$in": ids}}
+
+
 class QueryRequest(BaseModel):
     """Request model for question answering."""
     question: str = Field(..., min_length=1, max_length=1000, description="User question in any language")
     strategy: str = Field("A", description="Strategy: 'A' for multilingual LLM, 'B' for English + translation")
     top_k: Optional[int] = Field(None, ge=1, le=20, description="Number of chunks to retrieve")
+    paper_ids: Optional[List[str]] = Field(
+        None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
+    )
 
     @field_validator('strategy')
     @classmethod
@@ -161,7 +177,8 @@ async def query_question(
             rag.answer_question,
             user_query=body.question,
             strategy=body.strategy,
-            top_k=top_k
+            top_k=top_k,
+            filter_dict=build_paper_filter(body.paper_ids),
         )
 
         processing_time = time.time() - start_time
@@ -219,7 +236,8 @@ async def query_stream(
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k)
+    prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k,
+                                       build_paper_filter(body.paper_ids))
     query_id = str(uuid.uuid4())
 
     if prepared["chunks_used"] == 0:

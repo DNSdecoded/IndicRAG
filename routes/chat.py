@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import rag
 from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
-from routes.query import Citation
+from routes.query import Citation, build_paper_filter
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,9 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Existing session ID; omit to start a new conversation")
     strategy: str = Field("A", description="Strategy: 'A' for multilingual LLM, 'B' for English + translation")
     top_k: Optional[int] = Field(None, ge=1, le=20, description="Number of chunks to retrieve")
+    paper_ids: Optional[List[str]] = Field(
+        None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
+    )
 
     @field_validator("strategy")
     @classmethod
@@ -81,6 +84,7 @@ async def chat(
             messages=full_messages,
             strategy=body.strategy,
             top_k=top_k,
+            filter_dict=build_paper_filter(body.paper_ids),
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
@@ -125,7 +129,8 @@ async def chat_stream(
     session_id, messages = _get_or_create_session(body.session_id)
     full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
-    prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k)
+    prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
+                                       build_paper_filter(body.paper_ids))
     query_id = str(uuid.uuid4())
 
     if prepared["chunks_used"] == 0:

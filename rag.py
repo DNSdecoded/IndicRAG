@@ -53,8 +53,8 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
     import re
 
     seen_nums = set()
-    # Only match the explicit [Cite:N] prefix to avoid over-matching ranges like [10-15] mg
-    for m in re.finditer(r'\[Cite:\s*(\d+)\]', answer):
+    # Match [N] citation markers; the \[(\d+)\] shape still ignores ranges like [10-15] mg
+    for m in re.finditer(r'\[(\d+)\]', answer):
         try:
             seen_nums.add(int(m.group(1)))
         except ValueError:
@@ -141,6 +141,13 @@ def retrieve_context(
 
     if collection is None:
         collection = vector_store.get_or_create_collection()
+
+    # Paper-scoped queries → exhaustive retrieval (all chunks of the selected
+    # papers in document order), not top-k similarity. This is what makes
+    # "reconstruct everything in this paper" work: the LLM sees the whole paper
+    # instead of a semantic sample that can miss equations/hyperparameters.
+    if filter_dict and 'paper_id' in filter_dict:
+        return _retrieve_scoped(filter_dict, collection)
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
@@ -229,17 +236,25 @@ def retrieve_context(
     return result
 
 
-def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
+def format_context(chunks: List[str], metadatas: List[Dict],
+                   max_chunks: int = None, max_length: int = None) -> str:
     """
     Format retrieved chunks into a context string for the LLM.
-    
+
     Args:
         chunks: List of text chunks
         metadatas: List of metadata dictionaries
-        
+        max_chunks: Override for max chunks kept (default config.MAX_CONTEXT_CHUNKS)
+        max_length: Override for max total chars (default config.MAX_CONTEXT_LENGTH)
+
     Returns:
         Formatted context string with citations
     """
+    if max_chunks is None:
+        max_chunks = config.MAX_CONTEXT_CHUNKS
+    if max_length is None:
+        max_length = config.MAX_CONTEXT_LENGTH
+
     context_parts = []
     total_length = 0
     chunks_used = 0
@@ -247,7 +262,7 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
 
     for chunk, metadata in zip(chunks, metadatas):
         # Enforce maximum number of chunks
-        if chunks_used >= config.MAX_CONTEXT_CHUNKS:
+        if chunks_used >= max_chunks:
             break
 
         title = (metadata.get('title') or 'Unknown').strip() or 'Unknown'
@@ -255,10 +270,10 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
 
         # One citation number per unique paper — chunks of the same paper reuse it.
         num = title_to_num.get(title, len(title_to_num) + 1)
-        context_part = f"[Cite:{num}] {title} - {section}:\n{chunk}\n"
+        context_part = f"[{num}] {title} - {section}:\n{chunk}\n"
 
         # Check if adding this would exceed length limit
-        if total_length + len(context_part) > config.MAX_CONTEXT_LENGTH:
+        if total_length + len(context_part) > max_length:
             break
 
         title_to_num.setdefault(title, num)
@@ -267,6 +282,47 @@ def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
         chunks_used += 1
 
     return "\n".join(context_parts), chunks_used
+
+
+def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
+    """Exhaustive retrieval for paper-scoped queries.
+
+    Returns ALL chunks of the scoped paper(s) in document order
+    (paper_id, chunk_index), capped by config.SCOPED_MAX_CHUNKS /
+    SCOPED_MAX_CONTEXT_LENGTH — no similarity truncation, no reranker. Preserves
+    the paper's natural structure so reconstruction-style queries see the whole
+    document. Skips dense/BM25 entirely (no query embedding needed).
+    """
+    got = collection.get(where=filter_dict, include=['documents', 'metadatas'])
+    ids = got.get('ids', [])
+    if not ids:
+        logger.warning(f"No chunks for scoped filter {filter_dict}")
+        return {'chunks': [], 'metadatas': [], 'distances': [],
+                'formatted_context': '', 'chunks_used': 0}
+
+    metas_all = got['metadatas']
+    order = sorted(
+        range(len(ids)),
+        key=lambda i: (metas_all[i].get('paper_id', ''), metas_all[i].get('chunk_index', 0)),
+    )[:config.SCOPED_MAX_CHUNKS]
+
+    docs = [got['documents'][i] for i in order]
+    metas = [metas_all[i] for i in order]
+
+    formatted_context, chunks_used = format_context(
+        docs, metas,
+        max_chunks=config.SCOPED_MAX_CHUNKS,
+        max_length=config.SCOPED_MAX_CONTEXT_LENGTH,
+    )
+    logger.info(f"Scoped retrieval: {len(ids)} chunks matched, {chunks_used} used "
+                f"(filter={filter_dict})")
+    return {
+        'chunks': docs,
+        'metadatas': metas,
+        'distances': [0.0] * len(docs),
+        'formatted_context': formatted_context,
+        'chunks_used': chunks_used,
+    }
 
 
 def build_prompt(
@@ -378,12 +434,16 @@ def llm_generate(prompt: str, max_tokens: int = None,
 llm_generate_stream = llm_client.llm_generate_stream
 
 
-def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None) -> dict:
+def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None,
+                             filter_dict: Optional[Dict] = None) -> dict:
     """Retrieve context and build prompt for /query/stream.
 
     Returns dict with keys:
       chunks_used, prompt, metadatas, detected_lang, lang_name
     If no docs: chunks_used=0, no_docs_msg set instead of prompt/metadatas.
+
+    filter_dict scopes retrieval (e.g. {'paper_id': {'$in': [...]}}) so a query
+    can be restricted to specific papers.
     """
     detected_lang = lang_utils.detect_language(user_query) or "en"
     lang_name = lang_utils.get_language_name(detected_lang)
@@ -395,7 +455,7 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
         except Exception:
             pass
 
-    context_data = retrieve_context(retrieval_query, top_k)
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
 
     if context_data["chunks_used"] == 0:
         no_docs_msg = config.NO_DOCUMENTS_RESPONSE
@@ -413,10 +473,12 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
 
 
-def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None) -> dict:
+def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None,
+                            filter_dict: Optional[Dict] = None) -> dict:
     """Retrieve context and build prompt for /chat/stream (mirrors answer_with_history).
 
-    Returns same shape as prepare_query_for_stream.
+    Returns same shape as prepare_query_for_stream. filter_dict scopes retrieval
+    to specific papers (e.g. {'paper_id': {'$in': [...]}}).
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Last message must be from the user")
@@ -433,7 +495,7 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
         except Exception:
             pass
 
-    context_data = retrieve_context(retrieval_query, top_k)
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
 
     if context_data["chunks_used"] == 0:
         no_docs_msg = config.NO_DOCUMENTS_RESPONSE
