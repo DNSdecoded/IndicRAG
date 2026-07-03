@@ -14,11 +14,21 @@ import config
 logger = logging.getLogger(__name__)
 
 
-_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="chroma-timeout")
+# A timed-out ChromaDB call keeps running (a running future can't be cancelled),
+# so a small pool would be permanently saturated after a few hangs — every later
+# call would then time out waiting for a free worker. A large pool means a hung
+# call leaks at most one thread instead of poisoning the shared timeout facility.
+# ponytail: 32 workers; if hangs ever pile up, fix the hang, don't grow the pool.
+_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="chroma-timeout")
 
 
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
-    """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs."""
+    """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs.
+
+    Note: cancel() cannot stop an already-running call; on timeout the worker
+    thread keeps running until the underlying call returns. The large pool above
+    bounds the damage of that leak.
+    """
     fut = _chroma_executor.submit(fn, *args, **kwargs)
     try:
         return fut.result(timeout=timeout)

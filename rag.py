@@ -85,6 +85,8 @@ def _hyde_embedding(user_query: str):
             temperature=config.LLM_TEMPERATURE,
             max_output_tokens=256,
             safety_settings=config.SAFETY_SETTINGS,
+            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         response = llm_client.generate_with_failover(
             config.LLM_MODEL_NAME,
@@ -554,11 +556,15 @@ def safe_extract_text(response) -> str:
     return ""
 
 
-def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
-    """Run faithfulness verification if configured; log warnings for ungrounded claims."""
+def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> List[dict]:
+    """Run faithfulness verification if configured; log warnings for ungrounded claims.
+
+    metadatas (aligned with chunks) lets each [N] resolve to the right paper's
+    chunk(s), since citations are numbered per-paper, not per-chunk.
+    """
     try:
         import verify
-        results = verify.check_claims(answer, chunks)
+        results = verify.check_claims(answer, chunks, metadatas)
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
@@ -646,7 +652,8 @@ def answer_question_strategy_a(
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
-    result['faithfulness'] = _run_faithfulness(answer, context_data.get('chunks', []))
+    result['faithfulness'] = _run_faithfulness(
+        answer, context_data.get('chunks', []), context_data.get('metadatas', []))
     return result
 
 
@@ -739,7 +746,8 @@ def answer_question_strategy_b(
         'citations': citations,
         'english_answer': english_answer
     }
-    result['faithfulness'] = _run_faithfulness(english_answer, context_data.get('chunks', []))
+    result['faithfulness'] = _run_faithfulness(
+        english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
     return result
 
 
@@ -876,7 +884,8 @@ def answer_with_history(
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
-    result["faithfulness"] = _run_faithfulness(english_answer, context_data.get("chunks", []))
+    result["faithfulness"] = _run_faithfulness(
+        english_answer, context_data.get("chunks", []), context_data.get("metadatas", []))
     return result
 
 

@@ -90,6 +90,37 @@ def test_sentence_with_no_citation_is_skipped():
     assert results == []
 
 
+def test_citation_number_maps_to_correct_paper_not_chunk_index():
+    """[N] is a per-paper number: it must score against that paper's chunk(s),
+    not chunks[N-1]. Regression for the faithfulness citation/chunk-index bug."""
+    # PaperA contributes 2 chunks, PaperB 1 chunk. [2] == PaperB.
+    chunks = ["A intro text", "A methods text", "B results text"]
+    metadatas = [{"title": "PaperA"}, {"title": "PaperA"}, {"title": "PaperB"}]
+    answer = "The result was significant. [2]"
+
+    fake_model = _fake_model()
+    with patch("verify._load", return_value=fake_model):
+        verify.check_claims(answer, chunks, metadatas)
+
+    premises = [p[0] for p in fake_model.predict.call_args[0][0]]
+    assert premises == ["B results text"]          # scored PaperB
+    assert "A methods text" not in premises         # not chunks[1]
+
+
+def test_metadatas_none_falls_back_to_chunk_index():
+    """Without metadatas, [N] -> chunks[N-1] (historical behaviour, still valid
+    when every chunk is a distinct document)."""
+    chunks = ["first", "second"]
+    answer = "Claim. [2]"
+
+    fake_model = _fake_model()
+    with patch("verify._load", return_value=fake_model):
+        verify.check_claims(answer, chunks)
+
+    premises = [p[0] for p in fake_model.predict.call_args[0][0]]
+    assert premises == ["second"]
+
+
 def test_not_found_marker_also_merges_as_citation_only_fragment():
     answer = "No information was available on this topic. [NOT FOUND: topic] Second sentence. [1]"
     chunks = ["relevant chunk"]

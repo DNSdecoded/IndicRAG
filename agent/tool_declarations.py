@@ -114,6 +114,13 @@ FUNCTION_DECLARATIONS = [
                     "type": "string",
                     "description": "Sort order: 'relevance' (default) or 'submitted_date'.",
                 },
+                "year_from": {
+                    "type": "integer",
+                    "description": (
+                        "Only return papers submitted in this year or later (e.g. 2022). "
+                        "Optional; use when the query restricts by year."
+                    ),
+                },
             },
             "required": ["query"],
         },

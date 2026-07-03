@@ -97,10 +97,15 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             }
 
     answer = state.get("draft_answer", "")
-    chunks = [c.get("text", "") for c in state.get("retrieved_contexts", [])]
+    _contexts = state.get("retrieved_contexts", [])
+    chunks = [c.get("text", "") for c in _contexts]
+    # Same per-paper numbering the answer generator's format_context used, so [N]
+    # resolves to the right paper's chunk(s) instead of the Nth chunk.
+    chunk_metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+                   for c in _contexts]
 
     try:
-        claims = verify.check_claims(answer, chunks)
+        claims = verify.check_claims(answer, chunks, chunk_metas)
         if claims:
             # Grounded fraction (RAGAS-style): min() collapsed to ~0 on any long
             # multi-claim answer because one synthesized/comparative sentence
@@ -128,6 +133,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             gen_config=types.GenerateContentConfig(
                 temperature=0,
                 max_output_tokens=1024,
+                # JSON completeness verdict — thinking off by default (config knob).
+                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
         )
         raw_text = rag.safe_extract_text(resp)

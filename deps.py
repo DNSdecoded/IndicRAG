@@ -169,7 +169,14 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
 
 def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:
     with _sessions_lock:
-        sess = _sessions[session_id]
+        # The session can be evicted (stale-age sweep) between _get_or_create_session
+        # and here during a slow generation — re-materialize it rather than KeyError
+        # after the answer has already been computed.
+        sess = _sessions.get(session_id)
+        if sess is None:
+            now = datetime.now(timezone.utc).isoformat()
+            sess = {"id": session_id, "messages": [], "created_at": now, "updated_at": now}
+            _sessions[session_id] = sess
         msgs = sess["messages"]
         msgs.append({"role": "user", "content": user_text})
         msgs.append({"role": "assistant", "content": assistant_text})

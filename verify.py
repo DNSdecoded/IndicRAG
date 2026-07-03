@@ -29,9 +29,41 @@ def _load():
 _CITE_ONLY_RE = re.compile(r'^(\[(?:\d+|NOT FOUND[^\]]*)\]\s*)+$')
 
 
-def check_claims(answer: str, chunks: List[str]) -> List[dict]:
-    """Return per-sentence support scores against the cited chunk."""
+def _paper_chunk_map(chunks: List[str], metadatas):
+    """Map each per-paper citation number → the list of chunk texts for that paper.
+
+    Citations are numbered per DISTINCT paper (first-seen title order), matching
+    rag.citation_number_map / format_context — several chunks of one paper share
+    one [N]. Indexing chunks[N-1] directly is wrong whenever a paper contributes
+    more than one chunk (BUG: faithfulness scored claims against the wrong chunk).
+
+    When metadatas is None (or absent), fall back to treating each chunk as its
+    own paper, i.e. [N] → chunks[N-1] — the historical behaviour, still correct
+    for callers where every retrieved chunk is a distinct document.
+    """
+    if not metadatas:
+        return {i + 1: [c] for i, c in enumerate(chunks)}
+
+    num_to_chunks: dict = {}
+    title_to_num: dict = {}
+    for chunk, meta in zip(chunks, metadatas):
+        title = ((meta or {}).get('title') or 'Unknown').strip() or 'Unknown'
+        num = title_to_num.get(title)
+        if num is None:
+            num = len(title_to_num) + 1
+            title_to_num[title] = num
+        num_to_chunks.setdefault(num, []).append(chunk)
+    return num_to_chunks
+
+
+def check_claims(answer: str, chunks: List[str], metadatas=None) -> List[dict]:
+    """Return per-sentence support scores against the cited paper's chunk(s).
+
+    metadatas (one dict per chunk, aligned with `chunks`) lets a [N] marker
+    resolve to ALL chunks of the Nth distinct paper — see _paper_chunk_map.
+    """
     model = _load()
+    num_to_chunks = _paper_chunk_map(chunks, metadatas)
     raw_sentences = re.split(r'(?<=[.!?।॥])\s+', answer)
 
     # Merge citation-only fragments into the previous sentence — the LLM often
@@ -48,9 +80,9 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
 
     results = []
     for sent in sentences:
-        cited = [int(n) - 1 for n in re.findall(r'\[(\d+)\]', sent)]
-        cited = [i for i in cited if 0 <= i < len(chunks)]
-        if not cited:
+        cited_nums = {int(n) for n in re.findall(r'\[(\d+)\]', sent)}
+        cited_chunks = [c for n in cited_nums for c in num_to_chunks.get(n, [])]
+        if not cited_chunks:
             continue
         # Strip citation/not-found markers before scoring — leaving literal
         # "[Cite:1]" text in the NLI hypothesis is out-of-distribution input
@@ -63,7 +95,7 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         clean_sent = re.sub(r'\[(?:\d+|NOT FOUND[^\]]*)\]', '', sent).strip()
         if not clean_sent:
             continue
-        pairs = [(chunks[i], clean_sent) for i in cited]
+        pairs = [(chunk, clean_sent) for chunk in cited_chunks]
         raw = np.atleast_2d(model.predict(pairs))  # (n, num_labels) NLI logits
         # softmax → probabilities; entailment column depends on the model
         # (config.NLI_ENTAILMENT_INDEX), since label order differs across NLI models.
