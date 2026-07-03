@@ -62,6 +62,46 @@ def _is_transient(exc: Exception) -> bool:
     return "503" in msg or "429" in msg or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg
 
 
+def _is_permanent(exc: Exception) -> bool:
+    """Errors where retrying other keys/models is pointless: bad request, auth.
+
+    Everything else (500s, connection resets, read timeouts, unclassified) is
+    treated as worth failing over — one flaky key must not abort the whole pool
+    and the fallback model.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (400, 401, 403, 404):
+        return True
+    msg = str(exc)
+    return any(s in msg for s in (
+        "INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED", "API key not valid",
+    ))
+
+
+def _with_cache(client, model: str, gen_config):
+    """Return gen_config, or a copy that references a cached system prompt.
+
+    When explicit caching is enabled and a cache exists for this client's
+    (model, system_instruction, tools) prefix, swap the inline system_instruction
+    and tools for `cached_content` (they're mutually exclusive). Otherwise return
+    gen_config unchanged. Never raises — caching is best-effort.
+    """
+    try:
+        sys_inst = getattr(gen_config, "system_instruction", None)
+        if not sys_inst:
+            return gen_config
+        import gemini_cache
+        name = gemini_cache.get_or_create(client, model, sys_inst,
+                                          getattr(gen_config, "tools", None))
+        if not name:
+            return gen_config
+        return gen_config.model_copy(update={
+            "system_instruction": None, "tools": None, "cached_content": name,
+        })
+    except Exception:
+        return gen_config
+
+
 def generate_with_failover(model: str, contents, gen_config):
     """
     Call generate_content rotating through all API keys on 503/429 errors.
@@ -93,20 +133,21 @@ def generate_with_failover(model: str, contents, gen_config):
         all_failed = True
         for offset, client in enumerate(ordered_pool, 1):
             try:
+                call_config = _with_cache(client, current_model, gen_config)
                 result = client.models.generate_content(
-                    model=current_model, contents=contents, config=gen_config
+                    model=current_model, contents=contents, config=call_config
                 )
                 _circuit_breaker.pop(current_model, None)
                 return result
             except Exception as exc:
-                if _is_transient(exc):
-                    logger.warning(
-                        f"[Gemini failover] {current_model} key #{offset}/{len(pool)} "
-                        f"returned {getattr(exc, 'status_code', '?')}: {exc!s:.120} — trying next"
-                    )
-                    last_exc = exc
-                    continue
-                raise
+                last_exc = exc
+                if _is_permanent(exc):
+                    raise  # bad request / auth — other keys and models won't help
+                logger.warning(
+                    f"[Gemini failover] {current_model} key #{offset}/{len(pool)} "
+                    f"failed ({getattr(exc, 'status_code', '?')}): {exc!s:.120} — trying next"
+                )
+                continue
 
         if all_failed:
             _circuit_breaker[current_model] = time.monotonic() + _CIRCUIT_COOLDOWN
