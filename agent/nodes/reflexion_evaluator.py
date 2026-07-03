@@ -1,4 +1,5 @@
 import logging
+import time
 
 from google.genai import types
 
@@ -78,6 +79,22 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
             "reflexion_count": count,
         }
+
+    # Time budget: after at least one full evaluation, stop looping if we've spent
+    # the reflexion budget. Finalises the current draft rather than starting another
+    # retrieve→generate→verify cycle that would blow past AGENT_TIMEOUT and 504.
+    start = state.get("start_time")
+    if start is not None and count >= 1:
+        elapsed = time.monotonic() - start
+        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s "
+                f"> budget {config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising best draft"
+            )
+            return {
+                "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
+                "reflexion_count": count + 1,
+            }
 
     answer = state.get("draft_answer", "")
     chunks = [c.get("text", "") for c in state.get("retrieved_contexts", [])]

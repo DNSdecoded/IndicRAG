@@ -86,10 +86,18 @@ def get_or_create_collection(
             pass  # Collection doesn't exist
     
     # Get or create collection
+    # ef_construction/max_neighbors only take effect when the collection is first
+    # created; get_or_create ignores them for an existing collection. ef_search is
+    # applied per query and can be retuned by re-creating with a new value.
     collection = client.get_or_create_collection(
         name=collection_name,
         metadata={"description": "Multilingual scientific papers"},
-        configuration={"hnsw": {"space": config.DISTANCE_METRIC}}
+        configuration={"hnsw": {
+            "space": config.DISTANCE_METRIC,
+            "ef_construction": config.HNSW_EF_CONSTRUCTION,
+            "ef_search": config.HNSW_EF_SEARCH,
+            "max_neighbors": config.HNSW_M,
+        }}
     )
     
     logger.info(f"Collection '{collection_name}' ready. Current size: {collection.count()}")

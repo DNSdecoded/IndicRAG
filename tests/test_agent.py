@@ -665,6 +665,23 @@ def test_safe_stop_preserves_draft_answer():
     assert draft in result["final_answer"], "draft answer must survive safe_stop"
 
 
+def test_reflexion_time_budget_finalises_draft():
+    """Over the wall-clock budget, the loop finalises the current draft instead of
+    starting another retrieve→generate→verify cycle (returns before any LLM/NLI call)."""
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Best-effort answer so far."
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=1,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    result = reflexion_evaluator_node(state)
+    assert result["final_answer"] == draft
+
+
 def test_evaluator_sees_full_long_answer():
     """Completeness evaluator must not judge only the first 4000 chars of a long answer."""
     from agent.nodes.reflexion_evaluator import reflexion_evaluator_node

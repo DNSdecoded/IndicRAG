@@ -29,3 +29,7 @@ class AgentState(TypedDict):
 
     session_id: str
     strategy: Literal["A", "B"]
+
+    # monotonic() timestamp stamped at run start, used by the reflexion loop to
+    # honour AGENT_REFLEXION_BUDGET_S. Optional so older callers still type-check.
+    start_time: Optional[float]

@@ -159,6 +159,14 @@ NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
 COLLECTION_NAME = "scientific_papers"
 DISTANCE_METRIC = "cosine"  # cosine similarity for embeddings
 
+# HNSW index tuning. ef_construction and M (max_neighbors) are fixed at collection
+# CREATE time (immutable after — change them and you must re-create the collection);
+# ef_search is a query-time recall/latency knob. Defaults match ChromaDB's own, so
+# behaviour is unchanged until you deliberately A/B them once the eval set exists.
+HNSW_EF_CONSTRUCTION = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
+HNSW_EF_SEARCH = int(os.getenv("HNSW_EF_SEARCH", "100"))
+HNSW_M = int(os.getenv("HNSW_M", "16"))
+
 # ============================================================================
 # Language Support
 # ============================================================================
@@ -193,6 +201,11 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
+# Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
+# the current best draft instead of starting another retrieve→generate→verify cycle,
+# so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
+# work. Keep below AGENT_TIMEOUT so it fires first.
+AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fallback when primary is overloaded

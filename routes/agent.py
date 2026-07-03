@@ -96,6 +96,7 @@ async def agent_query(
         conversation_history=list(messages),
         session_id=session_id,
         strategy=body.strategy,
+        start_time=time.monotonic(),
     )
 
     try:
