@@ -17,10 +17,15 @@ import verify
 
 
 def _fake_model(entailment_logit=5.0, contradiction_logit=-3.0, neutral_logit=-2.0):
-    """CrossEncoder stand-in returning fixed (contradiction, entailment, neutral) logits."""
+    """CrossEncoder stand-in returning fixed NLI logits.
+
+    Label order matches the default multilingual model (mDeBERTa-xnli):
+    index 0 = entailment, 1 = neutral, 2 = contradiction — i.e.
+    config.NLI_ENTAILMENT_INDEX == 0.
+    """
     m = MagicMock()
     m.predict = MagicMock(
-        side_effect=lambda pairs: np.array([[contradiction_logit, entailment_logit, neutral_logit]] * len(pairs))
+        side_effect=lambda pairs: np.array([[entailment_logit, neutral_logit, contradiction_logit]] * len(pairs))
     )
     return m
 

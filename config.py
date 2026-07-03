@@ -139,6 +139,20 @@ SCOPED_MAX_CONTEXT_LENGTH = int(os.getenv("SCOPED_MAX_CONTEXT_LENGTH", "120000")
 FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.5"))
 FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
+# NLI model for claim faithfulness. Default is MULTILINGUAL so Indic-language
+# claims are scored against Indic chunks by a model that understands them; the
+# old English-only nli-deberta-v3-base collapsed to noise on Hindi/Tamil/Bengali
+# — the languages that are this project's differentiator.
+NLI_MODEL_NAME = os.getenv(
+    "NLI_MODEL_NAME",
+    "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+)
+# Entailment class index in the model's output logits — models disagree:
+#   mDeBERTa-xnli (default):     0=entailment, 1=neutral, 2=contradiction
+#   cross-encoder/nli-deberta-v3-base: 0=contradiction, 1=entailment, 2=neutral
+# Set this to match whatever NLI_MODEL_NAME you choose or scores invert silently.
+NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
+
 # ============================================================================
 # Vector Store
 # ============================================================================

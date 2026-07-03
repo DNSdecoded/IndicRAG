@@ -1,0 +1,22 @@
+# Single-node dev/deploy stack. Redis/Qdrant/GROBID are intentionally NOT here yet —
+# they belong with the Phase 2 externalize-state work (roadmap 4.1 / 3.2 / 3.1), and
+# adding empty service stubs now would just be dead config. Add them when those land.
+services:
+  indicrag:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      # Persist downloaded models + the vector store + uploaded PDFs across rebuilds.
+      - ./models:/app/models
+      - ./chroma_db:/app/chroma_db
+      - ./papers:/app/papers
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s   # first boot downloads BGE-M3 + reranker + NLI models

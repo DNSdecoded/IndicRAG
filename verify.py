@@ -17,9 +17,11 @@ def _load():
         with _lock:
             if _model is None:
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                # ponytail: nli-deberta-v3-base needed here — bge-reranker scores relevance,
-                # not entailment; wrong distribution for faithfulness thresholding (BUG-003)
-                _model = CrossEncoder("cross-encoder/nli-deberta-v3-base", device=device,
+                # An NLI model (not bge-reranker) is required — bge-reranker scores
+                # relevance, not entailment; wrong distribution for faithfulness
+                # thresholding (BUG-003). Default is now MULTILINGUAL so Indic-language
+                # claims are actually verified, not scored by an English-only model.
+                _model = CrossEncoder(config.NLI_MODEL_NAME, device=device,
                                       cache_folder=str(config.MODELS_CACHE_DIR))
     return _model
 
@@ -62,11 +64,12 @@ def check_claims(answer: str, chunks: List[str]) -> List[dict]:
         if not clean_sent:
             continue
         pairs = [(chunks[i], clean_sent) for i in cited]
-        raw = np.atleast_2d(model.predict(pairs))  # (n, 3): contradiction, entailment, neutral
-        # softmax → probabilities; entailment is label index 1 for nli-deberta-v3-base
+        raw = np.atleast_2d(model.predict(pairs))  # (n, num_labels) NLI logits
+        # softmax → probabilities; entailment column depends on the model
+        # (config.NLI_ENTAILMENT_INDEX), since label order differs across NLI models.
         e = np.exp(raw - raw.max(axis=1, keepdims=True))
         probs = e / e.sum(axis=1, keepdims=True)
-        score = float(probs[:, 1].max())
+        score = float(probs[:, config.NLI_ENTAILMENT_INDEX].max())
         results.append({"claim": sent, "support": score,
                         "grounded": score >= config.FAITHFULNESS_THRESHOLD})
     return results

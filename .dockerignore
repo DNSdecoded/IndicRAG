@@ -1,0 +1,17 @@
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.venv
+venv
+# Large/generated data — mounted as volumes, never baked into the image
+models
+chroma_db
+papers
+*.db
+.env
+.serena
+.mimocode
+_test_*.py

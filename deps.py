@@ -8,12 +8,13 @@ so routers can share them without importing api_server and creating a cycle.
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+import hmac
 import os
 import threading
 import time
 import uuid
 
-from fastapi import HTTPException, Security, status
+from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -26,7 +27,20 @@ STATIC_DIR = Path(__file__).parent / "static"
 # ---------------------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------------------
-limiter = Limiter(key_func=get_remote_address)
+def _rate_limit_key(request: Request) -> str:
+    """Rate-limit per API key when one is presented, else per client IP.
+
+    IP-only limiting lets many callers behind one NAT/proxy exhaust each other's
+    quota; keying on the API key gives each key its own bucket. Falls back to IP
+    for unauthenticated traffic.
+    """
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        return f"key:{api_key}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 # ---------------------------------------------------------------------------
 # API key authentication (optional)
@@ -44,12 +58,25 @@ else:
 _admin_key = os.getenv("ADMIN_API_KEY")
 
 
+def _key_matches(candidate: Optional[str], valid) -> bool:
+    """Constant-time membership check to avoid leaking key length/prefix via timing.
+
+    `valid` is a single key (str) or an iterable of keys. Plain `==`/`in` short-circuit
+    on the first differing byte, giving a timing side-channel; hmac.compare_digest does not.
+    """
+    if not candidate:
+        return False
+    keys = [valid] if isinstance(valid, str) else valid
+    # Compare against every key (no early exit) so total time doesn't depend on which matched.
+    return any(hmac.compare_digest(candidate, k) for k in keys)
+
+
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     """Verify API key if authentication is enabled."""
     if VALID_API_KEYS is None:
         return True  # No authentication required
 
-    if not api_key or api_key not in VALID_API_KEYS:
+    if not _key_matches(api_key, VALID_API_KEYS):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
@@ -63,7 +90,7 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
 async def verify_admin_key(api_key: str = Security(API_KEY_HEADER)):
     """Verify admin API key for destructive operations."""
     if _admin_key:
-        if not api_key or api_key != _admin_key:
+        if not _key_matches(api_key, _admin_key):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "Admin API key required for destructive operations",
