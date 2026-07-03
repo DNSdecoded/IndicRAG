@@ -80,3 +80,7 @@ check_db.py
 
 # Graphify output
 graphify-out/
+
+# Local tool state
+.mimocode/
+.serena/
