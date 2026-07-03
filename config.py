@@ -85,12 +85,17 @@ MIN_CHUNK_SIZE = 200  # minimum chunk size to keep
 # Per-section chunk-size overrides (chars). Dense sections (abstract, methods,
 # conclusion) chunk smaller for retrieval precision; narrative sections
 # (results, discussion) chunk larger to preserve context. Falls back to CHUNK_SIZE.
+# Method sections carry the equation blocks (reward funcs, constraints, algorithm
+# steps). 500 chars split a labelled block like (2a)…(2c) across chunks, orphaning
+# formulas from their variable definitions — so method sections chunk at 900 to
+# keep an equation group with its surrounding text. Abstract/conclusion stay tight
+# (short prose, no math).
 SECTION_CHUNK_SIZES = {
     "abstract": 500,
-    "methods": 500,
-    "methodology": 500,
-    "materials and methods": 500,
-    "approach": 500,
+    "methods": 900,
+    "methodology": 900,
+    "materials and methods": 900,
+    "approach": 900,
     "conclusion": 500,
     "results": 1500,
     "discussion": 1500,
@@ -126,6 +131,12 @@ RETRIEVE_CANDIDATES = 15  # wider net for agent; keep moderate for CPU embedding
 DEFAULT_TOP_K = 15  # dense + BM25 fusion, then rerank narrow
 MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
 MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
+
+# Agentic mode gathers passages from up to 4 tool calls, so the 12-chunk cap can
+# truncate formula/equation chunks off the tail before the LLM sees them. The
+# agent answer generator uses a wider cap (Gemini's window has the room).
+AGENT_MAX_CONTEXT_CHUNKS = int(os.getenv("AGENT_MAX_CONTEXT_CHUNKS", "20"))
+AGENT_MAX_CONTEXT_LENGTH = int(os.getenv("AGENT_MAX_CONTEXT_LENGTH", "80000"))
 
 # Paper-scoped ("only these papers") retrieval fetches ALL chunks of the selected
 # papers in document order instead of top-k, so reconstruction-style queries see
@@ -200,6 +211,13 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # Google Gemini API configuration
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
+# Thinking budget for ALL agentic-mode LLM calls (query planner, tool routing,
+# query expansion, answer generation, reflexion judge). Gemini semantics:
+#   0  = thinking OFF (cheapest — default; matches standard RAG)
+#   -1 = DYNAMIC (model decides how much to think)
+#   N  = cap thinking to N tokens (billed; higher = smarter routing/judging, pricier)
+# Raise this only if agent answer/routing quality is the bottleneck, not the bill.
+AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
@@ -208,6 +226,14 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding
 AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
+
+# Explicit Gemini context caching of the (stable) system-instruction prefix.
+# gemini-3.5-flash already does IMPLICIT caching for free; explicit caching adds
+# guaranteed reuse but is billed per token-hour of storage — so it's OFF by default.
+# Enable only if your system prompts clear the model's min-token cache floor and you
+# want deterministic cache hits. Falls back to inline prompts on any create failure.
+GEMINI_CACHE_ENABLED = os.getenv("GEMINI_CACHE_ENABLED", "false").lower() == "true"
+GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL", "3600"))  # seconds cache lives
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fallback when primary is overloaded
 
 # LLM API Keys (required for Gemini)

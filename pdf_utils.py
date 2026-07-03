@@ -171,52 +171,101 @@ def simple_chunk(text: str, max_chars: int = None, overlap: int = None) -> List[
     return chunks
 
 
+# Whitelisted headers (config.SECTION_HEADERS) as near-standalone lines, with an
+# optional Arabic/Roman/letter numbering prefix.
+_WHITELIST_HEADING = re.compile(
+    r'(?mi)^[ \t]*(?:\d+\.?\s*|[IVXLC]{1,7}\.\s*|[A-Z]\.\s*)?('
+    + '|'.join(config.SECTION_HEADERS) + r')[ \t]*$'
+)
+
+# Structural headings the whitelist misses: numbered/roman/lettered lines whose
+# title isn't a known keyword — "II. THE PROPOSED FRAMEWORK", "3.2 Reward Function",
+# "A. Stage 1: Global Search", "2) Improvement of F". Half the corpus uses these,
+# and without them the whole method body collapses into 'introduction'.
+_NUMBERED_HEADING = re.compile(
+    r'(?m)^[ \t]*'
+    r'(?:\d{1,2}(?:\.\d{1,2}){0,2}|[IVXLC]{1,6}|[A-Z])'  # 3 | 3.2 | II | A
+    r'[.)]'                                              # . or )
+    r'[ \t]+'
+    r'([A-Z][^\n]{2,58})$'                               # title starting uppercase
+)
+
+# raw header keyword -> canonical bucket used for SECTION_CHUNK_SIZES lookup only
+# (the raw header text is still what's stored/shown). Keeps equation-dense method
+# sections on the larger chunk size so a labelled block isn't split.
+_CANON = [
+    (("method", "approach", "propos", "framework", "formulation", "stage",
+      "surrogate", "algorithm", "network", "state", "action", "reward"), "methods"),
+    (("result", "experiment", "analysis", "comparison", "validation", "performance"), "results"),
+    (("discussion",), "discussion"),
+    (("abstract",), "abstract"),
+    (("conclusion",), "conclusion"),
+]
+
+
+def canonical_section(name: str) -> str:
+    """Map a (possibly verbose) section header to a bucket in SECTION_CHUNK_SIZES.
+
+    Returns the matched bucket ('methods', 'results', …) so chunk sizing applies to
+    structurally-detected headers like 'stage 3: reinforcement learning'. Falls back
+    to the lowercased name (→ default CHUNK_SIZE) when nothing matches.
+    """
+    low = name.lower()
+    for keywords, bucket in _CANON:
+        if any(k in low for k in keywords):
+            return bucket
+    return low
+
+
+def _looks_like_heading(title: str) -> bool:
+    """Reject numbered-list items / sentences masquerading as headings."""
+    t = title.strip().rstrip('.').rstrip(':')
+    if ',' in t or ';' in t:  # list items / prose
+        return False
+    words = t.split()
+    if not (1 <= len(words) <= 8):
+        return False
+    alpha = [w for w in words if w[:1].isalpha()]
+    if not alpha:
+        return False
+    caps = sum(1 for w in alpha if w[0].isupper())
+    return caps >= max(1, (len(alpha) + 1) // 2)  # Title-Case / CAPS majority
+
+
 def extract_sections(text: str) -> List[Tuple[str, str]]:
-    """
-    Extract sections from text based on common section headers.
-    
-    Args:
-        text: Full text of the paper
-        
-    Returns:
-        List of (section_name, section_text) tuples
-    """
-    sections = []
-    
-    # Create regex pattern for section headers (must be exact lines).
-    # Optional numbering prefix handles Arabic ("3. "), multi-char Roman numerals
-    # ("III. ", "IV. " — IEEE papers number sections this way), and single-letter
-    # subsections ("A. "). Roman branch precedes the single-letter branch so
-    # "III." matches fully instead of just the leading "I".
-    header_pattern = (r'(?:^|\n)[ \t]*(?:\d+\.?\s*|[IVXLC]{1,7}\.\s*|[A-Z]\.\s*)?('
-                      + '|'.join(config.SECTION_HEADERS) + r')[ \t]*(?:\n|$)')
-    
-    # Find all section headers
-    matches = list(re.finditer(header_pattern, text, re.IGNORECASE))
-    
-    if not matches:
-        # No sections found, return entire text as "body"
+    """Extract (section_name, section_text) tuples via whitelist + structural headers."""
+    headers = []  # (start, end, name)
+    for m in _WHITELIST_HEADING.finditer(text):
+        headers.append((m.start(), m.end(), m.group(1).strip().lower()))
+    for m in _NUMBERED_HEADING.finditer(text):
+        title = m.group(1).strip()
+        if _looks_like_heading(title):
+            headers.append((m.start(), m.end(), title.rstrip('.').rstrip(':').lower()))
+
+    if not headers:
         return [("body", text)]
-    
-    # Extract sections
-    for i, match in enumerate(matches):
-        section_name = match.group(1).lower()
-        start_pos = match.end()
-        
-        # End position is the start of next section or end of text
-        end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        
-        section_text = text[start_pos:end_pos].strip()
-        
-        if section_text:
-            sections.append((section_name, section_text))
-    
-    # If there's text before the first section, add it as "header"
-    if matches[0].start() > 0:
-        header_text = text[:matches[0].start()].strip()
-        if header_text:
-            sections.insert(0, ("header", header_text))
-    
+
+    headers.sort(key=lambda h: h[0])
+    # Drop near-duplicate starts (whitelist + numbered both hitting one line)
+    dedup = []
+    for h in headers:
+        if dedup and h[0] - dedup[-1][0] < 3:
+            continue
+        dedup.append(h)
+    headers = dedup
+
+    sections = []
+    for i, (_, end, name) in enumerate(headers):
+        seg_end = headers[i + 1][0] if i + 1 < len(headers) else len(text)
+        body = text[end:seg_end].strip()
+        if body:
+            sections.append((name, body))
+
+    if headers[0][0] > 0:
+        pre = text[:headers[0][0]].strip()
+        if pre:
+            sections.insert(0, ("header", pre))
+
     return sections
 
 

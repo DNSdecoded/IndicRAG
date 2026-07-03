@@ -16,7 +16,13 @@ def answer_generator_node(state: AgentState) -> dict:
     metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
              for c in contexts]
 
-    formatted_context, chunks_used = rag.format_context(chunks, metas)
+    # Wider caps than standard RAG: the agent pooled passages from multiple tools,
+    # and the default 12-chunk cut was truncating equation chunks off the tail.
+    formatted_context, chunks_used = rag.format_context(
+        chunks, metas,
+        max_chunks=config.AGENT_MAX_CONTEXT_CHUNKS,
+        max_length=config.AGENT_MAX_CONTEXT_LENGTH,
+    )
 
     if chunks_used == 0:
         return {"draft_answer": config.NO_DOCUMENTS_RESPONSE}
@@ -41,8 +47,8 @@ def answer_generator_node(state: AgentState) -> dict:
         max_output_tokens=config.AGENT_MAX_TOKENS,
         system_instruction=config.AGENT_SYSTEM_PROMPT,
         safety_settings=config.SAFETY_SETTINGS,
-        # Disable thinking so the full token budget goes to the answer, not thoughts.
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        # Thinking off by default so the full budget goes to the answer (config knob).
+        thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
     )
     try:
         resp = rag.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)

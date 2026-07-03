@@ -55,6 +55,8 @@ def _expand_query_variants(query: str) -> list[str]:
                 temperature=0.7,
                 max_output_tokens=256,
                 system_instruction="Generate alternative search phrasings that preserve the original query's semantic meaning. Do not add new topics or narrow the scope.",
+                # Short JSON list of paraphrases — thinking off by default (config knob).
+                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
         )
         clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()

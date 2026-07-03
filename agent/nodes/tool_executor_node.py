@@ -10,7 +10,10 @@ from cache import tool_cache, make_key
 logger = logging.getLogger(__name__)
 
 _CACHEABLE_TOOLS = {"indicrag_retrieval", "arxiv_search", "open_access_search", "web_search"}
-_MAX_PARALLEL_TOOLS = 4
+# Matches query_planner._MAX_SUB_QUERIES so a per-checklist-item sub-query (e.g. a
+# reward-formula query) isn't truncated before running. Tools run concurrently, so
+# more calls cost extra retrieval/API work but don't add serial latency.
+_MAX_PARALLEL_TOOLS = 6
 
 
 def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:

@@ -104,7 +104,10 @@ def _build_paper_chunks(
             if len(section_text) < config.MIN_CHUNK_SIZE:
                 continue
             # Per-section chunk size: dense sections smaller, narrative larger.
-            max_chars = config.SECTION_CHUNK_SIZES.get(section_name.lower(), config.CHUNK_SIZE)
+            # canonical_section maps verbose/structural headers (e.g. "stage 3:
+            # reinforcement learning") to a sizing bucket so method equations stay whole.
+            max_chars = config.SECTION_CHUNK_SIZES.get(
+                pdf_utils.canonical_section(section_name), config.CHUNK_SIZE)
             chunks = pdf_utils.simple_chunk(section_text, max_chars=max_chars)
             for chunk in chunks:
                 safe_section = section_name.replace(' ', '_').lower()
@@ -212,7 +215,8 @@ def dry_run_pdf(pdf_path: str) -> Optional[Dict[str, Any]]:
         if len(section_text) < config.MIN_CHUNK_SIZE:
             n = 0
         else:
-            max_chars = config.SECTION_CHUNK_SIZES.get(section_name.lower(), config.CHUNK_SIZE)
+            max_chars = config.SECTION_CHUNK_SIZES.get(
+                pdf_utils.canonical_section(section_name), config.CHUNK_SIZE)
             n = len(pdf_utils.simple_chunk(section_text, max_chars=max_chars))
         total_chunks += n
         section_stats.append({"section": section_name, "chars": len(section_text), "chunks": n})
@@ -353,7 +357,8 @@ def ingest_directory(
     
     stats = {
         "total_files": len(pdf_files),
-        "successful": 0,
+        "successful": 0,   # papers that produced chunks to ingest
+        "skipped": 0,      # unchanged / duplicate papers (no error, no new chunks)
         "failed": 0,
         "total_chunks": 0,
         "failed_files": []
@@ -405,9 +410,12 @@ def ingest_directory(
                     paper_id, result['title'], result['sections'],
                     metadata, collection, seen_hashes,
                 )
-                stats["successful"] += 1
                 if prepared is not None:
+                    stats["successful"] += 1
                     prepared_papers.append(prepared)
+                else:
+                    # Unchanged or deduplicated — processed fine, just nothing to ingest.
+                    stats["skipped"] += 1
 
                 if progress_cb:
                     progress_cb(done, total, f"Ingesting {Path(path).name} ({done}/{total})")
@@ -453,6 +461,7 @@ def ingest_directory(
     logger.info("Ingestion Summary:")
     logger.info(f"  Total files: {stats['total_files']}")
     logger.info(f"  Successful: {stats['successful']}")
+    logger.info(f"  Skipped (unchanged/duplicate): {stats['skipped']}")
     logger.info(f"  Failed: {stats['failed']}")
     logger.info(f"  Total chunks: {stats['total_chunks']}")
     
