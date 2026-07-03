@@ -64,16 +64,46 @@ def _expand_query_variants(query: str) -> list[str]:
         return [query]
 
 
-def execute_indicrag(query: str, expand_query: bool = False) -> dict:
+def _year_filter(year_from=None, year_to=None):
+    """Build a ChromaDB where-clause for a publication-year range, or None.
+
+    Corpus `year` metadata is stored as a 4-digit string (metadata_enrich.py), so
+    lexicographic $gte/$lte over same-length strings gives correct numeric ordering.
+    Invalid/out-of-range values are ignored rather than raised — a bad filter from
+    the LLM should degrade to unfiltered retrieval, not crash the tool. Chunks with
+    no `year` (enrichment is best-effort) are excluded when a filter is active, which
+    is the intended "only papers from year X" semantics.
+    """
+    def _valid(y):
+        try:
+            y = int(y)
+        except (TypeError, ValueError):
+            return None
+        return y if 1900 <= y <= 2100 else None
+
+    lo, hi = _valid(year_from), _valid(year_to)
+    clauses = []
+    if lo is not None:
+        clauses.append({"year": {"$gte": str(lo)}})
+    if hi is not None:
+        clauses.append({"year": {"$lte": str(hi)}})
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
+def execute_indicrag(query: str, expand_query: bool = False,
+                     year_from=None, year_to=None) -> dict:
     import hashlib
     _MIN_EXPAND_WORDS = 4
     should_expand = expand_query and len(query.split()) >= _MIN_EXPAND_WORDS
+    filter_dict = _year_filter(year_from, year_to)
 
     if should_expand:
         variants = _expand_query_variants(query)
         chunks, metas, seen = [], [], set()
         for q in [query] + variants:
-            result = rag.retrieve_context(q)
+            result = rag.retrieve_context(q, filter_dict=filter_dict)
             for chunk, meta in zip(result["chunks"], result["metadatas"]):
                 key = hashlib.sha256(chunk.encode()).hexdigest()
                 if key not in seen:
@@ -91,7 +121,7 @@ def execute_indicrag(query: str, expand_query: bool = False) -> dict:
         passages = [{"text": chunk, **meta} for chunk, meta in zip(top_chunks, top_metas)]
         return {"passages": passages}
     else:
-        result = rag.retrieve_context(query)
+        result = rag.retrieve_context(query, filter_dict=filter_dict)
         passages = [
             {"text": chunk, **meta}
             for chunk, meta in zip(result["chunks"], result["metadatas"])
@@ -539,7 +569,8 @@ def execute_open_access_search(
 
 TOOL_DISPATCH = {
     "indicrag_retrieval": lambda args: execute_indicrag(
-        args["query"], args.get("expand_query", False)
+        args["query"], args.get("expand_query", False),
+        args.get("year_from"), args.get("year_to")
     ),
     "web_search": lambda args: execute_web_search(
         args["query"], args.get("num_results", 5)

@@ -665,6 +665,31 @@ def test_safe_stop_preserves_draft_answer():
     assert draft in result["final_answer"], "draft answer must survive safe_stop"
 
 
+def test_year_filter_builds_chromadb_where_clause():
+    """Year range filter must produce valid ChromaDB where-clauses and ignore junk."""
+    from agent.tool_executor import _year_filter
+
+    assert _year_filter() is None
+    assert _year_filter("not-a-year") is None
+    assert _year_filter(1800) is None          # out of 1900-2100 range
+    assert _year_filter(2020) == {"year": {"$gte": "2020"}}
+    assert _year_filter(None, 2019) == {"year": {"$lte": "2019"}}
+    assert _year_filter(2020, 2025) == {
+        "$and": [{"year": {"$gte": "2020"}}, {"year": {"$lte": "2025"}}]
+    }
+
+
+def test_indicrag_year_range_passed_as_filter():
+    """execute_indicrag must forward the year range to retrieve_context as filter_dict."""
+    import agent.tool_executor as te
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", year_from=2020)
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {"year": {"$gte": "2020"}}
+
+
 def test_reflexion_time_budget_finalises_draft():
     """Over the wall-clock budget, the loop finalises the current draft instead of
     starting another retrieve→generate→verify cycle (returns before any LLM/NLI call)."""
