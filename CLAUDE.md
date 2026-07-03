@@ -54,6 +54,7 @@ agent/                   Agentic RAG pipeline
 - **Round-robin API key load balancing** — `itertools.cycle` over `config.LLM_API_KEY_POOL`. Thread-safe. Don't switch to least-loaded (Gemini doesn't expose quota in headers).
 - **Model-level failover with circuit breaker** — `generate_with_failover()` tries all keys on the primary model (`gemini-3.5-flash`), then falls back to `LLM_FALLBACK_MODEL` (`gemma-4-26b-a4b-it`). A circuit breaker skips the primary for 60s after all keys fail, avoiding wasted retry time on subsequent calls.
 - **AGENT_MAX_TOKENS (4096) separate from LLM_MAX_TOKENS (2048)** — agent gets more room because it has multi-source context.
+- **Thinking disabled by default on every agent LLM call** — planner, tool routing, query expansion, answer generation, and the reflexion judge all pass `thinking_config` from `config.AGENT_THINKING_BUDGET` (default `0`). These are temp-0 structured/routing calls where thinking is pure cost/latency. Set `AGENT_THINKING_BUDGET=-1` (dynamic) only if agent quality, not the API bill, is the bottleneck.
 - **OpenAlex as Semantic Scholar fallback** — S2 gets a single attempt (8s timeout, no retries). OpenAlex is CC0, no rate limits, 250M+ works.
 - **AST-based sandbox for code execution** — `execute_python` parses code into an AST and validates against an import whitelist, blocks dunder attribute access and dangerous builtins. Runs in a child process with stripped env and 10s timeout. Never use `exec()` or `eval()` directly in the main process.
 - **Parallel tool execution** — when multiple tools are selected, `tool_executor_node` runs them concurrently via `ThreadPoolExecutor`.
@@ -100,7 +101,7 @@ pytest tests/test_agent.py -v -m "not integration and not network"
 ## Environment Variables
 
 Required: `LLM_API_KEY` (or `LLM_API_KEYS` for multi-key load balancing)
-Optional: `LLM_FALLBACK_MODEL` (default `gemma-4-26b-a4b-it`), `AGENT_TIMEOUT` (default `120`), `TAVILY_API_KEY` (only for web_search tool), `API_KEYS` (endpoint auth)
+Optional: `LLM_FALLBACK_MODEL` (default `gemma-4-26b-a4b-it`), `AGENT_TIMEOUT` (default `120`), `AGENT_THINKING_BUDGET` (default `0` = thinking off for all agent LLM calls; `-1` = dynamic, `N` = cap N tokens), `TAVILY_API_KEY` (only for web_search tool), `API_KEYS` (endpoint auth)
 
 All config is in `config.py` — read from `.env` via `python-dotenv`. See `.env.example` for the full list.
 
