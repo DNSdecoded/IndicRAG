@@ -3,7 +3,7 @@ Multilingual embedding model management.
 """
 
 from sentence_transformers import SentenceTransformer
-from typing import List, Union
+from typing import List
 import numpy as np
 import logging
 import threading

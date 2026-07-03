@@ -54,7 +54,7 @@ def main():
     # Check if llm_generate is implemented
     try:
         # This will raise NotImplementedError if not implemented
-        test_result = rag.llm_generate("test", max_tokens=1)
+        rag.llm_generate("test", max_tokens=1)
     except NotImplementedError:
         print("\n⚠️  LLM not configured!")
         print("\nBefore running queries, you must implement llm_generate() in rag.py")
@@ -64,7 +64,7 @@ def main():
         print("3. Use Google Gemini: Set LLM_API_KEY and uncomment Gemini code")
         print("\nSee rag.py:llm_generate() for implementation examples.")
         return
-    except Exception as e:
+    except Exception:
         # Other errors are fine, we're just checking if it's implemented
         pass
     

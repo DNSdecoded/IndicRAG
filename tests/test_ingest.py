@@ -27,7 +27,8 @@ class FakeCollection:
 
 def test_per_section_chunk_size():
     """Dense sections (abstract) chunk smaller than narrative sections (results)."""
-    import ingest, config
+    import ingest
+    import config
 
     abstract = "This is a short dense sentence. " * 200
     results = "This is a narrative result sentence. " * 200

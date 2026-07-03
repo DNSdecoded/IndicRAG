@@ -53,6 +53,24 @@ def check_api_key():
     return True
 
 
+def check_auth_config():
+    """Warn when the server will be reachable without endpoint authentication.
+
+    The server binds 0.0.0.0; without API_KEYS every endpoint (including the
+    destructive /purge/* routes) accepts anonymous requests. Fine on a private
+    machine, dangerous on a public host — warn loudly but don't block.
+    """
+    if not os.getenv('API_KEYS'):
+        logger.warning("⚠ API_KEYS not set — server binds 0.0.0.0 with NO endpoint auth.")
+        logger.warning("  All endpoints (including DELETE /purge/*) accept anonymous requests.")
+        logger.warning("  Set API_KEYS (and ADMIN_API_KEY) in .env before exposing publicly.")
+    elif not os.getenv('ADMIN_API_KEY'):
+        logger.warning("⚠ ADMIN_API_KEY not set — destructive /purge/* routes fall back to API_KEYS.")
+    else:
+        logger.info("✓ Endpoint auth configured (API_KEYS + ADMIN_API_KEY)")
+    return True
+
+
 def check_dependencies():
     """Check required packages are installed"""
     import importlib.util
@@ -115,7 +133,7 @@ def start_server(mode='production', port=8080):
     logger.info("Mode: %s%s", "Development" if reload else "Production",
                 " (auto-reload enabled)" if reload else "")
 
-    logger.info(f"\nAPI will be available at:")
+    logger.info("\nAPI will be available at:")
     logger.info(f"  → http://localhost:{port}")
     logger.info(f"  → http://localhost:{port}/api/docs (interactive docs)")
     logger.info("\nPress Ctrl+C to stop\n")
@@ -160,6 +178,7 @@ def main():
             check_env_file(),
             check_api_key(),
             check_dependencies(),
+            check_auth_config(),
             check_documents()
         ]
         

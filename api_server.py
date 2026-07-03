@@ -12,20 +12,13 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 import config
 from deps import (
     STATIC_DIR,
     limiter,
-    verify_api_key,
-    verify_admin_key,
-    _jobs,
-    _jobs_lock,
-    _update_job,
-    _sessions,
-    _sessions_lock,
-    _get_or_create_session,
-    _append_session_messages,
 )
 from routes import query, chat, ingest, agent, management, feedback
 from middleware import RequestIdFilter, RequestIdMiddleware
@@ -41,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app):
-    import embeddings, vector_store
+    import embeddings
+    import vector_store
     embeddings.load_embedding_model()
     vector_store.get_or_create_collection()
     if config.USE_RERANKER:
@@ -64,8 +58,6 @@ app = FastAPI(
 )
 
 # Rate limiting
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -78,7 +70,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # routes are split across routers. Degrade gracefully instead of 500ing:
 # fall back to the raw URL path (unmatched-route grouping) when route-name
 # resolution can't handle the wrapper node.
-import prometheus_fastapi_instrumentator.routing as _pi_routing
+import prometheus_fastapi_instrumentator.routing as _pi_routing  # noqa: E402 — must patch before Instrumentator import
 _original_get_route_name = _pi_routing.get_route_name
 
 
@@ -91,7 +83,7 @@ def _safe_get_route_name(request):
 
 _pi_routing.get_route_name = _safe_get_route_name
 
-from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402 — after routing monkeypatch above
 Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)
 
 # Mount static files directory

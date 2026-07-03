@@ -552,33 +552,33 @@ def test_client_pool_idx_stays_in_bounds_under_concurrency():
 
 
 def test_sessions_concurrent_creation_all_unique():
-    import api_server
-    with api_server._sessions_lock:
-        api_server._sessions.clear()
+    import deps
+    with deps._sessions_lock:
+        deps._sessions.clear()
 
     with ThreadPoolExecutor(max_workers=20) as ex:
-        ids = [f.result()[0] for f in [ex.submit(api_server._get_or_create_session, None)
+        ids = [f.result()[0] for f in [ex.submit(deps._get_or_create_session, None)
                                         for _ in range(50)]]
 
     assert len(set(ids)) == 50
-    with api_server._sessions_lock:
-        assert len(api_server._sessions) == 50
+    with deps._sessions_lock:
+        assert len(deps._sessions) == 50
 
 
 def test_jobs_concurrent_updates_no_corruption():
-    import api_server
-    with api_server._jobs_lock:
+    import deps
+    with deps._jobs_lock:
         for i in range(10):
-            api_server._jobs[f"job-{i}"] = {"status": "running"}
+            deps._jobs[f"job-{i}"] = {"status": "running"}
 
     def update(i):
-        api_server._update_job(f"job-{i % 10}", status="done", val=i)
+        deps._update_job(f"job-{i % 10}", status="done", val=i)
 
     with ThreadPoolExecutor(max_workers=20) as ex:
         [f.result() for f in [ex.submit(update, i) for i in range(100)]]
 
-    with api_server._jobs_lock:
-        assert all(j["status"] == "done" for j in api_server._jobs.values())
+    with deps._jobs_lock:
+        assert all(j["status"] == "done" for j in deps._jobs.values())
 
 
 # =============================================================================

@@ -2,6 +2,7 @@
 Configuration and constants for the multilingual RAG system.
 """
 
+import json
 import os
 from pathlib import Path
 import logging
@@ -330,8 +331,6 @@ NO_DOCUMENTS_RESPONSE = (
     "⚠️ No documents are currently indexed. "
     "Please upload and ingest one or more PDFs before querying."
 )
-
-import json
 
 # Try loading patterns from external config
 _patterns_file = PROJECT_ROOT / "patterns.json"

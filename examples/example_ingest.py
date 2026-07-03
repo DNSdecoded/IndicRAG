@@ -4,7 +4,6 @@ Example: Ingest PDFs from the papers directory.
 
 import config
 import ingest
-from pathlib import Path
 
 
 def main():

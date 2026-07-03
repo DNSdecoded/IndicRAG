@@ -11,7 +11,6 @@ with no claim text at all. Both silently forced faithfulness scores toward
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 import verify
 

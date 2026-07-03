@@ -6,7 +6,7 @@ that BGE-M3 / ChromaDB are never initialised during tests.
 """
 import pytest
 from contextlib import asynccontextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 @asynccontextmanager

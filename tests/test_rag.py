@@ -1,5 +1,4 @@
 """Unit tests for rag.py — citation parsing, prompt building, context formatting."""
-from unittest.mock import patch
 
 
 def test_extract_citations_cite_format():

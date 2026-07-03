@@ -474,7 +474,7 @@ async def upload_pdf(
             status="success",
             filename=safe_filename,
             size_bytes=file_size,
-            message=f"File uploaded successfully. Use /ingest to add to vector store."
+            message="File uploaded successfully. Use /ingest to add to vector store."
         )
 
     except HTTPException:

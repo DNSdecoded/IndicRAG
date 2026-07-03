@@ -104,7 +104,9 @@ async def health_check(deep: bool = False):
     checks = None
     health_status = "healthy"
     if deep:
-        import vector_store, embeddings, rerank
+        import vector_store
+        import embeddings
+        import rerank
         checks = {}
 
         # ChromaDB (critical)

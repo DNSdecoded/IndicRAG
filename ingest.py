@@ -466,7 +466,7 @@ def ingest_directory(
     logger.info(f"  Total chunks: {stats['total_chunks']}")
     
     if stats['failed_files']:
-        logger.info(f"\nFailed files:")
+        logger.info("\nFailed files:")
         for f in stats['failed_files']:
             logger.info(f"  - {f}")
     
@@ -514,7 +514,7 @@ if __name__ == "__main__":
         if not any(papers_dir.glob("*.pdf")):
             logger.warning(f"No PDFs found in {papers_dir}")
             logger.info(f"Please add PDF files to {papers_dir} and run again.")
-            logger.info(f"\nUsage: python ingest.py [pdf_file_or_directory]")
+            logger.info("\nUsage: python ingest.py [pdf_file_or_directory]")
         else:
             logger.info(f"Ingesting PDFs from {papers_dir}...")
             ingest_directory(str(papers_dir))

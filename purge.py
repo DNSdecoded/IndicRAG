@@ -8,7 +8,6 @@ import argparse
 import logging
 import shutil
 import sys
-from pathlib import Path
 
 # Import config to get directory paths
 import config
@@ -137,7 +136,7 @@ def purge_database(confirmed: bool = False) -> bool:
             settings=Settings(anonymized_telemetry=False, allow_reset=True)
         )
         client.reset()
-        logger.info(f"ChromaDB reset via client.reset() (collection wiped, directory kept)")
+        logger.info("ChromaDB reset via client.reset() (collection wiped, directory kept)")
     except Exception as e:
         logger.error(f"Failed to reset database via ChromaDB client: {e}")
         logger.error("Ensure the API server is stopped before running --db purge.")
@@ -191,7 +190,7 @@ def purge_models(confirmed: bool = False) -> bool:
         
         # Recreate empty directory
         models_dir.mkdir(exist_ok=True)
-        logger.info(f"Recreated empty models directory")
+        logger.info("Recreated empty models directory")
     except Exception as e:
         logger.error(f"Failed to delete models cache: {e}")
         return False

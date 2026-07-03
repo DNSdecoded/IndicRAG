@@ -1,7 +1,6 @@
 import logging
 
 from google.genai import types
-from google.genai import errors as genai_errors
 
 import rag
 import config
