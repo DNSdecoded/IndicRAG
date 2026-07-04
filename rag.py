@@ -61,14 +61,27 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
             pass
 
     num_to_meta = citation_number_map(metadatas)
+
+    # All sections a paper contributed, in retrieval order — labeling with only
+    # the first-seen chunk's section made an 11-section answer read as if it
+    # came from the introduction alone.
+    title_sections: Dict[str, list] = {}
+    for m_ in metadatas:
+        t = (m_.get('title') or 'Unknown').strip() or 'Unknown'
+        s = m_.get('section', 'body')
+        if s not in title_sections.setdefault(t, []):
+            title_sections[t].append(s)
+
     citations = []
     for num in sorted(seen_nums):
         meta = num_to_meta.get(num)
         if meta:
+            title = (meta.get('title') or 'Unknown').strip() or 'Unknown'
+            sections = title_sections.get(title) or [meta.get('section', 'body')]
             citations.append({
                 'number': str(num),
                 'title': meta.get('title', 'Unknown'),
-                'section': meta.get('section', 'body'),
+                'section': ', '.join(sections),
             })
     return citations
 

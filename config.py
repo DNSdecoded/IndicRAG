@@ -323,6 +323,7 @@ QUERY_PROMPT_TEMPLATE = """\
 - Cite every factual sentence inline as [N] using the source number from <context>.
 - Use [NOT FOUND: topic] for any claim the context cannot support.
 - Lead with a direct answer; add technical depth only as the query requires.
+- Equations in <context> may appear as flattened multi-line plain text (PDF extraction). Reconstructing such an equation into standard notation or LaTeX is faithful quoting, not inference — do it when asked, using only the symbols and values present in the context.
 - If context is insufficient, state exactly what is missing rather than inferring.
 </instructions>\
 """
