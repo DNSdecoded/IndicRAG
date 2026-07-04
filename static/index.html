@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IndicRAG — Research Assistant</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230369A1'/%3E%3Ctext x='16' y='22' font-family='Noto Sans Devanagari,Segoe UI,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3E%E0%A4%9C%E0%A5%8D%E0%A4%9E%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230369A1'/%3E%3Ctext x='16' y='22' font-family='Noto Sans Devanagari,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3E%E0%A4%9C%E0%A5%8D%E0%A4%9E%3C/text%3E%3C/svg%3E">
     <script src="https://cdn.jsdelivr.net/npm/marked@18.0.5/lib/marked.umd.min.js"
             integrity="sha384-MU0bL51BF1u980ujv+Pk0Z0qCjhzfBIEHIFPkUq81289nkiAr+q1jSxEkdlIeHLJ"
             crossorigin="anonymous"></script>
@@ -20,69 +22,71 @@
     <style>
         /* ── THEME VARIABLES ───────────────────────────────── */
         :root {
-            --bg:               #F5F7FA;
+            /* Premium enterprise — indigo accent on refined slate neutrals */
+            --bg:               #F7F8FA;
             --sidebar-bg:       #FFFFFF;
             --surface:          #FFFFFF;
-            --surface-up:       #F8FAFC;
-            --surface-2:        #EEF2F7;
-            --border:           #E2E8F0;
-            --border-muted:     #CBD5E1;
-            --border-accent:    #94A3B8;
-            --primary:          #334155;
-            --primary-hover:    #0F172A;
-            --primary-bg:       #F1F5F9;
-            --primary-bg2:      #E2E8F0;
-            --primary-border:   #CBD5E1;
-            --text-1:           #0F172A;
-            --text-2:           #334155;
-            --text-3:           #64748B;
-            --text-4:           #94A3B8;
-            --user-bubble-bg:   #334155;
+            --surface-up:       #F9FAFB;
+            --surface-2:        #F3F4F6;
+            --border:           #E5E7EB;
+            --border-muted:     #D1D5DB;
+            --border-accent:    #7DD3FC;
+            --primary:          #0369A1;
+            --primary-hover:    #075985;
+            --primary-bg:       #F0F9FF;
+            --primary-bg2:      #E0F2FE;
+            --primary-border:   #BAE6FD;
+            --text-1:           #111827;
+            --text-2:           #374151;
+            --text-3:           #6B7280;
+            --text-4:           #9CA3AF;
+            --user-bubble-bg:   #0369A1;
             --user-bubble-text: #FFFFFF;
-            --code-bg:          #0F172A;
-            --code-text:        #F8FAFC;
-            --chip-lang-bg:     #EEF2F7; --chip-lang-c:  #334155;
-            --chip-cite-bg:     #F1F5F9; --chip-cite-c:  #334155;
-            --chip-time-bg:     #F8FAFC; --chip-time-c:  #64748B;
-            --cite-bar:         #334155;
-            --ts-bg: #F0FDF4; --ts-c: #166534; --ts-br: #BBF7D0;
-            --te-bg: #FEF2F2; --te-c: #991B1B; --te-br: #FECACA;
-            --ti-bg: #F8FAFC; --ti-c: #334155; --ti-br: #E2E8F0;
-            --shadow: 0 1px 4px rgba(0,0,0,.05);
-            --shadow-lg: 0 20px 60px rgba(0,0,0,.08);
+            --code-bg:          #0C1E2E;
+            --code-text:        #E0F2FE;
+            --chip-lang-bg:     #F3F4F6; --chip-lang-c:  #374151;
+            --chip-cite-bg:     #F0F9FF; --chip-cite-c:  #0369A1;
+            --chip-time-bg:     #F9FAFB; --chip-time-c:  #6B7280;
+            --cite-bar:         #0284C7;
+            --ts-bg: #F0FDF4; --ts-c: #15803D; --ts-br: #BBF7D0;
+            --te-bg: #FEF2F2; --te-c: #B91C1C; --te-br: #FECACA;
+            --ti-bg: #F0F9FF; --ti-c: #0369A1; --ti-br: #BAE6FD;
+            --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+            --shadow-lg: 0 12px 32px rgba(16,24,40,.10), 0 4px 8px rgba(16,24,40,.05);
             --transition: background .25s, color .25s, border-color .25s;
         }
         [data-theme="dark"] {
-            --bg:               #0B1220;
-            --sidebar-bg:       #111827;
-            --surface:          #172033;
-            --surface-up:       #1E293B;
-            --surface-2:        #1E293B;
-            --border:           #334155;
-            --border-muted:     #475569;
-            --border-accent:    #64748B;
-            --primary:          #E2E8F0;
-            --primary-hover:    #FFFFFF;
-            --primary-bg:       #1E293B;
-            --primary-bg2:      #334155;
-            --primary-border:   #475569;
-            --text-1:           #F8FAFC;
-            --text-2:           #CBD5E1;
-            --text-3:           #94A3B8;
-            --text-4:           #475569;
-            --user-bubble-bg:   #334155;
+            /* Premium enterprise dark — near-black navy with luminous indigo accent */
+            --bg:               #0A0B10;
+            --sidebar-bg:       #0F1017;
+            --surface:          #14161F;
+            --surface-up:       #1A1D28;
+            --surface-2:        #1E212D;
+            --border:           #272B37;
+            --border-muted:     #363B4A;
+            --border-accent:    #0284C7;
+            --primary:          #38BDF8;
+            --primary-hover:    #7DD3FC;
+            --primary-bg:       #082F49;
+            --primary-bg2:      #0C4A6E;
+            --primary-border:   #075985;
+            --text-1:           #F9FAFB;
+            --text-2:           #D1D5DB;
+            --text-3:           #9CA3AF;
+            --text-4:           #6B7280;
+            --user-bubble-bg:   #0284C7;
             --user-bubble-text: #FFFFFF;
-            --code-bg:          #0B1220;
-            --code-text:        #E2E8F0;
-            --chip-lang-bg:     #1E293B; --chip-lang-c:  #94A3B8;
-            --chip-cite-bg:     #1E293B; --chip-cite-c:  #E2E8F0;
-            --chip-time-bg:     #111827; --chip-time-c:  #64748B;
-            --cite-bar:         #E2E8F0;
+            --code-bg:          #0A0B10;
+            --code-text:        #E0F2FE;
+            --chip-lang-bg:     #1E212D; --chip-lang-c:  #9CA3AF;
+            --chip-cite-bg:     #0C2A3E; --chip-cite-c:  #7DD3FC;
+            --chip-time-bg:     #0F1017; --chip-time-c:  #6B7280;
+            --cite-bar:         #38BDF8;
             --ts-bg: #052E16; --ts-c: #4ADE80; --ts-br: #14532D;
             --te-bg: #450A0A; --te-c: #FCA5A5; --te-br: #7F1D1D;
-            --ti-bg: #1E293B; --ti-c: #E2E8F0; --ti-br: #475569;
-            --shadow: 0 1px 6px rgba(0,0,0,.3);
-            --shadow-lg: 0 20px 60px rgba(0,0,0,.45);
+            --ti-bg: #0C2A3E; --ti-c: #7DD3FC; --ti-br: #075985;
+            --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+            --shadow-lg: 0 16px 48px rgba(0,0,0,.6), 0 4px 12px rgba(0,0,0,.4);
         }
 
         /* ── RESET ─────────────────────────────────────────── */
@@ -334,6 +338,33 @@
         .asst-text blockquote { border-left: 3px solid var(--primary); padding-left: .85rem; color: var(--text-3); margin: .75rem 0; font-style: italic; }
         .asst-text hr { border: 0; height: 1px; background: var(--border); margin: 1rem 0; }
         .asst-text .katex-display { overflow-x: auto; padding: .5rem 0; }
+
+        /* Copy affordances (equation + response) */
+        .eq-wrap { position: relative; }
+        .eq-copy {
+            position: absolute; top: .35rem; right: .35rem;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; padding: 0;
+            background: var(--surface-2); color: var(--text-3);
+            border: 1px solid var(--border); border-radius: 6px;
+            cursor: pointer; opacity: 0; transition: opacity .15s ease, color .15s ease, background .15s ease;
+        }
+        .eq-wrap:hover .eq-copy, .eq-copy:focus-visible { opacity: 1; }
+        .eq-copy:hover { color: var(--primary); }
+        .eq-copy svg { width: 14px; height: 14px; }
+        .resp-copy {
+            margin-left: auto;
+            display: inline-flex; align-items: center; gap: .3rem;
+            font-family: 'JetBrains Mono', monospace; font-size: .65rem; font-weight: 500;
+            padding: .15rem .5rem; border-radius: 50px;
+            background: var(--surface-2); color: var(--text-3);
+            border: 1px solid var(--border); cursor: pointer;
+            transition: color .15s ease, border-color .15s ease;
+        }
+        .resp-copy:hover { color: var(--primary); border-color: var(--border-accent); }
+        .resp-copy svg { width: 12px; height: 12px; }
+        .copy-btn.copied { color: #10b981; border-color: #10b981; }
+        @media (prefers-reduced-motion: reduce) { .eq-copy { transition: none; } }
 
         /* Citations */
         .asst-citations { margin-top: 1rem; padding-top: .85rem; border-top: 1px solid var(--border); }
@@ -660,6 +691,43 @@ function updatePlaceholder() {
         `Ask a question in English or an Indic language (${modeLabel})...`;
 }
 
+// ── COPY ───────────────────────────────────────────────────────
+// Raw copy payloads (LaTeX source, full answers) keyed by index. Buttons carry
+// data-copy-id; a single delegated handler resolves and writes to clipboard.
+// ponytail: grows with messages — negligible at chat scale.
+const _copyReg = [];
+function _regCopy(text) { _copyReg.push(String(text ?? '')); return _copyReg.length - 1; }
+const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+const CHECK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+async function _copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        let ok = false; try { ok = document.execCommand('copy'); } catch {}
+        ta.remove(); return ok;
+    }
+}
+document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-copy-id]');
+    if (!btn) return;
+    const txt = _copyReg[+btn.dataset.copyId];
+    if (txt == null) return;
+    const ok = await _copyText(txt);
+    if (!ok) return;
+    const prev = btn.innerHTML;
+    const label = btn.querySelector('.resp-copy-label');
+    btn.classList.add('copied');
+    btn.innerHTML = label ? `${CHECK_ICON}<span class="resp-copy-label">Copied</span>` : CHECK_ICON;
+    setTimeout(() => { btn.innerHTML = prev; btn.classList.remove('copied'); }, 1500);
+});
+// Button copying the full raw answer text (markdown + LaTeX source), for meta rows.
+function _respCopyBtn(text) {
+    return `<button type="button" class="resp-copy copy-btn" data-copy-id="${_regCopy(text)}" aria-label="Copy response" title="Copy full response">${COPY_ICON}<span class="resp-copy-label">Copy</span></button>`;
+}
+
 // ── RENDER ─────────────────────────────────────────────────────
 function renderContent(text) {
     const store = [];
@@ -675,6 +743,10 @@ function renderContent(text) {
         let r;
         try { r = katex.renderToString(tex.trim(), { displayMode: display, throwOnError: false }); }
         catch { r = display ? `<pre>$$${tex}$$</pre>` : `<code>$${tex}$</code>`; }
+        // Display equations get a hover copy button that yields the raw LaTeX.
+        if (display) {
+            r = `<div class="eq-wrap">${r}<button type="button" class="eq-copy copy-btn" data-copy-id="${_regCopy(tex.trim())}" aria-label="Copy LaTeX" title="Copy LaTeX">${COPY_ICON}</button></div>`;
+        }
         html = html.split(id).join(r);
     });
     return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
@@ -795,7 +867,7 @@ function appendAssistantBubble(data) {
     row.innerHTML = `
         <div class="bot-avatar">${botAvatarSvg}</div>
         <div class="asst-bubble">
-            <div class="asst-meta">${metaHtml}</div>
+            <div class="asst-meta">${metaHtml}${_respCopyBtn(data.answer||'')}</div>
             <div class="asst-text">${renderContent(data.answer||'')}</div>
             ${citesHtml}
         </div>`;
@@ -875,7 +947,7 @@ function appendAgentBubble(data) {
     row.innerHTML = `
         <div class="bot-avatar">${botAvatarSvg}</div>
         <div class="asst-bubble">
-            <div class="asst-meta">${metaChips}</div>
+            <div class="asst-meta">${metaChips}${_respCopyBtn(data.answer||'')}</div>
             <div class="asst-text">${renderContent(data.answer||'')}</div>
             ${sourcesHtml}
             ${toolsHtml}
@@ -974,7 +1046,8 @@ async function sendMessage() {
                         sMeta.innerHTML =
                             `<span class="meta-chip chip-lang">${esc(evt.language_name||evt.language||'en')}</span>` +
                             (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
-                            `<span class="meta-chip chip-time">${elapsed}s</span>`;
+                            `<span class="meta-chip chip-time">${elapsed}s</span>` +
+                            _respCopyBtn(acc);
                         if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}</div>`;
                         if (evt.query_id) renderFeedbackButtons(sFeedback, evt.query_id);
                         scrollBottom();
