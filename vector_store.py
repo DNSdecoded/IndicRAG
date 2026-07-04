@@ -14,11 +14,21 @@ import config
 logger = logging.getLogger(__name__)
 
 
-_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="chroma-timeout")
+# A timed-out ChromaDB call keeps running (a running future can't be cancelled),
+# so a small pool would be permanently saturated after a few hangs — every later
+# call would then time out waiting for a free worker. A large pool means a hung
+# call leaks at most one thread instead of poisoning the shared timeout facility.
+# ponytail: 32 workers; if hangs ever pile up, fix the hang, don't grow the pool.
+_chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="chroma-timeout")
 
 
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
-    """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs."""
+    """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs.
+
+    Note: cancel() cannot stop an already-running call; on timeout the worker
+    thread keeps running until the underlying call returns. The large pool above
+    bounds the damage of that leak.
+    """
     fut = _chroma_executor.submit(fn, *args, **kwargs)
     try:
         return fut.result(timeout=timeout)
@@ -86,10 +96,18 @@ def get_or_create_collection(
             pass  # Collection doesn't exist
     
     # Get or create collection
+    # ef_construction/max_neighbors only take effect when the collection is first
+    # created; get_or_create ignores them for an existing collection. ef_search is
+    # applied per query and can be retuned by re-creating with a new value.
     collection = client.get_or_create_collection(
         name=collection_name,
         metadata={"description": "Multilingual scientific papers"},
-        configuration={"hnsw": {"space": config.DISTANCE_METRIC}}
+        configuration={"hnsw": {
+            "space": config.DISTANCE_METRIC,
+            "ef_construction": config.HNSW_EF_CONSTRUCTION,
+            "ef_search": config.HNSW_EF_SEARCH,
+            "max_neighbors": config.HNSW_M,
+        }}
     )
     
     logger.info(f"Collection '{collection_name}' ready. Current size: {collection.count()}")
@@ -255,6 +273,40 @@ def update_paper_metadata(paper_id: str, updates: dict, collection: chromadb.Col
     new_metadatas = [{**m, **updates} for m in result['metadatas']]
     _chroma_call(collection.update, ids=ids, metadatas=new_metadatas)
     return len(ids)
+
+
+def find_similar_paper(
+    title: str,
+    year: str = None,
+    threshold: float = 0.9,
+    collection: chromadb.Collection = None,
+) -> Optional[str]:
+    """Return an existing paper_id whose title is a near-duplicate of `title`, or None.
+
+    Cross-ingestion dedup for re-uploads under a different filename. Uses
+    difflib.SequenceMatcher (stdlib) rather than a fuzzy-matching dependency —
+    good enough for near-identical title comparison at this corpus scale.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    result = _chroma_call(collection.get, include=['metadatas'])
+    seen: Dict[str, dict] = {}
+    for meta in result.get('metadatas', []):
+        pid = meta.get('paper_id')
+        if pid and pid not in seen:
+            seen[pid] = meta
+
+    from difflib import SequenceMatcher
+    norm_title = title.strip().lower()
+    best_pid, best_ratio = None, 0.0
+    for pid, meta in seen.items():
+        if year and meta.get('year') and str(meta['year']) != str(year):
+            continue
+        ratio = SequenceMatcher(None, norm_title, str(meta.get('title', '')).strip().lower()).ratio()
+        if ratio > best_ratio:
+            best_pid, best_ratio = pid, ratio
+
+    return best_pid if best_ratio >= threshold else None
 
 if __name__ == "__main__":
     # Test vector store functionality

@@ -22,6 +22,20 @@ FUNCTION_DECLARATIONS = [
                         "Use for ambiguous or under-specified queries."
                     ),
                 },
+                "year_from": {
+                    "type": "integer",
+                    "description": (
+                        "Only return passages from papers published in this year or "
+                        "later (e.g. 2020). Optional; use when the query restricts by year."
+                    ),
+                },
+                "year_to": {
+                    "type": "integer",
+                    "description": (
+                        "Only return passages from papers published in this year or "
+                        "earlier. Optional."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -99,6 +113,13 @@ FUNCTION_DECLARATIONS = [
                 "sort_by": {
                     "type": "string",
                     "description": "Sort order: 'relevance' (default) or 'submitted_date'.",
+                },
+                "year_from": {
+                    "type": "integer",
+                    "description": (
+                        "Only return papers submitted in this year or later (e.g. 2022). "
+                        "Optional; use when the query restricts by year."
+                    ),
                 },
             },
             "required": ["query"],

@@ -1,7 +1,6 @@
 import logging
 
 from google.genai import types
-from google.genai import errors as genai_errors
 
 import rag
 import config
@@ -55,6 +54,38 @@ RETRY RULES:
 """
 
 
+_MAX_CORPUS_QUERIES = 6   # matches query_planner._MAX_SUB_QUERIES so every planned sub-query gets a corpus call
+_MAX_EXTERNAL_CALLS = 2   # LLM-chosen external tool calls kept alongside
+
+
+def _ensure_corpus_coverage(tool_calls, queries, history):
+    """Route the planner's sub-queries directly to indicrag_retrieval.
+
+    The LLM tool-selector reliably collapses several field-specific sub-queries
+    ("reward formulation", "state/action space", "antenna geometry") into ONE
+    generic corpus query, so field-specific chunks never get retrieved even though
+    they rank #1 for their own query. This deterministically issues one corpus call
+    per planner sub-query (capped), and keeps up to _MAX_EXTERNAL_CALLS of whatever
+    external tools (arxiv/open_access/web) the LLM chose. On a 'regenerate' turn the
+    context is already adequate — return the LLM's choice untouched (no re-retrieval).
+    """
+    last_action = history[-1]["action"] if history else None
+    if last_action == "regenerate":
+        return tool_calls
+
+    corpus, seen = [], set()
+    for q in queries:
+        q = (q or "").strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            corpus.append({"name": "indicrag_retrieval",
+                           "args": {"query": q, "expand_query": False}})
+    corpus = corpus[:_MAX_CORPUS_QUERIES]
+
+    external = [c for c in tool_calls if c.get("name") != "indicrag_retrieval"][:_MAX_EXTERNAL_CALLS]
+    return corpus + external
+
+
 def tool_selector_node(state: AgentState) -> dict:
     queries = state.get("query_plan") or [state["original_query"]]
     n_ctx = len(state.get("retrieved_contexts", []))
@@ -95,6 +126,8 @@ def tool_selector_node(state: AgentState) -> dict:
         tool_config=types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(mode="AUTO")
         ),
+        # Rule-based tool routing — thinking off by default (config knob).
+        thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
     )
 
     try:
@@ -115,6 +148,8 @@ def tool_selector_node(state: AgentState) -> dict:
             if last_action != "regenerate":
                 tool_calls = [{"name": "indicrag_retrieval",
                                "args": {"query": queries[0], "expand_query": False}}]
+
+        tool_calls = _ensure_corpus_coverage(tool_calls, queries, history)
 
     except Exception as exc:
         # All keys exhausted or unrecoverable error — fall back to default tool

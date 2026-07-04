@@ -539,46 +539,46 @@ def test_query_cache_concurrent_reads_writes():
 
 
 def test_client_pool_idx_stays_in_bounds_under_concurrency():
-    import rag
+    import llm_client
 
-    rag._client_pool = [MagicMock(), MagicMock(), MagicMock()]
-    rag._client_index = itertools.cycle(range(3))
+    llm_client._client_pool = [MagicMock(), MagicMock(), MagicMock()]
+    llm_client._client_index = itertools.cycle(range(3))
 
     with ThreadPoolExecutor(max_workers=30) as ex:
-        indices = [f.result() for f in [ex.submit(rag._next_client_idx) for _ in range(300)]]
+        indices = [f.result() for f in [ex.submit(llm_client._next_client_idx) for _ in range(300)]]
 
     assert all(0 <= i < 3 for i in indices)
     assert len(indices) == 300
 
 
 def test_sessions_concurrent_creation_all_unique():
-    import api_server
-    with api_server._sessions_lock:
-        api_server._sessions.clear()
+    import deps
+    with deps._sessions_lock:
+        deps._sessions.clear()
 
     with ThreadPoolExecutor(max_workers=20) as ex:
-        ids = [f.result()[0] for f in [ex.submit(api_server._get_or_create_session, None)
+        ids = [f.result()[0] for f in [ex.submit(deps._get_or_create_session, None)
                                         for _ in range(50)]]
 
     assert len(set(ids)) == 50
-    with api_server._sessions_lock:
-        assert len(api_server._sessions) == 50
+    with deps._sessions_lock:
+        assert len(deps._sessions) == 50
 
 
 def test_jobs_concurrent_updates_no_corruption():
-    import api_server
-    with api_server._jobs_lock:
+    import deps
+    with deps._jobs_lock:
         for i in range(10):
-            api_server._jobs[f"job-{i}"] = {"status": "running"}
+            deps._jobs[f"job-{i}"] = {"status": "running"}
 
     def update(i):
-        api_server._update_job(f"job-{i % 10}", status="done", val=i)
+        deps._update_job(f"job-{i % 10}", status="done", val=i)
 
     with ThreadPoolExecutor(max_workers=20) as ex:
         [f.result() for f in [ex.submit(update, i) for i in range(100)]]
 
-    with api_server._jobs_lock:
-        assert all(j["status"] == "done" for j in api_server._jobs.values())
+    with deps._jobs_lock:
+        assert all(j["status"] == "done" for j in deps._jobs.values())
 
 
 # =============================================================================
@@ -605,3 +605,173 @@ def test_bm25_indic_tokenize():
     assert isinstance(tokens, list)
     assert len(tokens) > 0
     assert all(isinstance(t, str) for t in tokens)
+
+
+# =============================================================================
+# Reflexion faithfulness scoring: long multi-claim answers must not be nuked
+# =============================================================================
+
+def _mk_eval_resp(complete, action):
+    resp = MagicMock()
+    resp.text = f'{{"completeness_score": {complete}, "action": "{action}", "missing_aspects": []}}'
+    return resp
+
+
+def _eval_state(**over):
+    state = {
+        "reflexion_count": 0,
+        "draft_answer": "Long detailed answer. " * 20,
+        "reflexion_history": [],
+        "original_query": "compare the papers",
+        "retrieved_contexts": [{"text": "chunk", "title": "T", "section": "body"}],
+    }
+    state.update(over)
+    return state
+
+
+def test_faithfulness_is_grounded_fraction_not_min():
+    """One weakly-entailed claim among many grounded ones must not force faith to ~0."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    claims = [{"claim": f"c{i}", "support": 0.9, "grounded": True} for i in range(9)]
+    claims.append({"claim": "c9", "support": 0.02, "grounded": False})
+
+    with patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.9, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(_eval_state())
+
+    # 9/10 grounded => faith 0.9 => accept branch fires
+    assert "final_answer" in result
+    assert result["reflexion_history"][-1]["faithfulness_score"] >= 0.75
+
+
+def test_safe_stop_preserves_draft_answer():
+    """Stuck loop with low faithfulness must return the draft with a caveat, not discard it."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Substantive answer about antennas."
+    claims = [{"claim": "c", "support": 0.01, "grounded": False}]
+    prev = [{"faithfulness_score": 0.0, "completeness_score": 0.3,
+             "action": "retrieve_more", "missing_aspects": []}]
+
+    with patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.3, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(
+            _eval_state(draft_answer=draft, reflexion_count=1, reflexion_history=prev))
+
+    assert "final_answer" in result
+    assert draft in result["final_answer"], "draft answer must survive safe_stop"
+
+
+def test_year_filter_builds_chromadb_where_clause():
+    """Year range filter must produce valid ChromaDB where-clauses and ignore junk."""
+    from agent.tool_executor import _year_filter
+
+    assert _year_filter() is None
+    assert _year_filter("not-a-year") is None
+    assert _year_filter(1800) is None          # out of 1900-2100 range
+    assert _year_filter(2020) == {"year": {"$gte": "2020"}}
+    assert _year_filter(None, 2019) == {"year": {"$lte": "2019"}}
+    assert _year_filter(2020, 2025) == {
+        "$and": [{"year": {"$gte": "2020"}}, {"year": {"$lte": "2025"}}]
+    }
+
+
+def test_indicrag_year_range_passed_as_filter():
+    """execute_indicrag must forward the year range to retrieve_context as filter_dict."""
+    import agent.tool_executor as te
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", year_from=2020)
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {"year": {"$gte": "2020"}}
+
+
+def test_reflexion_time_budget_finalises_draft():
+    """Over the wall-clock budget, the loop finalises the current draft instead of
+    starting another retrieve→generate→verify cycle (returns before any LLM/NLI call)."""
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Best-effort answer so far."
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=1,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    result = reflexion_evaluator_node(state)
+    assert result["final_answer"] == draft
+
+
+def test_evaluator_sees_full_long_answer():
+    """Completeness evaluator must not judge only the first 4000 chars of a long answer."""
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    sentinel = "UNIQUE_TAIL_SENTINEL_XYZ."
+    long_answer = ("Filler sentence for padding. " * 400) + sentinel  # ~11.6k chars
+
+    captured = {}
+
+    def capture(model, contents, gen_config=None, **kw):
+        captured["prompt"] = contents
+        return _mk_eval_resp(0.9, "accept")
+
+    with patch("verify.check_claims", return_value=[]), \
+         patch("rag.generate_with_failover", side_effect=capture), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        reflexion_evaluator_node(_eval_state(draft_answer=long_answer))
+
+    assert sentinel in captured["prompt"], "tail of long answer was truncated away from evaluator"
+
+
+# =============================================================================
+# Corpus fairness: fast web tools must not truncate slow corpus out of the
+# MAX_CONTEXT_CHUNKS budget. Passages are interleaved round-robin by retriever.
+# =============================================================================
+
+def test_interleave_by_retriever_round_robins():
+    from agent.nodes.tool_executor_node import _interleave_by_retriever
+
+    contexts = (
+        [{"text": f"web{i}", "retriever": "arxiv_search"} for i in range(10)]
+        + [{"text": f"corpus{i}", "retriever": "indicrag_retrieval"} for i in range(3)]
+    )
+    out = _interleave_by_retriever(contexts)
+
+    first12 = out[:12]
+    corpus_in_budget = sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval")
+    # All 3 corpus chunks must survive the first-12 cut, not be tail-truncated
+    assert corpus_in_budget == 3
+    assert len(out) == len(contexts)
+
+
+def test_tool_executor_tags_and_interleaves():
+    def fake_corpus(args):
+        return {"passages": [{"text": f"c{i}", "title": "Corpus Paper", "section": "body"}
+                             for i in range(3)]}
+
+    def fake_arxiv(args):
+        return {"passages": [{"text": f"a{i}", "title": f"Arxiv {i}", "source": "arxiv"}
+                             for i in range(10)]}
+
+    import agent.nodes.tool_executor_node as node
+    with patch.object(node, "TOOL_DISPATCH",
+                      {"indicrag_retrieval": fake_corpus, "arxiv_search": fake_arxiv}):
+        state = {
+            "tool_calls_requested": [
+                {"name": "arxiv_search", "args": {}},
+                {"name": "indicrag_retrieval", "args": {}},
+            ],
+            "retrieved_contexts": [],
+            "tool_calls_log": [],
+        }
+        result = node.tool_executor_node(state)
+
+    ctxs = result["retrieved_contexts"]
+    assert all("retriever" in c for c in ctxs), "every passage must be tagged with its tool"
+    first12 = ctxs[:12]
+    assert sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval") == 3

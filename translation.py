@@ -3,7 +3,6 @@ Translation utilities for Strategy B (English reasoning + translation).
 Uses IndicTrans2 models for high-quality Indic language translation.
 """
 
-from typing import Optional
 import logging
 import re
 import threading

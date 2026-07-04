@@ -1,4 +1,5 @@
 import logging
+import time
 
 from google.genai import types
 
@@ -10,6 +11,9 @@ from agent.json_utils import extract_json
 
 logger = logging.getLogger(__name__)
 MAX_REFLEXION = 3
+# AGENT_MAX_TOKENS=8192 → answers up to ~32k chars. The old 4000-char cut made the
+# completeness evaluator judge a stub and report "truncated answer" on every long answer.
+EVAL_ANSWER_CHARS = 30000
 
 
 def _truncate_at_sentence(text: str, limit: int) -> str:
@@ -76,14 +80,37 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "reflexion_count": count,
         }
 
+    # Time budget: after at least one full evaluation, stop looping if we've spent
+    # the reflexion budget. Finalises the current draft rather than starting another
+    # retrieve→generate→verify cycle that would blow past AGENT_TIMEOUT and 504.
+    start = state.get("start_time")
+    if start is not None and count >= 1:
+        elapsed = time.monotonic() - start
+        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s "
+                f"> budget {config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising best draft"
+            )
+            return {
+                "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
+                "reflexion_count": count + 1,
+            }
+
     answer = state.get("draft_answer", "")
-    chunks = [c.get("text", "") for c in state.get("retrieved_contexts", [])]
+    _contexts = state.get("retrieved_contexts", [])
+    chunks = [c.get("text", "") for c in _contexts]
+    # Same per-paper numbering the answer generator's format_context used, so [N]
+    # resolves to the right paper's chunk(s) instead of the Nth chunk.
+    chunk_metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+                   for c in _contexts]
 
     try:
-        claims = verify.check_claims(answer, chunks)
+        claims = verify.check_claims(answer, chunks, chunk_metas)
         if claims:
-            # ponytail: min not mean — one hallucinated claim can hide in a high average
-            faithfulness_score = min(r["support"] for r in claims)
+            # Grounded fraction (RAGAS-style): min() collapsed to ~0 on any long
+            # multi-claim answer because one synthesized/comparative sentence
+            # scoring low entailment nuked the whole score.
+            faithfulness_score = sum(1 for r in claims if r["grounded"]) / len(claims)
         else:
             faithfulness_score = 1.0  # absence of citable claims ≠ hallucination
     except Exception as e:
@@ -101,11 +128,13 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             contents=_COMPLETENESS_PROMPT.format(
                 query=state["original_query"],
                 source_titles=source_titles,
-                answer=_truncate_at_sentence(answer, 4000),
+                answer=_truncate_at_sentence(answer, EVAL_ANSWER_CHARS),
             ),
             gen_config=types.GenerateContentConfig(
                 temperature=0,
                 max_output_tokens=1024,
+                # JSON completeness verdict — thinking off by default (config knob).
+                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
         )
         raw_text = rag.safe_extract_text(resp)
@@ -148,10 +177,13 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
                     f"faith={faithfulness_score:.2f} complete={completeness_score:.2f} "
                     f"action=safe_stop (stuck with low faithfulness)"
                 )
+                # Keep the draft — 200s of retrieval/generation must not be discarded;
+                # surface the verification caveat instead.
                 return {
                     "final_answer": (
-                        "The retrieved context does not fully support answering this question. "
-                        f"Missing: {missing_str}."
+                        f"{answer}\n\n---\n"
+                        "*Note: some statements above could not be fully verified against "
+                        f"the retrieved sources. Gaps: {missing_str}.*"
                     ),
                     "reflexion_count": count + 1,
                     "reflexion_history": history,

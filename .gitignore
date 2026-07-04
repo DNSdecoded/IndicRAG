@@ -38,6 +38,11 @@ env/
 # ChromaDB data
 chroma_db/
 
+# Session/job persistence (v2.2)
+sessions.db
+sessions.db-wal
+sessions.db-shm
+
 # Model cache
 models/
 
@@ -75,3 +80,10 @@ check_db.py
 
 # Graphify output
 graphify-out/
+
+# Local tool state
+.mimocode/
+.serena/
+
+# Local test scratch output
+test_output.txt

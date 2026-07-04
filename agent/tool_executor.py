@@ -1,5 +1,4 @@
 import ast
-import time
 import re
 import logging
 import json
@@ -22,6 +21,11 @@ import config
 logger = logging.getLogger(__name__)
 _tavily = None
 _S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+# OpenAlex rate-limits anonymous search under load (HTTP 503). A contact email
+# joins the polite pool; a free API key (https://openalex.org/rest-api) is the
+# only fully reliable path. Both optional — the tool degrades to [] if missing.
+_OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO", "indicrag@example.com")
+_OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")
 
 
 def _get_tavily():
@@ -50,6 +54,8 @@ def _expand_query_variants(query: str) -> list[str]:
                 temperature=0.7,
                 max_output_tokens=256,
                 system_instruction="Generate alternative search phrasings that preserve the original query's semantic meaning. Do not add new topics or narrow the scope.",
+                # Short JSON list of paraphrases — thinking off by default (config knob).
+                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
         )
         clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
@@ -59,24 +65,64 @@ def _expand_query_variants(query: str) -> list[str]:
         return [query]
 
 
-def execute_indicrag(query: str, expand_query: bool = False) -> dict:
+def _year_filter(year_from=None, year_to=None):
+    """Build a ChromaDB where-clause for a publication-year range, or None.
+
+    Corpus `year` metadata is stored as a 4-digit string (metadata_enrich.py), so
+    lexicographic $gte/$lte over same-length strings gives correct numeric ordering.
+    Invalid/out-of-range values are ignored rather than raised — a bad filter from
+    the LLM should degrade to unfiltered retrieval, not crash the tool. Chunks with
+    no `year` (enrichment is best-effort) are excluded when a filter is active, which
+    is the intended "only papers from year X" semantics.
+    """
+    def _valid(y):
+        try:
+            y = int(y)
+        except (TypeError, ValueError):
+            return None
+        return y if 1900 <= y <= 2100 else None
+
+    lo, hi = _valid(year_from), _valid(year_to)
+    clauses = []
+    if lo is not None:
+        clauses.append({"year": {"$gte": str(lo)}})
+    if hi is not None:
+        clauses.append({"year": {"$lte": str(hi)}})
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
+def execute_indicrag(query: str, expand_query: bool = False,
+                     year_from=None, year_to=None) -> dict:
     import hashlib
     _MIN_EXPAND_WORDS = 4
     should_expand = expand_query and len(query.split()) >= _MIN_EXPAND_WORDS
+    filter_dict = _year_filter(year_from, year_to)
 
     if should_expand:
         variants = _expand_query_variants(query)
-        passages, seen = [], set()
+        chunks, metas, seen = [], [], set()
         for q in [query] + variants:
-            result = rag.retrieve_context(q)
+            result = rag.retrieve_context(q, filter_dict=filter_dict)
             for chunk, meta in zip(result["chunks"], result["metadatas"]):
                 key = hashlib.sha256(chunk.encode()).hexdigest()
                 if key not in seen:
-                    passages.append({"text": chunk, **meta})
+                    chunks.append(chunk)
+                    metas.append(meta)
                     seen.add(key)
-        return {"passages": passages[: config.MAX_CONTEXT_CHUNKS]}
+
+        # Re-rank the merged pool against the ORIGINAL query before truncating —
+        # each variant's retrieve_context() already ranked by its own phrasing,
+        # so appending in variant order and slicing at MAX_CONTEXT_CHUNKS could
+        # drop a highly relevant chunk just because it scored lower under one
+        # variant's wording early in the list.
+        import rerank
+        top_chunks, top_metas, _ = rerank.rerank(query, chunks, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        passages = [{"text": chunk, **meta} for chunk, meta in zip(top_chunks, top_metas)]
+        return {"passages": passages}
     else:
-        result = rag.retrieve_context(query)
+        result = rag.retrieve_context(query, filter_dict=filter_dict)
         passages = [
             {"text": chunk, **meta}
             for chunk, meta in zip(result["chunks"], result["metadatas"])
@@ -411,8 +457,13 @@ def _fetch_openalex(query: str, max_results: int, year_range: str, open_access_o
                 f += f",to_publication_date:{parts[1]}-12-31"
             params["filter"] = params.get("filter", "") + ("," if "filter" in params else "") + f
 
+    if _OPENALEX_MAILTO:
+        params["mailto"] = _OPENALEX_MAILTO  # polite pool (query param, not header)
+    if _OPENALEX_API_KEY:
+        params["api_key"] = _OPENALEX_API_KEY  # authenticated pool: avoids anonymous 503s
+
     url = f"{_OPENALEX_API}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": "mailto:indicrag@example.com"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"IndicRAG/2.0 (mailto:{_OPENALEX_MAILTO})"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode())
 
@@ -519,7 +570,8 @@ def execute_open_access_search(
 
 TOOL_DISPATCH = {
     "indicrag_retrieval": lambda args: execute_indicrag(
-        args["query"], args.get("expand_query", False)
+        args["query"], args.get("expand_query", False),
+        args.get("year_from"), args.get("year_to")
     ),
     "web_search": lambda args: execute_web_search(
         args["query"], args.get("num_results", 5)

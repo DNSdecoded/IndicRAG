@@ -18,11 +18,14 @@ def extract_json(raw: str) -> dict:
     depth, in_str, esc = 0, False, False
     for i, ch in enumerate(clean[start:], start):
         if esc:
-            esc = False; continue
+            esc = False
+            continue
         if ch == '\\' and in_str:
-            esc = True; continue
+            esc = True
+            continue
         if ch == '"':
-            in_str = not in_str; continue
+            in_str = not in_str
+            continue
         if in_str:
             continue
         if ch == '{':

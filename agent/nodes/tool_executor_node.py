@@ -10,7 +10,10 @@ from cache import tool_cache, make_key
 logger = logging.getLogger(__name__)
 
 _CACHEABLE_TOOLS = {"indicrag_retrieval", "arxiv_search", "open_access_search", "web_search"}
-_MAX_PARALLEL_TOOLS = 4
+# Matches query_planner._MAX_SUB_QUERIES so a per-checklist-item sub-query (e.g. a
+# reward-formula query) isn't truncated before running. Tools run concurrently, so
+# more calls cost extra retrieval/API work but don't add serial latency.
+_MAX_PARALLEL_TOOLS = 6
 
 
 def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
@@ -44,15 +47,40 @@ def _passage_key(p: dict) -> str:
     return hashlib.sha256(p.get("text", "").encode()).hexdigest()
 
 
+def _interleave_by_retriever(contexts: list[dict]) -> list[dict]:
+    """Round-robin passages across their originating tool.
+
+    format_context() keeps only the first MAX_CONTEXT_CHUNKS. Tools finish in
+    nondeterministic order (as_completed), and the corpus retriever is the
+    slowest — so without this, fast web tools fill the head of the list and the
+    corpus gets truncated off the tail. Interleaving gives every retriever a
+    fair share of the budget. Stable: preserves per-retriever ordering.
+    """
+    from collections import OrderedDict, deque
+
+    groups: "OrderedDict[str, deque]" = OrderedDict()
+    for c in contexts:
+        groups.setdefault(c.get("retriever", "unknown"), deque()).append(c)
+
+    out = []
+    queues = list(groups.values())
+    while queues:
+        for q in queues:
+            out.append(q.popleft())
+        queues = [q for q in queues if q]
+    return out
+
+
 def _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log):
     if "error" not in result and "passages" in result:
         for p in result["passages"]:
             h = _passage_key(p)
             if h not in seen_hashes:
                 seen_hashes.add(h)
+                p.setdefault("retriever", name)
                 contexts.append(p)
     elif "error" not in result and "text" in result:
-        p = {"text": result["text"], "source": name}
+        p = {"text": result["text"], "source": name, "retriever": name}
         h = _passage_key(p)
         if h not in seen_hashes:
             seen_hashes.add(h)
@@ -60,7 +88,8 @@ def _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log):
     else:
         # Surface the error so the LLM knows to try a different tool/approach
         error_msg = result.get("error", "no results returned")
-        p = {"text": f"[Tool '{name}' failed: {error_msg}. Try a different query or tool.]", "source": name}
+        p = {"text": f"[Tool '{name}' failed: {error_msg}. Try a different query or tool.]",
+             "source": name, "retriever": name}
         h = _passage_key(p)
         if h not in seen_hashes:
             seen_hashes.add(h)
@@ -99,7 +128,7 @@ def tool_executor_node(state: AgentState) -> dict:
                 _collect_result(name, args, result, latency_ms, contexts, seen_hashes, log)
 
     return {
-        "retrieved_contexts": contexts,
+        "retrieved_contexts": _interleave_by_retriever(contexts),
         "tool_calls_log": log,
         "tool_calls_requested": [],
     }

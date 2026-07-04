@@ -6,7 +6,6 @@ No Docker required - just Python!
 
 import sys
 import os
-import subprocess
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -51,6 +50,31 @@ def check_api_key():
         logger.info(f"✓ Gemini API keys configured ({len(keys)} keys, load balanced)")
     else:
         logger.info("✓ Gemini API key configured")
+    return True
+
+
+def check_auth_config(production=True):
+    """Fail fast when a production server would bind 0.0.0.0 with no endpoint auth.
+
+    The server binds 0.0.0.0; without API_KEYS every endpoint (including the
+    destructive /purge/* routes) accepts anonymous requests. In production mode
+    this blocks startup unless ALLOW_UNAUTHENTICATED=1 explicitly opts in;
+    dev mode (--dev) only warns.
+    """
+    if not os.getenv('API_KEYS'):
+        if production and os.getenv('ALLOW_UNAUTHENTICATED') != '1':
+            logger.error("✗ API_KEYS not set — server would bind 0.0.0.0 with NO endpoint auth.")
+            logger.error("  All endpoints (including DELETE /purge/*) would accept anonymous requests.")
+            logger.info("  Set API_KEYS (and ADMIN_API_KEY) in .env, or opt in to anonymous")
+            logger.info("  access with ALLOW_UNAUTHENTICATED=1 (private hosts only).")
+            return False
+        logger.warning("⚠ API_KEYS not set — server binds 0.0.0.0 with NO endpoint auth.")
+        logger.warning("  All endpoints (including DELETE /purge/*) accept anonymous requests.")
+        logger.warning("  Set API_KEYS (and ADMIN_API_KEY) in .env before exposing publicly.")
+    elif not os.getenv('ADMIN_API_KEY'):
+        logger.warning("⚠ ADMIN_API_KEY not set — destructive /purge/* routes fall back to API_KEYS.")
+    else:
+        logger.info("✓ Endpoint auth configured (API_KEYS + ADMIN_API_KEY)")
     return True
 
 
@@ -99,44 +123,37 @@ def check_documents():
 
 
 def start_server(mode='production', port=8080):
-    """Start the API server"""
+    """Start the API server.
+
+    Runs uvicorn in-process (not via subprocess.run) so SIGTERM/Ctrl+C reach
+    uvicorn's own signal handlers directly instead of being lost across a
+    subprocess boundary — uvicorn then drains in-flight requests and runs
+    the FastAPI `lifespan` shutdown before exiting.
+    """
+    import uvicorn
+
     logger.info("\n" + "="*60)
     logger.info("Starting Multilingual RAG API Server")
     logger.info("="*60)
-    
-    if mode == 'development':
-        logger.info("Mode: Development (auto-reload enabled)")
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "api_server:app",
-            "--host", "0.0.0.0",
-            "--port", str(port),
-            "--reload",
-            "--log-level", "info"
-        ]
-    else:
-        logger.info("Mode: Production")
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "api_server:app",
-            "--host", "0.0.0.0",
-            "--port", str(port),
-            "--workers", "1",
-            "--log-level", "info"
-        ]
-    
-    logger.info(f"\nAPI will be available at:")
+
+    reload = mode == 'development'
+    logger.info("Mode: %s%s", "Development" if reload else "Production",
+                " (auto-reload enabled)" if reload else "")
+
+    logger.info("\nAPI will be available at:")
     logger.info(f"  → http://localhost:{port}")
     logger.info(f"  → http://localhost:{port}/api/docs (interactive docs)")
     logger.info("\nPress Ctrl+C to stop\n")
     logger.info("="*60 + "\n")
-    
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Server exited with error: {e}")
-    except KeyboardInterrupt:
-        logger.info("\nShutting down gracefully...")
+
+    uvicorn.run(
+        "api_server:app",
+        host="0.0.0.0",
+        port=port,
+        reload=reload,
+        workers=1,
+        log_level="info",
+    )
 
 
 def main():
@@ -149,9 +166,16 @@ def main():
     parser.add_argument('--port', type=int, default=8080, help='Port to run server on (default: 8080)')
     args = parser.parse_args()
     
+    # Load .env early (before any huggingface_hub import) and quiet HF Hub HTTP
+    # cache-check noise. Set HF_HUB_OFFLINE=1 in .env to skip the checks entirely.
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
     logger.info("Multilingual Scientific RAG System")
     logger.info("="*60)
-    
+
     if not args.skip_checks:
         logger.info("\nRunning pre-flight checks...")
         logger.info("-"*60)
@@ -161,10 +185,11 @@ def main():
             check_env_file(),
             check_api_key(),
             check_dependencies(),
+            check_auth_config(production=not args.dev),
             check_documents()
         ]
-        
-        if not all(checks[:4]):  # First 4 are critical
+
+        if not all(checks[:5]):  # First 5 are critical (auth blocks in production mode)
             logger.error("\n✗ Pre-flight checks failed!")
             logger.info("Fix the issues above and try again\n")
             sys.exit(1)

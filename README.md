@@ -127,6 +127,9 @@ TAVILY_API_KEY=your_tavily_key_here
 
 # Optional — higher token limit for agent answers (default 4096)
 AGENT_MAX_TOKENS=4096
+
+# Optional — agent thinking tokens: 0=off (cheapest), -1=dynamic, N=cap (default 0)
+AGENT_THINKING_BUDGET=0
 ```
 
 ### Ingest Documents
@@ -314,6 +317,7 @@ Key settings (all overridable via environment variables):
 | `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
 | `AGENT_MAX_TOKENS` | `4096` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout in seconds |
+| `AGENT_THINKING_BUDGET` | `0` | Thinking tokens for agent LLM calls (planner, tool routing, expansion, answer, reflexion). `0`=off (cheapest), `-1`=dynamic, `N`=cap N tokens |
 | `TAVILY_API_KEY` | (optional) | Tavily key for agent web search |
 | `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
 | `API_KEYS` | (none) | Comma-separated keys for auth |

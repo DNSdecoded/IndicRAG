@@ -9,94 +9,118 @@ import embeddings
 import vector_store
 import lang_utils
 import translation
-from google import genai
+import llm_client
 from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-# Client pool — one genai.Client per API key, round-robin load balanced.
-# Lazily initialised so the module can be imported without keys (retrieval-only mode).
-_client_pool: list[genai.Client] = []
-_client_lock = __import__('threading').Lock()
-_client_index = __import__('itertools').cycle([])  # replaced on init
 
+def citation_number_map(metadatas: List[Dict]) -> Dict[int, Dict]:
+    """Map a per-paper citation number → representative metadata.
 
-def _init_client_pool() -> None:
-    """Build the client pool from config.LLM_API_KEY_POOL (called under lock)."""
-    global _client_pool, _client_index
-    if not config.LLM_API_KEY_POOL:
-        raise ValueError(
-            "Google Gemini API key not configured. "
-            "Set LLM_API_KEY (single) or LLM_API_KEYS (comma-separated) in .env."
-        )
-    _client_pool = [genai.Client(api_key=k) for k in config.LLM_API_KEY_POOL]
-    _client_index = __import__('itertools').cycle(range(len(_client_pool)))
-
-
-def _next_client_idx() -> int:
-    """Advance the round-robin counter under the pool lock (BUG-001/002)."""
-    with _client_lock:
-        return next(_client_index)
-
-
-def _get_client() -> genai.Client:
-    """Return the next client from the round-robin pool (thread-safe)."""
-    if not _client_pool:
-        with _client_lock:
-            if not _client_pool:
-                _init_client_pool()
-    return _client_pool[_next_client_idx()]
+    Citations are numbered by unique paper (first-seen title order), NOT by
+    chunk index. Several chunks of the same paper share one [Cite:N], so the
+    marker in the answer resolves to exactly one source in the panel. This is
+    the single source of truth used by format_context, extract_citations, and
+    the agent sources builder — they MUST agree or citation numbers drift.
+    """
+    title_to_num: Dict[str, int] = {}
+    num_to_meta: Dict[int, Dict] = {}
+    for meta in metadatas:
+        title = (meta.get('title') or 'Unknown').strip() or 'Unknown'
+        if title not in title_to_num:
+            num = len(title_to_num) + 1
+            title_to_num[title] = num
+            num_to_meta[num] = meta
+    return num_to_meta
 
 
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
     """
-    Extract and parse citations from answer text, handling multiple formats.
-    
-    Supports:
-        - Single citations: [1]
-        - Comma-separated: [1, 2] or [1,2,3]
-        - Ranges: [1-3]
-        - Consecutive: [1][2]
-    
+    Extract [Cite:N] citations from answer text and resolve them to papers.
+
+    Numbers are per unique paper (see citation_number_map), so [Cite:2] means
+    "the 2nd distinct paper in the context", not "the 2nd chunk".
+
     Args:
         answer: Generated answer text containing citations
         metadatas: List of metadata dictionaries from retrieved chunks
-        chunks: Optional list of text chunks for logging cited paragraphs
-        
+        chunks: Unused; kept for backwards-compatible call sites
+
     Returns:
         List of citation dictionaries with number, title, and section
     """
     import re
-    
-    seen_nums = set()
 
-    # Only match the explicit [Cite:N] prefix to avoid over-matching ranges like [10-15] mg
-    for m in re.finditer(r'\[Cite:\s*(\d+)\]', answer):
+    seen_nums = set()
+    # Match [N] citation markers; the \[(\d+)\] shape still ignores ranges like [10-15] mg
+    for m in re.finditer(r'\[(\d+)\]', answer):
         try:
             seen_nums.add(int(m.group(1)))
         except ValueError:
             pass
 
+    num_to_meta = citation_number_map(metadatas)
+
+    # All sections a paper contributed, in retrieval order — labeling with only
+    # the first-seen chunk's section made an 11-section answer read as if it
+    # came from the introduction alone.
+    title_sections: Dict[str, list] = {}
+    for m_ in metadatas:
+        t = (m_.get('title') or 'Unknown').strip() or 'Unknown'
+        s = m_.get('section', 'body')
+        if s not in title_sections.setdefault(t, []):
+            title_sections[t].append(s)
+
     citations = []
     for num in sorted(seen_nums):
-        idx = num - 1
-        if 0 <= idx < len(metadatas):
+        meta = num_to_meta.get(num)
+        if meta:
+            title = (meta.get('title') or 'Unknown').strip() or 'Unknown'
+            sections = title_sections.get(title) or [meta.get('section', 'body')]
             citations.append({
                 'number': str(num),
-                'title': metadatas[idx].get('title', 'Unknown'),
-                'section': metadatas[idx].get('section', 'body')
+                'title': meta.get('title', 'Unknown'),
+                'section': ', '.join(sections),
             })
-            if chunks and idx < len(chunks):
-                logger.debug(f"Citation [Cite:{num}] refers to paragraph: {chunks[idx][:200]}...")
-
     return citations
+
+
+def _hyde_embedding(user_query: str):
+    """Draft a hypothetical answer and embed it, for HyDE retrieval.
+
+    Bridges the lexical gap for complex/multi-hop queries: the hypothetical
+    answer's vocabulary overlaps documents more than the bare question does.
+    Falls back to embedding the raw query on any LLM failure.
+    """
+    try:
+        hyde_config = types.GenerateContentConfig(
+            temperature=config.LLM_TEMPERATURE,
+            max_output_tokens=256,
+            safety_settings=config.SAFETY_SETTINGS,
+            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+        response = llm_client.generate_with_failover(
+            config.LLM_MODEL_NAME,
+            f"Write a short, plausible-sounding answer to this question, "
+            f"even if you are not sure it is correct:\n\n{user_query}",
+            hyde_config,
+        )
+        hypothetical = safe_extract_text(response)
+        if hypothetical:
+            return embeddings.embed_query(hypothetical)
+    except Exception as e:
+        logger.debug(f"HyDE draft failed, falling back to direct query embedding: {e}")
+    return embeddings.embed_query(user_query)
 
 
 def retrieve_context(
     user_query: str,
     top_k: int = None,
     filter_dict: Optional[Dict[str, Any]] = None,
-    collection=None
+    collection=None,
+    use_hyde: bool = None,
 ) -> Dict[str, Any]:
     """
     Retrieve relevant context for a user query.
@@ -117,11 +141,13 @@ def retrieve_context(
     """
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
+    if use_hyde is None:
+        use_hyde = config.USE_HYDE
 
     from cache import retrieval_cache, make_key
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
     cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
-                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS)
+                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde)
     if collection is None and filter_dict is None:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
@@ -131,8 +157,16 @@ def retrieve_context(
     if collection is None:
         collection = vector_store.get_or_create_collection()
 
-    # Embed the query
-    query_embedding = embeddings.embed_query(user_query)
+    # Paper-scoped queries → exhaustive retrieval (all chunks of the selected
+    # papers in document order), not top-k similarity. This is what makes
+    # "reconstruct everything in this paper" work: the LLM sees the whole paper
+    # instead of a semantic sample that can miss equations/hyperparameters.
+    if filter_dict and 'paper_id' in filter_dict:
+        return _retrieve_scoped(filter_dict, collection)
+
+    # Embed the query — HyDE embeds a drafted hypothetical answer instead of
+    # the bare question; lexical (BM25) search below always uses the real query.
+    query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
     
     # Search vector store (dense)
     results = vector_store.search(
@@ -185,6 +219,14 @@ def retrieve_context(
     metas = results['metadatas']
     dists = results['distances']
 
+    if config.USE_COLBERT_RERANK and docs:
+        import colbert_rerank
+        dense_sims = [1.0 - d for d in dists]  # cosine distance -> similarity
+        colbert_top_k = min(len(docs), config.MAX_CONTEXT_CHUNKS * 3)
+        docs, metas, dists = colbert_rerank.rerank(
+            user_query, docs, metas, dense_sims,
+            top_k=colbert_top_k, weight=config.COLBERT_WEIGHT)
+
     if config.USE_RERANKER and docs:
         import rerank
         docs, metas, scores = rerank.rerank(
@@ -209,42 +251,94 @@ def retrieve_context(
     return result
 
 
-def format_context(chunks: List[str], metadatas: List[Dict]) -> str:
+def format_context(chunks: List[str], metadatas: List[Dict],
+                   max_chunks: int = None, max_length: int = None) -> str:
     """
     Format retrieved chunks into a context string for the LLM.
-    
+
     Args:
         chunks: List of text chunks
         metadatas: List of metadata dictionaries
-        
+        max_chunks: Override for max chunks kept (default config.MAX_CONTEXT_CHUNKS)
+        max_length: Override for max total chars (default config.MAX_CONTEXT_LENGTH)
+
     Returns:
         Formatted context string with citations
     """
+    if max_chunks is None:
+        max_chunks = config.MAX_CONTEXT_CHUNKS
+    if max_length is None:
+        max_length = config.MAX_CONTEXT_LENGTH
+
     context_parts = []
     total_length = 0
     chunks_used = 0
-    
-    for i, (chunk, metadata) in enumerate(zip(chunks, metadatas), 1):
+    title_to_num: Dict[str, int] = {}  # per-paper citation numbers; see citation_number_map
+
+    for chunk, metadata in zip(chunks, metadatas):
         # Enforce maximum number of chunks
-        if chunks_used >= config.MAX_CONTEXT_CHUNKS:
+        if chunks_used >= max_chunks:
             break
-        
-        # Format: [i] Title - Section: chunk text
-        title = metadata.get('title', 'Unknown')
+
+        title = (metadata.get('title') or 'Unknown').strip() or 'Unknown'
         section = metadata.get('section', 'body')
-        
-        # Build context part FIRST to get accurate length
-        context_part = f"[Cite:{i}] {title} - {section}:\n{chunk}\n"
-        
+
+        # One citation number per unique paper — chunks of the same paper reuse it.
+        num = title_to_num.get(title, len(title_to_num) + 1)
+        context_part = f"[{num}] {title} - {section}:\n{chunk}\n"
+
         # Check if adding this would exceed length limit
-        if total_length + len(context_part) > config.MAX_CONTEXT_LENGTH:
+        if total_length + len(context_part) > max_length:
             break
-        
+
+        title_to_num.setdefault(title, num)
         context_parts.append(context_part)
         total_length += len(context_part)
         chunks_used += 1
-    
+
     return "\n".join(context_parts), chunks_used
+
+
+def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
+    """Exhaustive retrieval for paper-scoped queries.
+
+    Returns ALL chunks of the scoped paper(s) in document order
+    (paper_id, chunk_index), capped by config.SCOPED_MAX_CHUNKS /
+    SCOPED_MAX_CONTEXT_LENGTH — no similarity truncation, no reranker. Preserves
+    the paper's natural structure so reconstruction-style queries see the whole
+    document. Skips dense/BM25 entirely (no query embedding needed).
+    """
+    got = vector_store._chroma_call(
+        collection.get, where=filter_dict, include=['documents', 'metadatas'])
+    ids = got.get('ids', [])
+    if not ids:
+        logger.warning(f"No chunks for scoped filter {filter_dict}")
+        return {'chunks': [], 'metadatas': [], 'distances': [],
+                'formatted_context': '', 'chunks_used': 0}
+
+    metas_all = got['metadatas']
+    order = sorted(
+        range(len(ids)),
+        key=lambda i: (metas_all[i].get('paper_id', ''), metas_all[i].get('chunk_index', 0)),
+    )[:config.SCOPED_MAX_CHUNKS]
+
+    docs = [got['documents'][i] for i in order]
+    metas = [metas_all[i] for i in order]
+
+    formatted_context, chunks_used = format_context(
+        docs, metas,
+        max_chunks=config.SCOPED_MAX_CHUNKS,
+        max_length=config.SCOPED_MAX_CONTEXT_LENGTH,
+    )
+    logger.info(f"Scoped retrieval: {len(ids)} chunks matched, {chunks_used} used "
+                f"(filter={filter_dict})")
+    return {
+        'chunks': docs,
+        'metadatas': metas,
+        'distances': [0.0] * len(docs),
+        'formatted_context': formatted_context,
+        'chunks_used': chunks_used,
+    }
 
 
 def build_prompt(
@@ -312,10 +406,12 @@ def llm_generate(prompt: str, max_tokens: int = None,
         max_output_tokens=max_tokens,
         safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
+        # Disable thinking so the full token budget goes to the answer, not thoughts.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
     try:
-        response = generate_with_failover(config.LLM_MODEL_NAME, prompt, generate_config)
+        response = llm_client.generate_with_failover(config.LLM_MODEL_NAME, prompt, generate_config)
 
         # Check if response has text
         if response.text:
@@ -351,48 +447,19 @@ def llm_generate(prompt: str, max_tokens: int = None,
         raise
 
 
-def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction: str = None):
-    """Generator: stream LLM response chunks using primary model with key cycling.
-
-    Yields non-empty text chunks as they arrive. No model failover — primary model only.
-    ponytail: single-model streaming; add failover if primary is unreliable.
-    """
-    if max_tokens is None:
-        max_tokens = config.LLM_MAX_TOKENS
-
-    if not _client_pool:
-        with _client_lock:
-            if not _client_pool:
-                _init_client_pool()
-
-    gen_config = types.GenerateContentConfig(
-        temperature=config.LLM_TEMPERATURE,
-        max_output_tokens=max_tokens,
-        safety_settings=config.SAFETY_SETTINGS,
-        system_instruction=system_instruction or config.SYSTEM_PROMPT,
-    )
-
-    client = _get_client()
-    emitted = False
-    for chunk in client.models.generate_content_stream(
-        model=config.LLM_MODEL_NAME, contents=prompt, config=gen_config
-    ):
-        try:
-            if chunk.text:
-                emitted = True
-                yield chunk.text
-        except (ValueError, AttributeError) as exc:
-            logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
-    if not emitted:
-        raise RuntimeError("No text generated from Gemini stream")
+llm_generate_stream = llm_client.llm_generate_stream
 
 
-def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None) -> dict:
+def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = None,
+                             filter_dict: Optional[Dict] = None) -> dict:
     """Retrieve context and build prompt for /query/stream.
 
     Returns dict with keys:
       chunks_used, prompt, metadatas, detected_lang, lang_name
     If no docs: chunks_used=0, no_docs_msg set instead of prompt/metadatas.
+
+    filter_dict scopes retrieval (e.g. {'paper_id': {'$in': [...]}}) so a query
+    can be restricted to specific papers.
     """
     detected_lang = lang_utils.detect_language(user_query) or "en"
     lang_name = lang_utils.get_language_name(detected_lang)
@@ -404,7 +471,7 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
         except Exception:
             pass
 
-    context_data = retrieve_context(retrieval_query, top_k)
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
 
     if context_data["chunks_used"] == 0:
         no_docs_msg = config.NO_DOCUMENTS_RESPONSE
@@ -422,10 +489,12 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
 
 
-def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None) -> dict:
+def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None,
+                            filter_dict: Optional[Dict] = None) -> dict:
     """Retrieve context and build prompt for /chat/stream (mirrors answer_with_history).
 
-    Returns same shape as prepare_query_for_stream.
+    Returns same shape as prepare_query_for_stream. filter_dict scopes retrieval
+    to specific papers (e.g. {'paper_id': {'$in': [...]}}).
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Last message must be from the user")
@@ -442,7 +511,7 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
         except Exception:
             pass
 
-    context_data = retrieve_context(retrieval_query, top_k)
+    context_data = retrieve_context(retrieval_query, top_k, filter_dict)
 
     if context_data["chunks_used"] == 0:
         no_docs_msg = config.NO_DOCUMENTS_RESPONSE
@@ -482,79 +551,7 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
 
 
-def _is_transient(exc: Exception) -> bool:
-    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    if status in (429, 503):
-        return True
-    msg = str(exc)
-    return "503" in msg or "429" in msg or "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg
-
-
-import time as _time
-
-_circuit_breaker: dict[str, float] = {}
-_CIRCUIT_COOLDOWN = 60
-
-
-def generate_with_failover(model: str, contents, gen_config):
-    """
-    Call generate_content rotating through all API keys on 503/429 errors.
-
-    Tries every client in the pool exactly once.  If all keys fail on the
-    primary model, retries with LLM_FALLBACK_MODEL before giving up.
-    Uses a circuit breaker to skip models that recently failed on all keys.
-    """
-    if not _client_pool:
-        with _client_lock:
-            if not _client_pool:
-                _init_client_pool()
-
-    pool = _client_pool
-    models_to_try = [model]
-    if config.LLM_FALLBACK_MODEL and config.LLM_FALLBACK_MODEL != model:
-        models_to_try.append(config.LLM_FALLBACK_MODEL)
-
-    # Round-robin: start from the next key in rotation, not always pool[0]
-    start = _next_client_idx()
-    ordered_pool = pool[start:] + pool[:start]
-
-    last_exc: Exception | None = None
-    any_attempted = False
-    for current_model in models_to_try:
-        tripped_until = _circuit_breaker.get(current_model, 0)
-        if _time.monotonic() < tripped_until:
-            logger.info(f"[Gemini failover] {current_model} circuit open, skipping")
-            continue
-
-        any_attempted = True
-        all_failed = True
-        for offset, client in enumerate(ordered_pool, 1):
-            try:
-                result = client.models.generate_content(
-                    model=current_model, contents=contents, config=gen_config
-                )
-                _circuit_breaker.pop(current_model, None)
-                return result
-            except Exception as exc:
-                if _is_transient(exc):
-                    logger.warning(
-                        f"[Gemini failover] {current_model} key #{offset}/{len(pool)} "
-                        f"returned {getattr(exc, 'status_code', '?')}: {exc!s:.120} — trying next"
-                    )
-                    last_exc = exc
-                    continue
-                raise
-
-        if all_failed:
-            _circuit_breaker[current_model] = _time.monotonic() + _CIRCUIT_COOLDOWN
-            if current_model == model and len(models_to_try) > 1:
-                logger.warning(f"[Gemini failover] {model} circuit tripped for {_CIRCUIT_COOLDOWN}s, falling back to {config.LLM_FALLBACK_MODEL}")
-
-    if not any_attempted:
-        raise RuntimeError(
-            "All configured Gemini models are currently circuit-open; retry after cooldown."
-        )
-    raise last_exc  # type: ignore[misc]
+generate_with_failover = llm_client.generate_with_failover
 
 
 def safe_extract_text(response) -> str:
@@ -573,11 +570,15 @@ def safe_extract_text(response) -> str:
     return ""
 
 
-def _run_faithfulness(answer: str, chunks: List[str]) -> List[dict]:
-    """Run faithfulness verification if configured; log warnings for ungrounded claims."""
+def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> List[dict]:
+    """Run faithfulness verification if configured; log warnings for ungrounded claims.
+
+    metadatas (aligned with chunks) lets each [N] resolve to the right paper's
+    chunk(s), since citations are numbered per-paper, not per-chunk.
+    """
     try:
         import verify
-        results = verify.check_claims(answer, chunks)
+        results = verify.check_claims(answer, chunks, metadatas)
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
@@ -665,7 +666,8 @@ def answer_question_strategy_a(
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
-    result['faithfulness'] = _run_faithfulness(answer, context_data.get('chunks', []))
+    result['faithfulness'] = _run_faithfulness(
+        answer, context_data.get('chunks', []), context_data.get('metadatas', []))
     return result
 
 
@@ -758,7 +760,8 @@ def answer_question_strategy_b(
         'citations': citations,
         'english_answer': english_answer
     }
-    result['faithfulness'] = _run_faithfulness(english_answer, context_data.get('chunks', []))
+    result['faithfulness'] = _run_faithfulness(
+        english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
     return result
 
 
@@ -895,7 +898,8 @@ def answer_with_history(
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
-    result["faithfulness"] = _run_faithfulness(english_answer, context_data.get("chunks", []))
+    result["faithfulness"] = _run_faithfulness(
+        english_answer, context_data.get("chunks", []), context_data.get("metadatas", []))
     return result
 
 

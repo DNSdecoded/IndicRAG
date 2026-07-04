@@ -15,6 +15,8 @@ import logging
 from collections import OrderedDict
 from typing import Any, Optional
 
+import config as _cfg
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,8 +82,6 @@ def make_key(*args) -> str:
 
 # ── Shared cache instances ──────────────────────────────────────────────────
 # Sizes and TTLs are configurable via environment variables (see config.py).
-
-import config as _cfg
 
 llm_cache = TTLCache(max_size=_cfg.LLM_CACHE_SIZE, ttl_seconds=_cfg.LLM_CACHE_TTL)
 

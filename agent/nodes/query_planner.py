@@ -22,9 +22,15 @@ _DECOMPOSE_PROMPT = """\
 Analyse this query for vector and keyword retrieval across academic databases.
 
 Extract:
-1. sub_queries — Search-optimised phrases (max 4). Split by TOPIC AXIS, not \
+1. sub_queries — Search-optimised phrases (max 6). Split by TOPIC AXIS, not \
    by sentence count. Each phrase must be self-contained and optimised for \
-   keyword or semantic search in arXiv or OpenAlex.
+   keyword or semantic search in arXiv or OpenAlex. \
+   IF the query contains an explicit checklist (e.g. "Extract:", "Compare:", \
+   or a numbered/bulleted list of fields to find), ALSO emit one targeted \
+   sub-query per requested item — e.g. "reward function formulation", \
+   "simulation evaluation count", "sample efficiency improvement" — so \
+   field-specific facts (equations, counts, metrics) get retrieved, not just \
+   the broad topic. Prioritise these checklist items within the 6-phrase budget.
 2. year_from — Integer year if the query contains temporal language \
    ("after YYYY", "since YYYY", "post-YYYY", "proposed in YYYY+"). \
    null if no temporal constraint exists.
@@ -71,7 +77,7 @@ Output: {{"sub_queries": ["transformer attention long document understanding", \
 </query>\
 """
 
-_MAX_SUB_QUERIES = 4
+_MAX_SUB_QUERIES = 6
 
 
 def query_planner_node(state: AgentState) -> dict:
@@ -91,6 +97,8 @@ def query_planner_node(state: AgentState) -> dict:
                 temperature=0,
                 max_output_tokens=1024,
                 system_instruction=_DECOMPOSE_SYSTEM,
+                # Structured JSON decomposition — thinking off by default (config knob).
+                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
         )
         raw_resp = resp.text or ""
