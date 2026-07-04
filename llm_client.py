@@ -63,19 +63,18 @@ def _is_transient(exc: Exception) -> bool:
 
 
 def _is_permanent(exc: Exception) -> bool:
-    """Errors where retrying other keys/models is pointless: bad request, auth.
+    """Errors where retrying other keys/models is pointless: malformed request only.
 
-    Everything else (500s, connection resets, read timeouts, unclassified) is
-    treated as worth failing over — one flaky key must not abort the whole pool
-    and the fallback model.
+    Auth failures (401/403, UNAUTHENTICATED, API key not valid) are NOT permanent:
+    in a multi-key pool a single revoked/invalid key must fail over to the next key,
+    not abort the whole pool. Everything else (500s, connection resets, read timeouts,
+    unclassified) is likewise treated as worth failing over.
     """
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-    if status in (400, 401, 403, 404):
+    if status in (400, 404):
         return True
     msg = str(exc)
-    return any(s in msg for s in (
-        "INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED", "API key not valid",
-    ))
+    return "INVALID_ARGUMENT" in msg
 
 
 def _with_cache(client, model: str, gen_config):
@@ -185,6 +184,8 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
     )
 
     client = _get_client()
+    # Reuse the explicit system-prompt cache when enabled, same as the non-stream path.
+    gen_config = _with_cache(client, config.LLM_MODEL_NAME, gen_config)
     emitted = False
     for chunk in client.models.generate_content_stream(
         model=config.LLM_MODEL_NAME, contents=prompt, config=gen_config

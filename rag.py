@@ -308,7 +308,8 @@ def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
     the paper's natural structure so reconstruction-style queries see the whole
     document. Skips dense/BM25 entirely (no query embedding needed).
     """
-    got = collection.get(where=filter_dict, include=['documents', 'metadatas'])
+    got = vector_store._chroma_call(
+        collection.get, where=filter_dict, include=['documents', 'metadatas'])
     ids = got.get('ids', [])
     if not ids:
         logger.warning(f"No chunks for scoped filter {filter_dict}")

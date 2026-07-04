@@ -13,7 +13,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Run as a non-root user to limit blast radius of any RCE. The bind-mounted
+# data dirs (models/, chroma_db/, papers/ — see docker-compose.yml) must be
+# writable by this UID; chown them on the host or run `chown -R 10001` there.
+RUN useradd --create-home --uid 10001 appuser
+COPY --chown=appuser:appuser . .
+RUN mkdir -p /app/models /app/chroma_db /app/papers \
+    && chown -R appuser:appuser /app/models /app/chroma_db /app/papers
+USER appuser
 
 EXPOSE 8080
 

@@ -332,6 +332,20 @@ def purge_database(authenticated: bool = Depends(verify_admin_key)):
         vector_store.delete_collection(config.COLLECTION_NAME)
         vector_store.get_or_create_collection()
 
+        # Drop stale BM25 index and retrieval/tool caches, same as delete_paper.
+        try:
+            import bm25_search
+            bm25_search.invalidate()
+            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
+        except Exception:
+            pass
+        try:
+            from cache import retrieval_cache, tool_cache
+            retrieval_cache.invalidate()
+            tool_cache.invalidate()
+        except Exception:
+            logger.warning("Failed to invalidate caches after database purge", exc_info=True)
+
         logger.info(f"Purged database: {previous_count} chunks deleted")
 
         return PurgeResponse(

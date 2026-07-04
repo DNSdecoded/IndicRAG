@@ -66,9 +66,13 @@ def _key_matches(candidate: Optional[str], valid) -> bool:
     """
     if not candidate:
         return False
+    # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII str, so a
+    # header with bytes >127 would 500 instead of cleanly failing auth. UTF-8 encode
+    # both sides — a non-ASCII candidate simply won't match an ASCII key.
+    cand = candidate.encode("utf-8")
     keys = [valid] if isinstance(valid, str) else valid
     # Compare against every key (no early exit) so total time doesn't depend on which matched.
-    return any(hmac.compare_digest(candidate, k) for k in keys)
+    return any(hmac.compare_digest(cand, k.encode("utf-8")) for k in keys)
 
 
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):

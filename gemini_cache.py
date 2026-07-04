@@ -29,6 +29,9 @@ _registry: dict = {}
 # key -> monotonic time until which we skip retrying a failed create()
 _cooldown: dict = {}
 _lock = threading.Lock()
+# key -> Lock serializing the network create() for that key. ponytail: never
+# evicted, but bounded by distinct (client, model, prefix) keys — a handful.
+_inflight: dict = {}
 
 _CREATE_FAIL_COOLDOWN = 300  # s — don't hammer create() when it keeps failing
 _EXPIRY_SAFETY = 60          # s — refresh a cache this long before it expires
@@ -50,18 +53,32 @@ def get_or_create(client, model: str, system_instruction, tools=None):
     key = (id(client), model, _prefix_hash(system_instruction, tools))
     now = time.monotonic()
 
+    # Fast path: registry/cooldown lookups under the global lock only. The slow
+    # network create() runs OUTSIDE _lock so a stalled create for one key can't
+    # block cache lookups for every other key in the process.
     with _lock:
         cooled = _cooldown.get(key)
         if cooled is not None and now < cooled:
             return None
-
         entry = _registry.get(key)
         if entry is not None and now < entry[1] - _EXPIRY_SAFETY:
             return entry[0]
+        inflight = _inflight.get(key)
+        if inflight is None:
+            inflight = _inflight[key] = threading.Lock()
 
-        # Miss or near-expiry — (re)create under the lock. Creation is a network
-        # call, but it happens at most once per TTL per (client, prefix), so the
-        # serialization is cheap relative to how rarely it fires.
+    # Serialize create() per key (avoid a stampede of duplicate creates) without
+    # holding the global lock.
+    with inflight:
+        now = time.monotonic()
+        with _lock:
+            cooled = _cooldown.get(key)
+            if cooled is not None and now < cooled:
+                return None
+            entry = _registry.get(key)
+            if entry is not None and now < entry[1] - _EXPIRY_SAFETY:
+                return entry[0]
+
         try:
             cache = client.caches.create(
                 model=model,
@@ -72,13 +89,16 @@ def get_or_create(client, model: str, system_instruction, tools=None):
                     display_name="indicrag-sysprompt",
                 ),
             )
-            _registry[key] = (cache.name, now + config.GEMINI_CACHE_TTL)
-            _cooldown.pop(key, None)
-            logger.info(f"[GeminiCache] created {cache.name} for {model} (ttl={config.GEMINI_CACHE_TTL}s)")
-            return cache.name
         except Exception as exc:
             # Below min-token floor, unsupported model, quota, etc. — fall back to
             # inline system_instruction and don't retry for a while.
-            _cooldown[key] = now + _CREATE_FAIL_COOLDOWN
+            with _lock:
+                _cooldown[key] = time.monotonic() + _CREATE_FAIL_COOLDOWN
             logger.info(f"[GeminiCache] disabled for {model} ({exc!s:.140}); using inline prompt")
             return None
+
+        with _lock:
+            _registry[key] = (cache.name, time.monotonic() + config.GEMINI_CACHE_TTL)
+            _cooldown.pop(key, None)
+        logger.info(f"[GeminiCache] created {cache.name} for {model} (ttl={config.GEMINI_CACHE_TTL}s)")
+        return cache.name

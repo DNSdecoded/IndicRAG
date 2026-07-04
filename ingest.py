@@ -301,13 +301,11 @@ def _extract_worker(path: str, metadata: dict = None) -> tuple:
     paper_id = Path(path).stem
     res = pdf_utils.process_pdf(path)
 
+    # CPU-only work here (runs in a ProcessPoolExecutor worker). arXiv metadata
+    # enrichment is a network call — kept in the parent loop so we don't fan out
+    # N concurrent arXiv requests from the pool.
     if res is not None:
         m['content_hash'] = _content_hash(res['text'])
-        if config.ENRICH_METADATA:
-            import metadata_enrich
-            enriched = metadata_enrich.enrich_from_arxiv(res['title'])
-            if enriched:
-                m = {**enriched, **m}
 
     return path, paper_id, res, m
 
@@ -350,7 +348,8 @@ def ingest_directory(
     
     if not pdf_files:
         logger.warning(f"No PDF files found in {pdf_dir} matching pattern '{pattern}'")
-        return {"total_files": 0, "successful": 0, "failed": 0, "total_chunks": 0}
+        return {"total_files": 0, "successful": 0, "skipped": 0,
+                "failed": 0, "total_chunks": 0, "failed_files": []}
     
     logger.info(f"Found {len(pdf_files)} PDF files to ingest")
     logger.info("=" * 60)
@@ -405,6 +404,15 @@ def ingest_directory(
                     stats["failed_files"].append(path)
                     continue
 
+                # arXiv enrichment (network) in the parent, not the CPU workers.
+                if config.ENRICH_METADATA:
+                    import metadata_enrich
+                    enriched = metadata_enrich.enrich_from_arxiv(result['title'])
+                    if enriched:
+                        # Caller/worker-computed metadata (file_hash, content_hash)
+                        # wins over enriched fields.
+                        metadata = {**enriched, **metadata}
+
                 # Build chunks + dedup now; embedding is batched below.
                 prepared = _build_paper_chunks(
                     paper_id, result['title'], result['sections'],
@@ -428,13 +436,6 @@ def ingest_directory(
     # Batch-embed every chunk across all papers in one pass — BGE-M3 is far more
     # efficient on one large batch than on one embed call per paper.
     if prepared_papers:
-        for p in prepared_papers:
-            if p['needs_deletion']:
-                try:
-                    vector_store.delete_by_paper_id(p['paper_id'], collection)
-                except Exception as del_err:
-                    logger.error(f"Failed to delete old chunks for {p['paper_id']}: {del_err}")
-
         all_chunks = [c for p in prepared_papers for c in p['chunks']]
         all_metadata = [m for p in prepared_papers for m in p['metadatas']]
         all_ids = [i for p in prepared_papers for i in p['ids']]
@@ -443,7 +444,18 @@ def ingest_directory(
             progress_cb(total, total, f"Embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
         logger.info(f"Batch-embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
 
+        # Embed BEFORE deleting old chunks: if embedding fails, a changed paper
+        # keeps its existing chunks rather than being left empty. Matches the
+        # embed → delete → add ordering in ingest_paper().
         all_embeddings = embeddings.embed_passages(all_chunks)
+
+        for p in prepared_papers:
+            if p['needs_deletion']:
+                try:
+                    vector_store.delete_by_paper_id(p['paper_id'], collection)
+                except Exception as del_err:
+                    logger.error(f"Failed to delete old chunks for {p['paper_id']}: {del_err}")
+
         # ponytail: one array of shape (n_chunks, 1024) in memory — fine at corpus
         # scale; embed_passages already mini-batches internally. Chunk the add if
         # a single corpus ever exceeds tens of thousands of chunks.
