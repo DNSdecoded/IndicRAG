@@ -18,7 +18,7 @@ API Key authentication secures your endpoints. It is enabled by default in produ
    X-API-Key: your_secure_key_1
    ```
 
-*(Note: If `API_KEYS` is left empty or commented out, the API will be completely open. This is strictly meant for local development.)*
+*(Note: If `API_KEYS` is left empty, production startup (`start_server.py` without `--dev`) refuses to boot. To run an intentionally open server on a private host, set `ALLOW_UNAUTHENTICATED=1` in `.env`. Dev mode (`--dev`) only warns.)*
 
 ---
 
@@ -29,6 +29,16 @@ The FastAPI server is instrumented with **Prometheus FastAPI Instrumentator**.
 - Metrics are automatically tracked for all endpoints (latency, request counts, errors).
 - Access the metrics endpoint at: `http://localhost:8000/metrics`
 - Configure your centralized Prometheus scraper to pull from this `/metrics` endpoint.
+- When `API_KEYS` is set, `/metrics` requires the same `X-API-Key` header. Configure the scraper accordingly, e.g.:
+  ```yaml
+  scrape_configs:
+    - job_name: indicrag
+      metrics_path: /metrics
+      static_configs: [{ targets: ["localhost:8000"] }]
+      http_headers:            # Prometheus ≥ 3.0 (2.55 experimental)
+        X-API-Key:
+          values: ["your_secure_key_1"]
+  ```
 
 ---
 

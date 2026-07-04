@@ -11,6 +11,8 @@ models
 chroma_db
 papers
 *.db
+*.db-wal
+*.db-shm
 .env
 .serena
 .mimocode

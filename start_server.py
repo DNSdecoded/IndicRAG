@@ -53,14 +53,21 @@ def check_api_key():
     return True
 
 
-def check_auth_config():
-    """Warn when the server will be reachable without endpoint authentication.
+def check_auth_config(production=True):
+    """Fail fast when a production server would bind 0.0.0.0 with no endpoint auth.
 
     The server binds 0.0.0.0; without API_KEYS every endpoint (including the
-    destructive /purge/* routes) accepts anonymous requests. Fine on a private
-    machine, dangerous on a public host — warn loudly but don't block.
+    destructive /purge/* routes) accepts anonymous requests. In production mode
+    this blocks startup unless ALLOW_UNAUTHENTICATED=1 explicitly opts in;
+    dev mode (--dev) only warns.
     """
     if not os.getenv('API_KEYS'):
+        if production and os.getenv('ALLOW_UNAUTHENTICATED') != '1':
+            logger.error("✗ API_KEYS not set — server would bind 0.0.0.0 with NO endpoint auth.")
+            logger.error("  All endpoints (including DELETE /purge/*) would accept anonymous requests.")
+            logger.info("  Set API_KEYS (and ADMIN_API_KEY) in .env, or opt in to anonymous")
+            logger.info("  access with ALLOW_UNAUTHENTICATED=1 (private hosts only).")
+            return False
         logger.warning("⚠ API_KEYS not set — server binds 0.0.0.0 with NO endpoint auth.")
         logger.warning("  All endpoints (including DELETE /purge/*) accept anonymous requests.")
         logger.warning("  Set API_KEYS (and ADMIN_API_KEY) in .env before exposing publicly.")
@@ -178,11 +185,11 @@ def main():
             check_env_file(),
             check_api_key(),
             check_dependencies(),
-            check_auth_config(),
+            check_auth_config(production=not args.dev),
             check_documents()
         ]
-        
-        if not all(checks[:4]):  # First 4 are critical
+
+        if not all(checks[:5]):  # First 5 are critical (auth blocks in production mode)
             logger.error("\n✗ Pre-flight checks failed!")
             logger.info("Fix the issues above and try again\n")
             sys.exit(1)

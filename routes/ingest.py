@@ -432,7 +432,9 @@ async def reindex_document(
 
 
 @router.post("/upload", response_model=UploadResponse, tags=["Management"])
+@limiter.limit("10/minute")
 async def upload_pdf(
+    request: Request,
     file: UploadFile = File(...),
     authenticated: bool = Depends(verify_api_key)
 ):
@@ -450,6 +452,13 @@ async def upload_pdf(
 
     safe_filename = Path(file.filename).name
     destination = config.PAPERS_DIR / safe_filename
+
+    if destination.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A file named '{safe_filename}' already exists. "
+                   "Delete it first (DELETE /papers/{paper_id}) or rename the upload."
+        )
 
     try:
         MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB

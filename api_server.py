@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
@@ -19,6 +19,7 @@ import config
 from deps import (
     STATIC_DIR,
     limiter,
+    verify_api_key,
 )
 from routes import query, chat, ingest, agent, management, feedback
 from middleware import RequestIdFilter, RequestIdMiddleware
@@ -84,7 +85,14 @@ def _safe_get_route_name(request):
 _pi_routing.get_route_name = _safe_get_route_name
 
 from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402 — after routing monkeypatch above
-Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)
+# /metrics requires the same X-API-Key as the rest of the API (no-op when
+# API_KEYS is unset) — route latency/count data shouldn't be public.
+Instrumentator().instrument(app).expose(
+    app,
+    include_in_schema=False,
+    should_gzip=True,
+    dependencies=[Depends(verify_api_key)],
+)
 
 # Mount static files directory
 if STATIC_DIR.exists():
