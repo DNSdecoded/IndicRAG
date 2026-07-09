@@ -33,3 +33,9 @@ class AgentState(TypedDict):
     # monotonic() timestamp stamped at run start, used by the reflexion loop to
     # honour AGENT_REFLEXION_BUDGET_S. Optional so older callers still type-check.
     start_time: Optional[float]
+
+    # Phase 2: set by finalizer_node. answer_confidence is a directional 0..1 blend
+    # of faithfulness, completeness, and citation coverage; abstained flags an
+    # explicit insufficient-evidence answer.
+    answer_confidence: Optional[float]
+    abstained: bool

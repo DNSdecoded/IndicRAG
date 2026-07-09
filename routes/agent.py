@@ -66,6 +66,8 @@ class AgentQueryResponse(BaseModel):
     sources: List[AgentSource]
     processing_time: float
     timestamp: str
+    answer_confidence: Optional[float] = None
+    abstained: bool = False
 
 
 @router.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
@@ -193,4 +195,6 @@ async def agent_query(
         sources=sources,
         processing_time=processing_time,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        answer_confidence=result.get("answer_confidence"),
+        abstained=result.get("abstained", False),
     )

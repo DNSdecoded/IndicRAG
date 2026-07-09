@@ -406,6 +406,17 @@ SECTION_HEADERS = list(SECTION_HEADERS) + INDIC_SECTION_HEADERS
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # ============================================================================
+# Phase 2 — surfaced confidence + abstention
+# ============================================================================
+# Aggregate a per-answer confidence from the final reflexion feedback and expose
+# an explicit "insufficient evidence" path. Weights are uncalibrated until the
+# Phase 1 eval reliability curve exists — treat the number as directional.
+ANSWER_CONFIDENCE_ENABLE = os.getenv("ANSWER_CONFIDENCE_ENABLE", "true").lower() == "true"
+# Abstain when the answer is grounded (high faithfulness) but the corpus does not
+# cover the query (completeness below this floor) after the reflexion budget is spent.
+ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"))
+
+# ============================================================================
 # Version
 # ============================================================================
 VERSION = "2.3.0-dev"
