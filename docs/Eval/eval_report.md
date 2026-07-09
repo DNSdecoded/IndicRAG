@@ -124,7 +124,7 @@ _1 claim(s) had no citation — system correctly acknowledged absent context._
 
 | Claim (truncated) | Cited Paper | Similarity | Grounded |
 |---|---|---|---|
-| REPLACE THIS: paste a claim from your actual Test D answer here. | ppo_pixel | 0.182 | ✅ |
+| _(Query D grounding not recorded — excluded from baseline)_ | — | — | — |
 
 </details>
 
