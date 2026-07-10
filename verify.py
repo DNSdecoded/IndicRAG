@@ -1,4 +1,5 @@
 """Claim-level faithfulness check via cross-encoder NLI."""
+import logging
 import re
 import threading
 import numpy as np
@@ -7,6 +8,7 @@ from typing import List
 from sentence_transformers import CrossEncoder
 import config
 
+logger = logging.getLogger(__name__)
 _model = None
 _lock = threading.Lock()
 
@@ -16,13 +18,22 @@ def _load():
     if _model is None:
         with _lock:
             if _model is None:
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                # An NLI model (not bge-reranker) is required — bge-reranker scores
-                # relevance, not entailment; wrong distribution for faithfulness
-                # thresholding (BUG-003). Default is now MULTILINGUAL so Indic-language
-                # claims are actually verified, not scored by an English-only model.
-                _model = CrossEncoder(config.NLI_MODEL_NAME, device=device,
-                                      cache_folder=str(config.MODELS_CACHE_DIR))
+                # int8 ONNX is ~11x faster than fp32 on CPU (10s -> 0.9s/pair), which
+                # is the difference between faithfulness fitting the agent timeout or
+                # not. Falls back to fp32 torch if the ONNX stack/export is unavailable.
+                try:
+                    import onnx_ce
+                    _model = onnx_ce.load(config.NLI_MODEL_NAME, "nli")
+                    logger.info("[verify] using int8 ONNX NLI model")
+                except Exception as e:
+                    logger.warning(f"[verify] ONNX load failed ({e}); using fp32 torch")
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    # An NLI model (not bge-reranker) is required — bge-reranker scores
+                    # relevance, not entailment; wrong distribution for faithfulness
+                    # thresholding (BUG-003). Default is now MULTILINGUAL so Indic-language
+                    # claims are actually verified, not scored by an English-only model.
+                    _model = CrossEncoder(config.NLI_MODEL_NAME, device=device,
+                                          cache_folder=str(config.MODELS_CACHE_DIR))
     return _model
 
 

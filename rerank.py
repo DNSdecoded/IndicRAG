@@ -16,10 +16,18 @@ def _load():
     if _model is None:
         with _lock:
             if _model is None:
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                logger.info(f"Loading reranker {config.RERANK_MODEL_NAME} on {device}")
-                _model = CrossEncoder(config.RERANK_MODEL_NAME, device=device,
-                                      cache_folder=str(config.MODELS_CACHE_DIR))
+                # int8 ONNX is ~3x faster than fp32 on CPU (35s -> 11s / 15 pairs).
+                # Falls back to fp32 torch if the ONNX stack/export is unavailable.
+                try:
+                    import onnx_ce
+                    _model = onnx_ce.load(config.RERANK_MODEL_NAME, "rerank")
+                    logger.info("Loading reranker (int8 ONNX)")
+                except Exception as e:
+                    logger.warning(f"Reranker ONNX load failed ({e}); using fp32 torch")
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    logger.info(f"Loading reranker {config.RERANK_MODEL_NAME} on {device}")
+                    _model = CrossEncoder(config.RERANK_MODEL_NAME, device=device,
+                                          cache_folder=str(config.MODELS_CACHE_DIR))
     return _model
 
 
