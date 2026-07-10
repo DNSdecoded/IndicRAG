@@ -139,6 +139,11 @@ def generate_with_failover(model: str, contents, gen_config):
         for offset, client in enumerate(ordered_pool, 1):
             try:
                 call_config = _with_cache(client, current_model, gen_config)
+                # Gemma (fallback) rejects thinking_config with a permanent 400.
+                # Callers build configs for Gemini; strip the field when failing
+                # over to a model that doesn't support it, or the whole chain aborts.
+                if not _supports_thinking(current_model) and getattr(call_config, "thinking_config", None) is not None:
+                    call_config = call_config.model_copy(update={"thinking_config": None})
                 result = client.models.generate_content(
                     model=current_model, contents=contents, config=call_config
                 )
