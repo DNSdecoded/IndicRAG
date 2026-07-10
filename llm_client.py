@@ -77,6 +77,12 @@ def _is_permanent(exc: Exception) -> bool:
     return "INVALID_ARGUMENT" in msg
 
 
+def _supports_thinking(model: str) -> bool:
+    """Gemini models accept thinking_config; Gemma (the fallback) rejects it with a
+    permanent 400. Gate the field on the model so failover to Gemma doesn't abort."""
+    return "gemma" not in model.lower()
+
+
 def _with_cache(client, model: str, gen_config):
     """Return gen_config, or a copy that references a cached system prompt.
 
@@ -160,41 +166,91 @@ def generate_with_failover(model: str, contents, gen_config):
     raise last_exc  # type: ignore[misc]
 
 
-def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction: str = None):
-    """Generator: stream LLM response chunks using primary model with key cycling.
+def _stream_gen_config(model: str, max_tokens: int, system_instruction: str):
+    """Build a streaming GenerateContentConfig for a specific model.
 
-    Yields non-empty text chunks as they arrive. No model failover — primary model only.
-    ponytail: single-model streaming; add failover if primary is unreliable.
+    thinking_config is only set for models that support it — Gemma rejects it with
+    a permanent 400. Disabling thinking on Gemini keeps it from spending most of
+    max_output_tokens on thoughts and truncating the visible answer.
     """
     from google.genai import types
 
-    if max_tokens is None:
-        max_tokens = config.LLM_MAX_TOKENS
-
-    _ensure_pool()
-
-    gen_config = types.GenerateContentConfig(
+    kwargs = dict(
         temperature=config.LLM_TEMPERATURE,
         max_output_tokens=max_tokens,
         safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
-        # Disable thinking: gemini-3.5-flash otherwise spends most of max_output_tokens
-        # on thoughts (measured 1962/2048), truncating the visible answer to a few lines.
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
+    if _supports_thinking(model):
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    return types.GenerateContentConfig(**kwargs)
 
-    client = _get_client()
-    # Reuse the explicit system-prompt cache when enabled, same as the non-stream path.
-    gen_config = _with_cache(client, config.LLM_MODEL_NAME, gen_config)
-    emitted = False
-    for chunk in client.models.generate_content_stream(
-        model=config.LLM_MODEL_NAME, contents=prompt, config=gen_config
-    ):
-        try:
-            if chunk.text:
-                emitted = True
-                yield chunk.text
-        except (ValueError, AttributeError) as exc:
-            logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
-    if not emitted:
-        raise RuntimeError("No text generated from Gemini stream")
+
+def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction: str = None):
+    """Generator: stream LLM response chunks with key rotation and model failover.
+
+    Mirrors generate_with_failover for the streaming path: rotates through every API
+    key and falls back to LLM_FALLBACK_MODEL on transient errors. Failover only works
+    BEFORE the first chunk is emitted — once tokens start flowing we're committed to
+    that stream, so a mid-stream failure re-raises rather than restarting the answer.
+    """
+    if max_tokens is None:
+        max_tokens = config.LLM_MAX_TOKENS
+
+    _ensure_pool()
+    pool = _client_pool
+    models_to_try = [config.LLM_MODEL_NAME]
+    if config.LLM_FALLBACK_MODEL and config.LLM_FALLBACK_MODEL != config.LLM_MODEL_NAME:
+        models_to_try.append(config.LLM_FALLBACK_MODEL)
+
+    start = _next_client_idx()
+    ordered_pool = pool[start:] + pool[:start]
+
+    last_exc: Exception | None = None
+    any_attempted = False
+    for current_model in models_to_try:
+        if time.monotonic() < _circuit_breaker.get(current_model, 0):
+            logger.info(f"[Gemini stream failover] {current_model} circuit open, skipping")
+            continue
+
+        base_config = _stream_gen_config(current_model, max_tokens, system_instruction)
+        for offset, client in enumerate(ordered_pool, 1):
+            any_attempted = True
+            gen_config = _with_cache(client, current_model, base_config)
+            emitted = False
+            try:
+                for chunk in client.models.generate_content_stream(
+                    model=current_model, contents=prompt, config=gen_config
+                ):
+                    try:
+                        if chunk.text:
+                            emitted = True
+                            yield chunk.text
+                    except (ValueError, AttributeError) as exc:
+                        logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+                if not emitted:
+                    raise RuntimeError("No text generated from Gemini stream")
+                _circuit_breaker.pop(current_model, None)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if emitted:
+                    raise  # committed to this stream — cannot restart the answer
+                if _is_permanent(exc):
+                    raise  # malformed request — other keys/models won't help
+                logger.warning(
+                    f"[Gemini stream failover] {current_model} key #{offset}/{len(pool)} "
+                    f"failed ({getattr(exc, 'status_code', '?')}): {exc!s:.120} — trying next"
+                )
+                continue
+
+        _circuit_breaker[current_model] = time.monotonic() + _CIRCUIT_COOLDOWN
+        if current_model == config.LLM_MODEL_NAME and len(models_to_try) > 1:
+            logger.warning(
+                f"[Gemini stream failover] {current_model} exhausted all keys, "
+                f"falling back to {config.LLM_FALLBACK_MODEL}"
+            )
+
+    if not any_attempted:
+        raise RuntimeError("All configured Gemini models are currently circuit-open; retry after cooldown.")
+    raise last_exc  # type: ignore[misc]
