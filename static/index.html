@@ -754,7 +754,9 @@ function renderContent(text) {
     });
     return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
 }
-function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
+// Escapes text AND attribute contexts — quotes included, since esc() is used
+// inside href="..."/title="..." (textContent→innerHTML would leave quotes raw).
+function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 // Phase 3: render a cited paper's figure/table crops as clickable thumbnails.
 function citeFigs(c) {
     return (c.figures || []).map(f =>
