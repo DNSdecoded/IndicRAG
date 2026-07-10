@@ -125,6 +125,14 @@ USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
 ENABLE_MULTIMODAL_INGEST = os.getenv("ENABLE_MULTIMODAL_INGEST", "false").lower() == "true"
 MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12"))
 
+# Phase 5 — contradiction/consensus detection. When on, the answer generator
+# runs pairwise NLI (the same faithfulness model) over the top retrieved passages
+# and, if any pair contradicts above the threshold, instructs the model to
+# present both positions with citations instead of silently picking one. Off by
+# default — adds O(n^2) NLI passes over a capped passage set at answer time.
+CONTRADICTION_DETECT_ENABLE = os.getenv("CONTRADICTION_DETECT_ENABLE", "false").lower() == "true"
+CONTRADICTION_NLI_THRESHOLD = float(os.getenv("CONTRADICTION_NLI_THRESHOLD", "0.6"))
+
 # Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
 ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
 DEDUP_PAPERS = os.getenv("DEDUP_PAPERS", "true").lower() == "true"
@@ -174,6 +182,11 @@ NLI_MODEL_NAME = os.getenv(
 #   cross-encoder/nli-deberta-v3-base: 0=contradiction, 1=entailment, 2=neutral
 # Set this to match whatever NLI_MODEL_NAME you choose or scores invert silently.
 NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
+# Contradiction class index in the SAME model's logits (Phase 5 contradiction
+# detection). Mirrors NLI_ENTAILMENT_INDEX and follows the same per-model order:
+#   mDeBERTa-xnli (default):     2=contradiction
+#   cross-encoder/nli-deberta-v3-base: 0=contradiction
+NLI_CONTRADICTION_INDEX = int(os.getenv("NLI_CONTRADICTION_INDEX", "2"))
 
 # ============================================================================
 # Vector Store
