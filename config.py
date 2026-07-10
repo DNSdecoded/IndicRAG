@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).parent
 PAPERS_DIR = PROJECT_ROOT / "papers"
 CHROMA_DB_DIR = PROJECT_ROOT / "chroma_db"
 MODELS_CACHE_DIR = PROJECT_ROOT / "models"
+FIGURES_DIR = PROJECT_ROOT / "figures"  # Phase 3: saved figure/table crops
 SESSIONS_DB_PATH = Path(os.getenv("SESSIONS_DB_PATH", PROJECT_ROOT / "sessions.db"))
 
 
@@ -37,7 +38,8 @@ def ensure_directories():
     directories = {
         "PAPERS_DIR": PAPERS_DIR,
         "CHROMA_DB_DIR": CHROMA_DB_DIR,
-        "MODELS_CACHE_DIR": MODELS_CACHE_DIR
+        "MODELS_CACHE_DIR": MODELS_CACHE_DIR,
+        "FIGURES_DIR": FIGURES_DIR,
     }
     
     for name, directory in directories.items():
@@ -114,6 +116,14 @@ COLBERT_WEIGHT = float(os.getenv("COLBERT_WEIGHT", "0.5"))  # dense-vs-colbert f
 
 # HyDE: embed a drafted hypothetical answer instead of the bare query
 USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
+
+# Phase 3 — multimodal figure/table indexing.
+# On: ingest extracts figure/table crops + nearby captions, has the Gemini VLM
+# describe each, and indexes "caption + description" as chunks in the SAME
+# collection (retrieval/citation unchanged). Off by default — adds one VLM call
+# per figure at ingest, bounded by MULTIMODAL_MAX_FIGS_PER_DOC.
+ENABLE_MULTIMODAL_INGEST = os.getenv("ENABLE_MULTIMODAL_INGEST", "false").lower() == "true"
+MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12"))
 
 # Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
 ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
