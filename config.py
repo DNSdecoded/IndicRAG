@@ -248,6 +248,11 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
 # work. Keep below AGENT_TIMEOUT so it fires first.
 AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
+# Max sub-queries the planner emits (and tools run per cycle). Each sub-query does a
+# retrieve + CPU reranker pass (~15 pairs); those passes are CPU-bound so N concurrent
+# ones thrash rather than parallelize. Over a small corpus, 3 covers most queries at a
+# fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
+AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
 

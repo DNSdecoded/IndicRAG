@@ -54,7 +54,7 @@ RETRY RULES:
 """
 
 
-_MAX_CORPUS_QUERIES = 6   # matches query_planner._MAX_SUB_QUERIES so every planned sub-query gets a corpus call
+_MAX_CORPUS_QUERIES = config.AGENT_MAX_SUB_QUERIES  # matches query_planner._MAX_SUB_QUERIES so every planned sub-query gets a corpus call
 _MAX_EXTERNAL_CALLS = 2   # LLM-chosen external tool calls kept alongside
 
 
