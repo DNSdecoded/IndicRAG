@@ -50,11 +50,19 @@ class QueryRequest(BaseModel):
         return v
 
 
+class FigureRef(BaseModel):
+    """A figure/table crop a cited paper contributed (Phase 3 multimodal)."""
+    page: Optional[int] = None
+    chunk_type: str
+    url: str
+
+
 class Citation(BaseModel):
     """Citation information."""
     number: str
     title: str
     section: str
+    figures: List[FigureRef] = []
 
 
 class QueryResponse(BaseModel):
@@ -193,7 +201,8 @@ async def query_question(
             Citation(
                 number=cite['number'],
                 title=cite['title'],
-                section=cite['section']
+                section=cite['section'],
+                figures=cite.get('figures', []),
             )
             for cite in result['citations']
         ]

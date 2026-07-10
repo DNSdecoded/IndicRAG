@@ -372,6 +372,9 @@
         .cite-row { font-family: 'JetBrains Mono', monospace; font-size: .7rem; color: var(--text-3); padding: .35rem .6rem; background: var(--surface-up); border-radius: 5px; margin-bottom: .3rem; border-left: 2px solid var(--cite-bar); transition: var(--transition); border: 1px solid var(--border); }
         .cite-row:last-child { margin-bottom: 0; }
         .cite-num { font-weight: 600; color: var(--primary); margin-right: .35rem; }
+        .cite-fig-link { display: inline-block; margin: .4rem .4rem 0 0; }
+        .cite-fig { height: 72px; max-width: 160px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); vertical-align: top; transition: var(--transition); }
+        .cite-fig:hover { border-color: var(--primary); }
 
         /* Typing (standard mode) */
         .typing-row { display: flex; gap: .75rem; align-items: flex-start; }
@@ -752,6 +755,14 @@ function renderContent(text) {
     return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
 }
 function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
+// Phase 3: render a cited paper's figure/table crops as clickable thumbnails.
+function citeFigs(c) {
+    return (c.figures || []).map(f =>
+        `<a class="cite-fig-link" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"`
+        + ` title="${esc(f.chunk_type)}${f.page ? ' · p'+esc(f.page) : ''}">`
+        + `<img class="cite-fig" src="${esc(f.url)}" alt="${esc(f.chunk_type)}" loading="lazy"></a>`
+    ).join('');
+}
 function safeHref(u) { try { const p = new URL(u, window.location.origin); return (p.protocol === 'https:' || p.protocol === 'http:') ? p.href : ''; } catch { return ''; } }
 
 // ── SESSION ────────────────────────────────────────────────────
@@ -860,7 +871,7 @@ function appendAssistantBubble(data) {
     const citesHtml = cites.length ? `
         <div class="asst-citations">
             <div class="citations-label">Sources</div>
-            ${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}
+            ${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}${citeFigs(c)}</div>`).join('')}
         </div>` : '';
     const row = document.createElement('div');
     row.className = 'msg-row assistant';
@@ -1048,7 +1059,7 @@ async function sendMessage() {
                             (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
                             `<span class="meta-chip chip-time">${elapsed}s</span>` +
                             _respCopyBtn(acc);
-                        if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}</div>`;
+                        if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}${citeFigs(c)}</div>`).join('')}</div>`;
                         if (evt.query_id) renderFeedbackButtons(sFeedback, evt.query_id);
                         scrollBottom();
                     }

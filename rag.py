@@ -35,6 +35,16 @@ def citation_number_map(metadatas: List[Dict]) -> Dict[int, Dict]:
     return num_to_meta
 
 
+def _crop_url(crop_path: str) -> Optional[str]:
+    """Map a stored crop path to its /figures URL, or None if outside FIGURES_DIR."""
+    from pathlib import Path
+    try:
+        rel = Path(crop_path).resolve().relative_to(config.FIGURES_DIR.resolve())
+        return "/figures/" + rel.as_posix()
+    except (ValueError, OSError):
+        return None
+
+
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
     """
     Extract [Cite:N] citations from answer text and resolve them to papers.
@@ -72,6 +82,18 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         if s not in title_sections.setdefault(t, []):
             title_sections[t].append(s)
 
+    # Phase 3: figure/table crops a paper contributed, so the UI can render them.
+    figures_by_paper: Dict[str, list] = {}
+    for m_ in metadatas:
+        if m_.get('chunk_type') in ('figure', 'table') and m_.get('crop_path'):
+            url = _crop_url(m_['crop_path'])
+            if url:
+                figures_by_paper.setdefault(m_.get('paper_id'), []).append({
+                    'page': m_.get('page'),
+                    'chunk_type': m_.get('chunk_type'),
+                    'url': url,
+                })
+
     citations = []
     for num in sorted(seen_nums):
         meta = num_to_meta.get(num)
@@ -82,6 +104,7 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
                 'number': str(num),
                 'title': meta.get('title', 'Unknown'),
                 'section': ', '.join(sections),
+                'figures': figures_by_paper.get(meta.get('paper_id'), []),
             })
     return citations
 

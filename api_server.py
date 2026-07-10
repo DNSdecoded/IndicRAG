@@ -98,6 +98,11 @@ Instrumentator().instrument(app).expose(
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Phase 3: serve figure/table crops so the UI can render cited figures.
+# StaticFiles is path-traversal safe; read-only. Only mounted when the dir exists.
+if config.FIGURES_DIR.exists():
+    app.mount("/figures", StaticFiles(directory=str(config.FIGURES_DIR)), name="figures")
+
 # CORS configuration — env-driven for deployment flexibility
 _cors_origins_env = os.getenv("CORS_ORIGINS")
 _cors_origins = (
