@@ -38,6 +38,13 @@ tenacity>=9.1.2
 sentencepiece>=0.2.1
 sacremoses>=0.1.1
 
+# ONNX int8 inference for cross-encoders (reranker + NLI faithfulness) on CPU.
+# CPU-only boxes run the fp32 cross-encoders at ~10-100s/pass; int8 ONNX is ~2-4x
+# faster. optimum provides export_dynamic_quantized_onnx_model; onnxruntime runs it.
+optimum[onnxruntime]>=2.1.0
+onnx>=1.22.0
+onnxruntime>=1.23.2
+
 # Agentic layer
 langgraph>=0.2.0
 tavily-python>=0.3.0
