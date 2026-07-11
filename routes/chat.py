@@ -165,6 +165,62 @@ async def chat_stream(
     return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 
 
+class ChatSessionSummary(BaseModel):
+    """One row in the chat-history list."""
+    session_id: str
+    preview: str
+    turns: int
+    created_at: str
+    updated_at: str
+
+
+class ChatHistoryResponse(BaseModel):
+    """Full message history for a single session."""
+    session_id: str
+    messages: List[dict]
+    created_at: str
+    updated_at: str
+
+
+@router.get("/chat", response_model=List[ChatSessionSummary], tags=["Chat"])
+async def list_sessions(authenticated: bool = Depends(verify_api_key)):
+    """List saved chat sessions, most-recent first. Global — no per-user isolation."""
+    from deps import _sessions, _sessions_lock, _evict_stale_sessions
+    summaries: List[ChatSessionSummary] = []
+    with _sessions_lock:
+        _evict_stale_sessions()
+        for sid, s in _sessions.items():
+            msgs = s.get("messages", [])
+            if not msgs:  # skip empty sessions (created but never used)
+                continue
+            first_user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+            summaries.append(ChatSessionSummary(
+                session_id=sid,
+                preview=first_user[:120],
+                turns=len(msgs) // 2,
+                created_at=s.get("created_at", ""),
+                updated_at=s.get("updated_at", ""),
+            ))
+    summaries.sort(key=lambda x: x.updated_at, reverse=True)
+    return summaries
+
+
+@router.get("/chat/{session_id}", response_model=ChatHistoryResponse, tags=["Chat"])
+async def get_session_history(session_id: str, authenticated: bool = Depends(verify_api_key)):
+    """Return a session's full message history so the UI can reopen the conversation."""
+    from deps import _sessions, _sessions_lock
+    with _sessions_lock:
+        s = _sessions.get(session_id)
+        if s is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
+        return ChatHistoryResponse(
+            session_id=session_id,
+            messages=list(s.get("messages", [])),
+            created_at=s.get("created_at", ""),
+            updated_at=s.get("updated_at", ""),
+        )
+
+
 @router.delete("/chat/{session_id}", tags=["Chat"])
 async def delete_session(
     session_id: str,
