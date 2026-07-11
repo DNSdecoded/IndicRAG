@@ -542,6 +542,7 @@
         </button>
         <button class="sfooter-btn" onclick="showHistoryModal()">🕘 Chat History</button>
         <button class="sfooter-btn" onclick="showWatchModal()">📡 Topic Watches</button>
+        <button class="sfooter-btn" onclick="showReportModal()">📄 Lit Review</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
     </div>
@@ -672,6 +673,28 @@
         <div id="historyList" style="margin-top:1.1rem"></div>
         <div class="modal-actions">
             <button class="modal-btn" onclick="hideHistoryModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="reportOverlay">
+    <div class="modal" style="max-width:560px">
+        <h3>📄 Literature Review</h3>
+        <p>Generate a sectioned, cited review of a topic from your corpus. Runs as a background job; download the Markdown when it's done.</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem">
+            <input id="reportTopic" maxlength="500" placeholder="Topic — e.g. terahertz antenna miniaturization"
+                style="flex:1 1 100%;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+            <select id="reportLang" style="flex:1;min-width:120px;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+                <option value="en">English</option><option value="hi">हिंदी</option><option value="te">తెలుగు</option>
+                <option value="ta">தமிழ்</option><option value="bn">বাংলা</option><option value="mr">मराठी</option>
+                <option value="gu">ગુજરાતી</option><option value="kn">ಕನ್ನಡ</option><option value="ml">മലയാളം</option>
+                <option value="pa">ਪੰਜਾਬੀ</option><option value="or">ଓଡ଼ିଆ</option><option value="ur">اردو</option>
+            </select>
+            <button id="reportBtn" class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="generateReport()">Generate</button>
+        </div>
+        <div id="reportStatus" style="margin-top:1.1rem"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hideReportModal()">Close</button>
         </div>
     </div>
 </div>
@@ -1410,6 +1433,68 @@ async function viewDigest(id, btn){
         showDigest(d.digest);
     }catch(e){ showToast(`✗ ${e.message}`,'error'); }
     finally{ btn.disabled=false; btn.textContent=old; }
+}
+
+// ── LIT REVIEW ─────────────────────────────────────────────────
+let reportPoll=null;
+function showReportModal(){ document.getElementById('reportOverlay').classList.add('active'); }
+function hideReportModal(){ document.getElementById('reportOverlay').classList.remove('active'); if(reportPoll){clearInterval(reportPoll);reportPoll=null;} }
+
+async function generateReport(){
+    const topic=document.getElementById('reportTopic').value.trim();
+    if(!topic){ showToast('Enter a topic','error'); return; }
+    const btn=document.getElementById('reportBtn'); btn.disabled=true; btn.textContent='Starting…';
+    const status=document.getElementById('reportStatus');
+    try{
+        const r=await fetch(`${API}/report`,{
+            method:'POST', headers:authHeaders({'Content-Type':'application/json'}),
+            body:JSON.stringify({topic, language:document.getElementById('reportLang').value})
+        });
+        const d=await r.json();
+        if(r.status===404){ status.innerHTML='<div style="color:var(--text-3);font-size:.82rem">Reports are disabled (set <code>REPORT_ENABLE=true</code>).</div>'; return; }
+        if(!r.ok) throw new Error(formatError(d)||'Failed to start report');
+        pollReport(d.job_id);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+    finally{ btn.disabled=false; btn.textContent='Generate'; }
+}
+
+function pollReport(jobId){
+    const status=document.getElementById('reportStatus');
+    if(reportPoll) clearInterval(reportPoll);
+    const tick=async()=>{
+        try{
+            const r=await fetch(`${API}/report/status/${jobId}`,{headers:authHeaders()});
+            const d=await r.json();
+            if(!r.ok) throw new Error(formatError(d)||'Status failed');
+            if(d.status==='success'){
+                clearInterval(reportPoll); reportPoll=null;
+                status.innerHTML=`<div style="border:1px solid var(--border);border-radius:8px;padding:.8rem;background:var(--surface-up)">
+                    <div style="font-weight:600;font-size:.85rem;margin-bottom:.4rem">✓ Report ready</div>
+                    <div style="font-size:.75rem;color:var(--text-3);margin-bottom:.6rem">${(d.sections||[]).length} sections · ${d.citation_count||0} citations</div>
+                    <button class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="downloadReport('${jobId}')">⬇ Download Markdown</button></div>`;
+            }else if(d.status==='failed'){
+                clearInterval(reportPoll); reportPoll=null;
+                status.innerHTML=`<div style="color:#ef4444;font-size:.82rem">Report failed: ${esc(d.error||'unknown error')}</div>`;
+            }else{
+                const p=d.progress_message||'Working…';
+                const frac=d.progress_total?` (${d.progress_current}/${d.progress_total})`:'';
+                status.innerHTML=`<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">⏳ ${esc(p)}${frac}</div>`;
+            }
+        }catch(e){ clearInterval(reportPoll); reportPoll=null; status.innerHTML=`<div style="color:#ef4444;font-size:.82rem">${esc(e.message)}</div>`; }
+    };
+    tick();
+    reportPoll=setInterval(tick, 2000);
+}
+
+async function downloadReport(jobId){
+    try{
+        const r=await fetch(`${API}/report/${jobId}/download`,{headers:authHeaders()});
+        if(!r.ok) throw new Error('Download failed');
+        const blob=await r.blob();
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download=`review-${jobId.slice(0,8)}.md`;
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
 }
 
 // ── INIT ───────────────────────────────────────────────────────

@@ -153,6 +153,13 @@ WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|we
 WATCH_MAX_RESULTS = int(os.getenv("WATCH_MAX_RESULTS", "10"))  # papers fetched per watch run
 WATCH_POLL_INTERVAL = int(os.getenv("WATCH_POLL_INTERVAL", "3600"))  # seconds between schedule-loop sweeps
 
+# Phase 7 — literature-review report workflow. POST /report decomposes a topic
+# into sections, synthesizes a cited section per part from the corpus, and
+# stores a downloadable Markdown artifact as an async job. Off by default: a
+# multi-section report is several LLM calls per request.
+REPORT_ENABLE = os.getenv("REPORT_ENABLE", "false").lower() == "true"
+REPORT_MAX_SECTIONS = int(os.getenv("REPORT_MAX_SECTIONS", "6"))  # cap sections to bound cost/latency
+
 # ============================================================================
 # Retrieval Parameters
 # ============================================================================
