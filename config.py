@@ -143,6 +143,14 @@ DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
 # exists elsewhere in this app to link it to yet).
 ENABLE_USER_PREFS = os.getenv("ENABLE_USER_PREFS", "false").lower() == "true"
 
+# Phase 6 — "watch a topic" scheduled ingest + digests. When on, users can
+# register topic watches (POST /watch); each run does external search (arXiv /
+# open-access), dedups against the corpus, ingests genuinely new papers, and
+# stores a cited digest. Off by default — it makes outbound API calls and grows
+# the corpus. Cadence controls the default re-run interval for new watches.
+WATCH_ENABLE = os.getenv("WATCH_ENABLE", "false").lower() == "true"
+WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|weekly|monthly
+
 # ============================================================================
 # Retrieval Parameters
 # ============================================================================
