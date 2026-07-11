@@ -31,6 +31,10 @@ _conn.execute(
 _conn.execute(
     "CREATE TABLE IF NOT EXISTS user_prefs (user_id TEXT PRIMARY KEY, prefs TEXT, updated_at TEXT)"
 )
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, user_id TEXT, data TEXT, "
+    "next_run TEXT, last_run TEXT, created_at TEXT)"
+)
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -117,4 +121,64 @@ def save_prefs(user_id: str, prefs: dict, updated_at: str) -> None:
             "ON CONFLICT(user_id) DO UPDATE SET prefs=excluded.prefs, updated_at=excluded.updated_at",
             (user_id, json.dumps(prefs), updated_at),
         )
+        _conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — "watch a topic" registrations.
+# The full watch dict lives in `data` (json); user_id/next_run/last_run are
+# denormalized columns so the scheduler can select due watches without parsing
+# every row. next_run is ISO-8601 UTC; a NULL next_run means "never auto-runs".
+# ---------------------------------------------------------------------------
+def save_watch(watch: dict) -> None:
+    """Insert or update a watch. `watch` must carry at least `id`."""
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO watches (id, user_id, data, next_run, last_run, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, data=excluded.data, "
+            "next_run=excluded.next_run, last_run=excluded.last_run",
+            (
+                watch["id"], watch.get("user_id"), json.dumps(watch),
+                watch.get("next_run"), watch.get("last_run"), watch.get("created_at"),
+            ),
+        )
+        _conn.commit()
+
+
+def get_watch(watch_id: str) -> dict | None:
+    with _db_lock:
+        row = _conn.execute("SELECT data FROM watches WHERE id = ?", (watch_id,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def list_watches(user_id: str | None = None) -> list[dict]:
+    """All watches, or just one user's, newest first."""
+    with _db_lock:
+        if user_id is None:
+            rows = _conn.execute(
+                "SELECT data FROM watches ORDER BY created_at DESC"
+            ).fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT data FROM watches WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+    return [json.loads(r[0]) for r in rows]
+
+
+def due_watches(now_iso: str) -> list[dict]:
+    """Watches whose next_run has arrived (next_run non-NULL and <= now)."""
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT data FROM watches WHERE next_run IS NOT NULL AND next_run <= ? "
+            "ORDER BY next_run ASC",
+            (now_iso,),
+        ).fetchall()
+    return [json.loads(r[0]) for r in rows]
+
+
+def delete_watch(watch_id: str) -> None:
+    with _db_lock:
+        _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
         _conn.commit()
