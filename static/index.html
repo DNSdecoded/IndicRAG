@@ -1345,6 +1345,7 @@ async function loadWatches(){
                 </div>
                 <div style="display:flex;flex-direction:column;gap:.3rem;flex-shrink:0">
                     <button class="modal-btn" style="padding:.25rem .55rem;font-size:.75rem;background:var(--primary);color:#fff;border-color:var(--primary)" onclick="runWatch('${w.id}',this)">Run now</button>
+                    ${w.has_digest?`<button class="modal-btn" style="padding:.25rem .55rem;font-size:.75rem" onclick="viewDigest('${w.id}',this)">Digest</button>`:''}
                     <button class="modal-btn danger" style="padding:.25rem .55rem;font-size:.75rem" onclick="deleteWatch('${w.id}')">Delete</button>
                 </div>
             </div>`;
@@ -1386,12 +1387,29 @@ async function runWatch(id, btn){
         const d=await r.json();
         if(!r.ok) throw new Error(formatError(d)||'Run failed');
         showToast(`${d.new_count} new paper${d.new_count===1?'':'s'}`,'success');
-        const dig=document.getElementById('watchDigest');
-        dig.innerHTML = d.digest
-            ? `<div style="border:1px solid var(--border);border-radius:8px;padding:.8rem;background:var(--surface-up)"><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Latest digest</div><div class="asst-text">${renderContent(d.digest)}</div></div>`
-            : '';
+        showDigest(d.digest);
         loadWatches();  // rebuilds rows (this button is discarded) — no need to restore it
     }catch(e){ showToast(`✗ ${e.message}`,'error'); btn.disabled=false; btn.textContent=old; }
+}
+
+function showDigest(text){
+    const dig=document.getElementById('watchDigest');
+    dig.innerHTML = text
+        ? `<div style="border:1px solid var(--border);border-radius:8px;padding:.8rem;background:var(--surface-up)"><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Latest digest</div><div class="asst-text">${renderContent(text)}</div></div>`
+        : '';
+    dig.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+async function viewDigest(id, btn){
+    const old=btn.textContent; btn.disabled=true; btn.textContent='…';
+    try{
+        const r=await fetch(`${API}/watch/${id}/digest`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Load failed');
+        if(!d.digest){ showToast('No digest yet — run the watch first','error'); return; }
+        showDigest(d.digest);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+    finally{ btn.disabled=false; btn.textContent=old; }
 }
 
 // ── INIT ───────────────────────────────────────────────────────

@@ -98,6 +98,20 @@ def test_get_watch_roundtrip_and_404(client):
         assert client.get("/watch/nope").status_code == 404
 
 
+def test_get_digest_returns_stored_and_404(client):
+    import persistence
+    with patch("config.WATCH_ENABLE", True):
+        wid = client.post("/watch", json={"user_id": "u1", "topic": "a"}).json()["id"]
+        # no run yet → digest is null
+        assert client.get(f"/watch/{wid}/digest").json()["digest"] is None
+        # persist a digest, then it comes back
+        w = persistence.get_watch(wid)
+        w["latest_digest"] = "digest text [2401.00001]"
+        persistence.save_watch(w)
+        assert client.get(f"/watch/{wid}/digest").json()["digest"] == "digest text [2401.00001]"
+        assert client.get("/watch/nope/digest").status_code == 404
+
+
 def test_delete_watch_and_404(client):
     with patch("config.WATCH_ENABLE", True):
         wid = client.post("/watch", json={"user_id": "u1", "topic": "a"}).json()["id"]

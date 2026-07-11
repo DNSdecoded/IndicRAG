@@ -1,8 +1,8 @@
 """Routes: /watch — Phase 6 "watch a topic" registration.
 
-CRUD only. The run-one-watch endpoint (POST /watch/{id}/run), the digest
-endpoint (GET /watch/{id}/digest), and the background schedule loop are added in
-later increments; they all reuse persistence.save_watch / get_watch here.
+CRUD plus run-one-watch (POST /watch/{id}/run) and the persisted-digest read
+(GET /watch/{id}/digest); the background schedule loop lives in watch_runner.
+All reuse persistence.save_watch / get_watch here.
 
 Gated by config.WATCH_ENABLE (404 when off), mirroring the /prefs pattern.
 """
@@ -125,6 +125,16 @@ async def run_watch_now(watch_id: str, authenticated: bool = Depends(verify_api_
         return await run_in_threadpool(watch_runner.run_watch, watch_id)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
+
+
+@router.get("/watch/{watch_id}/digest", tags=["Watch"])
+async def get_watch_digest(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+    """Return the watch's latest stored digest (persists between runs)."""
+    _require_enabled()
+    w = persistence.get_watch(watch_id)
+    if w is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
+    return {"watch_id": watch_id, "digest": w.get("latest_digest"), "last_run": w.get("last_run")}
 
 
 @router.delete("/watch/{watch_id}", tags=["Watch"])
