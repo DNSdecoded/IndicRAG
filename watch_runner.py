@@ -6,6 +6,7 @@
 """
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import logging
 import os
 import tempfile
@@ -109,3 +110,34 @@ def run_watch(watch_id: str) -> dict:
 
     logger.info(f"[Watch] ran {watch_id}: {len(ingested)} new, seen now {len(w['seen_ids'])}")
     return {"watch_id": watch_id, "new_count": len(ingested), "digest": digest, "seen_count": len(w["seen_ids"])}
+
+
+async def run_due_watches() -> int:
+    """Run every watch whose next_run has arrived. Returns how many were run.
+
+    run_watch blocks (network + ingest), so each runs in a worker thread to keep
+    the event loop free. One watch failing does not abort the sweep.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    due = persistence.due_watches(now)
+    for w in due:
+        try:
+            await asyncio.to_thread(run_watch, w["id"])
+        except Exception as e:
+            logger.error(f"[Watch] scheduled run failed for {w['id']}: {e}")
+    return len(due)
+
+
+async def watch_loop() -> None:
+    """Poll for due watches every WATCH_POLL_INTERVAL seconds until cancelled.
+
+    Started from the FastAPI lifespan only when WATCH_ENABLE is set.
+    """
+    logger.info(f"[Watch] schedule loop started (interval {config.WATCH_POLL_INTERVAL}s)")
+    try:
+        while True:
+            await asyncio.sleep(config.WATCH_POLL_INTERVAL)
+            await run_due_watches()
+    except asyncio.CancelledError:
+        logger.info("[Watch] schedule loop stopped")
+        raise

@@ -6,6 +6,7 @@ Route handlers live in routes/*.py; shared auth/state in deps.py.
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
 
@@ -45,7 +46,21 @@ async def lifespan(app):
     if config.USE_HYBRID_SEARCH:
         import bm25_search
         bm25_search.get_or_build_index()
+
+    # Phase 6 Increment 4: background schedule loop (single-worker, in-process).
+    watch_task = None
+    if config.WATCH_ENABLE:
+        import watch_runner
+        watch_task = asyncio.create_task(watch_runner.watch_loop())
+
     yield
+
+    if watch_task:
+        watch_task.cancel()
+        try:
+            await watch_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down: draining in-flight requests complete.")
 
 # Initialize FastAPI app

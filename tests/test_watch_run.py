@@ -5,6 +5,8 @@ so the test is offline and deterministic. Asserts dedup, seen_ids growth, digest
 storage, and next_run advancement.
 """
 
+import asyncio
+
 import pytest
 
 import persistence
@@ -106,3 +108,21 @@ def test_no_new_papers_keeps_prior_digest(monkeypatch):
 
     assert res["new_count"] == 0
     assert persistence.get_watch("w1")["latest_digest"] == "OLD"  # unchanged
+
+
+def test_run_due_watches_runs_each_due_and_survives_failures(monkeypatch):
+    ran = []
+    monkeypatch.setattr(watch_runner.persistence, "due_watches",
+                        lambda now: [{"id": "a"}, {"id": "b"}, {"id": "c"}])
+
+    def _fake_run(wid):
+        if wid == "b":
+            raise RuntimeError("boom")  # one failure must not abort the sweep
+        ran.append(wid)
+
+    monkeypatch.setattr(watch_runner, "run_watch", _fake_run)
+
+    count = asyncio.run(watch_runner.run_due_watches())
+
+    assert count == 3            # all due watches attempted
+    assert ran == ["a", "c"]     # b failed but a and c still ran
