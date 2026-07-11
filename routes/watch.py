@@ -13,6 +13,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 import config
@@ -110,6 +111,20 @@ async def get_watch(watch_id: str, authenticated: bool = Depends(verify_api_key)
     if w is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
     return _to_response(w)
+
+
+@router.post("/watch/{watch_id}/run", tags=["Watch"])
+async def run_watch_now(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+    """Run a watch immediately: search the topic, ingest new papers, refresh the digest.
+
+    Synchronous — ingest blocks, so it runs in a threadpool to keep the event loop free.
+    """
+    _require_enabled()
+    import watch_runner  # lazy: keeps arxiv/ingest imports off the request-path cold start
+    try:
+        return await run_in_threadpool(watch_runner.run_watch, watch_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
 
 
 @router.delete("/watch/{watch_id}", tags=["Watch"])

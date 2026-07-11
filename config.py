@@ -150,6 +150,7 @@ ENABLE_USER_PREFS = os.getenv("ENABLE_USER_PREFS", "false").lower() == "true"
 # the corpus. Cadence controls the default re-run interval for new watches.
 WATCH_ENABLE = os.getenv("WATCH_ENABLE", "false").lower() == "true"
 WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|weekly|monthly
+WATCH_MAX_RESULTS = int(os.getenv("WATCH_MAX_RESULTS", "10"))  # papers fetched per watch run
 
 # ============================================================================
 # Retrieval Parameters
