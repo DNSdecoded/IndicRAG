@@ -298,6 +298,26 @@ if not LLM_API_KEY_POOL:
 LLM_API_KEY = LLM_API_KEY_POOL[0] if LLM_API_KEY_POOL else ""
 
 # ============================================================================
+# Phase 8 — Secondary LLM provider (OpenRouter)
+# ============================================================================
+# Default backend for LLM calls and the cross-vendor fallback. When the chosen
+# provider's models are all exhausted/circuit-open, failover crosses to the
+# other provider's default model so a whole-vendor outage isn't a total failure.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")                    # gemini|openrouter
+LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "openrouter")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+# Curated allowlist offered to the user in the model dropdown (comma-separated).
+# Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
+_raw_selectable = os.getenv(
+    "LLM_SELECTABLE_MODELS",
+    "gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+)
+LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
+# How long the enriched OpenRouter /models catalog is cached (seconds).
+MODELS_CACHE_TTL = int(os.getenv("MODELS_CACHE_TTL", "3600"))
+
+# ============================================================================
 # Cache Configuration
 # ============================================================================
 LLM_CACHE_SIZE = int(os.getenv("LLM_CACHE_SIZE", "128"))
