@@ -50,6 +50,7 @@ langgraph>=0.2.0
 tavily-python>=0.3.0
 numexpr>=2.8.5
 arxiv>=2.1.0
+openai>=1.50.0                 # OpenRouter backend (OpenAI-compatible Chat Completions)
 
 # Testing
 pytest>=8.0.0
