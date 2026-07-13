@@ -4,10 +4,29 @@ from google.genai import types
 
 import rag
 import config
+import llm_client
 from agent.state import AgentState
 from agent.tool_declarations import TOOLS
 
 logger = logging.getLogger(__name__)
+
+
+def _gate_model(state) -> tuple[str, str]:
+    """Return the (provider, model) to use for tool selection.
+
+    If the user picked a model that can't call functions, fall back to the
+    Gemini default so the agent doesn't silently degrade to the retrieval
+    default and *look* like it worked."""
+    model = state.get("requested_model") or config.LLM_MODEL_NAME
+    provider = state.get("requested_provider")
+    provider = llm_client.resolve_provider(model, provider)
+    if not llm_client.model_supports_tools(provider, model):
+        logger.warning(
+            f"[ToolSelector] model {provider}:{model} can't call tools — "
+            f"falling back to gemini:{config.LLM_MODEL_NAME}"
+        )
+        return "gemini", config.LLM_MODEL_NAME
+    return provider, model
 
 _SYSTEM = """\
 You are a routing broker for a multilingual scientific RAG agent. \
@@ -130,11 +149,13 @@ def tool_selector_node(state: AgentState) -> dict:
         thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
     )
 
+    gate_provider, gate_model = _gate_model(state)
     try:
         resp = rag.generate_with_failover(
-            model=config.LLM_MODEL_NAME,
+            model=gate_model,
             contents=user_content,
             gen_config=gen_cfg,
+            provider=gate_provider,
         )
 
         tool_calls = []

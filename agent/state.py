@@ -39,3 +39,8 @@ class AgentState(TypedDict):
     # explicit insufficient-evidence answer.
     answer_confidence: Optional[float]
     abstained: bool
+
+    # Phase 8: user-selected model/provider for this request. When set, the tool
+    # selector gates the choice against tool-capability before using it.
+    requested_model: Optional[str]
+    requested_provider: Optional[str]
