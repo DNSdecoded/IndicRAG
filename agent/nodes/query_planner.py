@@ -6,8 +6,9 @@ from google.genai import types
 import rag
 import config
 import lang_utils
+import llm_client
 from agent.state import AgentState
-from agent.json_utils import extract_json
+from agent.json_utils import extract_json, extract_json_with_gemini_retry
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +91,12 @@ def query_planner_node(state: AgentState) -> dict:
     raw_resp = ""
 
     try:
+        _model = state.get("requested_model") or config.LLM_MODEL_NAME
+        _provider = state.get("requested_provider")
+        _prompt = _DECOMPOSE_PROMPT.format(query=query, max_sq=_MAX_SUB_QUERIES)
         resp = rag.generate_with_failover(
-            model=config.LLM_MODEL_NAME,
-            contents=_DECOMPOSE_PROMPT.format(query=query, max_sq=_MAX_SUB_QUERIES),
+            model=_model,
+            contents=_prompt,
             gen_config=types.GenerateContentConfig(
                 temperature=0,
                 max_output_tokens=1024,
@@ -100,9 +104,26 @@ def query_planner_node(state: AgentState) -> dict:
                 # Structured JSON decomposition — thinking off by default (config knob).
                 thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
+            provider=_provider,
         )
         raw_resp = resp.text or ""
-        parsed = extract_json(raw_resp)
+
+        active_provider = llm_client.resolve_provider(_model, _provider)
+
+        def _gemini_retry(p, s):
+            r = rag.generate_with_failover(
+                model=config.LLM_MODEL_NAME, contents=p,
+                gen_config=types.GenerateContentConfig(
+                    temperature=0, max_output_tokens=1024, system_instruction=s,
+                    thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                ),
+                provider="gemini",
+            )
+            return r.text or ""
+
+        parsed = extract_json_with_gemini_retry(
+            raw_resp, active_provider, _gemini_retry, _prompt, _DECOMPOSE_SYSTEM,
+        )
 
         raw_queries = parsed.get("sub_queries")
         sub_queries = (

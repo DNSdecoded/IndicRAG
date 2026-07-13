@@ -6,8 +6,9 @@ from google.genai import types
 import rag
 import config
 import verify
+import llm_client
 from agent.state import AgentState, ReflexionFeedback
-from agent.json_utils import extract_json
+from agent.json_utils import extract_json, extract_json_with_gemini_retry
 
 logger = logging.getLogger(__name__)
 MAX_REFLEXION = 3
@@ -123,22 +124,42 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
     raw_text = ""
     try:
+        _model = state.get("requested_model") or config.LLM_MODEL_NAME
+        _provider = state.get("requested_provider")
+        _completeness_prompt = _COMPLETENESS_PROMPT.format(
+            query=state["original_query"],
+            source_titles=source_titles,
+            answer=_truncate_at_sentence(answer, EVAL_ANSWER_CHARS),
+        )
         resp = rag.generate_with_failover(
-            model=config.LLM_MODEL_NAME,
-            contents=_COMPLETENESS_PROMPT.format(
-                query=state["original_query"],
-                source_titles=source_titles,
-                answer=_truncate_at_sentence(answer, EVAL_ANSWER_CHARS),
-            ),
+            model=_model,
+            contents=_completeness_prompt,
             gen_config=types.GenerateContentConfig(
                 temperature=0,
                 max_output_tokens=1024,
                 # JSON completeness verdict — thinking off by default (config knob).
                 thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
+            provider=_provider,
         )
         raw_text = rag.safe_extract_text(resp)
-        parsed = extract_json(raw_text)
+
+        active_provider = llm_client.resolve_provider(_model, _provider)
+
+        def _gemini_retry(p, s):
+            r = rag.generate_with_failover(
+                model=config.LLM_MODEL_NAME, contents=p,
+                gen_config=types.GenerateContentConfig(
+                    temperature=0, max_output_tokens=1024,
+                    thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                ),
+                provider="gemini",
+            )
+            return rag.safe_extract_text(r)
+
+        parsed = extract_json_with_gemini_retry(
+            raw_text, active_provider, _gemini_retry, _completeness_prompt, "",
+        )
         completeness_score = float(parsed.get("completeness_score", 0.5))
         missing = parsed.get("missing_aspects", [])
 

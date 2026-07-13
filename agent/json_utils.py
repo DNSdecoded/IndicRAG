@@ -50,3 +50,16 @@ def extract_json(raw: str) -> dict:
         return json.loads(fragment)
     except json.JSONDecodeError as e:
         raise ValueError(f"No JSON object found: {clean[:120]}") from e
+
+
+def extract_json_with_gemini_retry(raw: str, provider: str, gemini_call, prompt: str, system: str) -> dict:
+    """extract_json(raw); on failure AND provider != gemini, retry once against
+    Gemini via gemini_call(prompt, system) then extract_json that. For Gemini,
+    behave exactly like extract_json (raise on failure)."""
+    try:
+        return extract_json(raw)
+    except ValueError:
+        if provider == "gemini":
+            raise
+        retry_raw = gemini_call(prompt, system)
+        return extract_json(retry_raw)
