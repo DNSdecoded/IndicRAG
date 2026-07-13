@@ -41,12 +41,21 @@ class QueryRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+    provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
     @field_validator('strategy')
     @classmethod
     def validate_strategy(cls, v):
         if v not in ['A', 'B']:
             raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
         return v
 
 

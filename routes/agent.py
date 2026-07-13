@@ -37,12 +37,21 @@ class AgentQueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     session_id: Optional[str] = None
     strategy: str = Field("A")
+    model: Optional[str] = None
+    provider: Optional[str] = None
 
     @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v):
         if v not in ("A", "B"):
             raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
         return v
 
 
@@ -99,6 +108,8 @@ async def agent_query(
         session_id=session_id,
         strategy=body.strategy,
         start_time=time.monotonic(),
+        requested_model=body.model,
+        requested_provider=body.provider,
     )
 
     try:
