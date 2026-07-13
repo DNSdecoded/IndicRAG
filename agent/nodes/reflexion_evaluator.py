@@ -8,7 +8,7 @@ import config
 import verify
 import llm_client
 from agent.state import AgentState, ReflexionFeedback
-from agent.json_utils import extract_json, extract_json_with_gemini_retry
+from agent.json_utils import extract_json_with_gemini_retry
 
 logger = logging.getLogger(__name__)
 MAX_REFLEXION = 3

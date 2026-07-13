@@ -1,5 +1,4 @@
 """Phase 2 — finalizer confidence + abstention."""
-import config
 from agent.nodes.finalizer import finalizer_node, citation_coverage, _confidence
 
 

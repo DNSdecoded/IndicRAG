@@ -8,7 +8,7 @@ import config
 import lang_utils
 import llm_client
 from agent.state import AgentState
-from agent.json_utils import extract_json, extract_json_with_gemini_retry
+from agent.json_utils import extract_json_with_gemini_retry
 
 logger = logging.getLogger(__name__)
 
