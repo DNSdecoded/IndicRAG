@@ -47,8 +47,16 @@ def test_grounding_threshold_respected():
 
 
 def test_make_scorer_jaccard():
-    fn, thr = make_grounding_scorer("jaccard")
-    assert fn is jaccard and thr == 0.15
+    fn, thr, kind = make_grounding_scorer("jaccard")
+    assert fn is jaccard and thr == 0.15 and kind == "jaccard"
+
+
+def test_metrics_record_grounding_judge():
+    j = {"queries": [{"id": "1", "text": "q", "relevant_papers": ["a"]}]}
+    res = {"results": [{"query_id": "1", "retrieved_papers": ["a"], "answer_claims": []}]}
+    m = evaluate(j, res, 5, jaccard, 0.15, judge="jaccard")
+    assert m["grounding_judge"] == "jaccard"
+    assert m["grounding_threshold"] == 0.15
 
 
 def test_per_language_grouping():

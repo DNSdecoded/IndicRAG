@@ -198,6 +198,8 @@ async def query_question(
             strategy=body.strategy,
             top_k=top_k,
             filter_dict=build_paper_filter(body.paper_ids),
+            model=body.model,
+            provider=body.provider,
         )
 
         processing_time = time.time() - start_time
@@ -269,6 +271,7 @@ async def query_stream(
 
     return StreamingResponse(
         sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
-                   strategy=body.strategy, query_id=query_id),
+                   strategy=body.strategy, query_id=query_id,
+                   model=body.model, provider=body.provider),
         media_type="text/event-stream",
     )

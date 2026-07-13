@@ -91,7 +91,7 @@ same `yield chunk.text` shape `llm_generate_stream` already produces, so
   only before the first chunk is emitted; a mid-stream failure re-raises.
 
 New config (`config.py` + `.env.example`):
-```
+```dotenv
 LLM_PROVIDER=gemini                             # default backend: gemini|openrouter
 LLM_FALLBACK_PROVIDER=openrouter                # cross-vendor redundancy
 OPENROUTER_API_KEY=
@@ -145,11 +145,11 @@ greyed out only when the UI is in agent mode.
 
 ## 8. Per-model eval hook
 
-`docs/Eval/evaluate.py` gains an optional `--model` / `--provider` CLI flag
-threaded through to the queries it issues, so running the existing eval
-harness against a non-default model surfaces quality regressions in the
-existing report instead of being invisible (per the plan: "unvetted catalog
-is the user's risk by design").
+`docs/Eval/evaluate.py` gains an optional `--model` / `--provider` CLI flag.
+The harness does not generate answers — it scores pre-generated results — so
+the flags only *label* the run's metrics/report with the model/provider that
+produced those answers, making per-model regressions attributable instead of
+invisible (per the plan: "unvetted catalog is the user's risk by design").
 
 ## Testing
 

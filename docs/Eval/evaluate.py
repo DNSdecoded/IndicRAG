@@ -110,26 +110,32 @@ def ndcg_at_k(retrieved: List[str], relevance: Dict[str, int], k: int) -> float:
 # ============================================================
 
 def make_grounding_scorer(kind: str):
-    """Return a ((claim, chunk) -> similarity fn, threshold) pair.
+    """Return a (similarity_fn, threshold, effective_kind) triple.
+
+    effective_kind reports which judge was actually used — it differs from the
+    requested `kind` when 'cross-encoder' falls back to Jaccard offline, so the
+    report can state its real methodology.
 
     'jaccard'       — token overlap, offline, cheap (CI default).
     'cross-encoder' — BAAI/bge-reranker-v2-m3 semantic judge; falls back to
                       Jaccard if sentence-transformers is unavailable (offline CI).
     """
     if kind == "jaccard":
-        return jaccard, GROUNDING_THRESHOLD
+        return jaccard, GROUNDING_THRESHOLD, "jaccard"
     try:
         from sentence_transformers import CrossEncoder
-    except ImportError:
-        print("  [warn] sentence-transformers unavailable — falling back to Jaccard")
-        return jaccard, GROUNDING_THRESHOLD
-    model = CrossEncoder("BAAI/bge-reranker-v2-m3")
+        # Construct inside the try: model weights may be missing/corrupt or the
+        # download may fail (OSError/RuntimeError) even when the package imports.
+        model = CrossEncoder("BAAI/bge-reranker-v2-m3")
+    except Exception as e:
+        print(f"  [warn] cross-encoder unavailable ({e}) — falling back to Jaccard")
+        return jaccard, GROUNDING_THRESHOLD, "jaccard"
 
     def semantic(claim: str, chunk: str) -> float:
         raw = float(model.predict([(claim, chunk)])[0])
         return 1.0 / (1.0 + math.exp(-raw))  # logit -> 0..1
 
-    return semantic, 0.5  # sigmoid midpoint, tune on eval set
+    return semantic, 0.5, "cross-encoder"  # sigmoid midpoint, tune on eval set
 
 
 def citation_grounding(claims: List[Dict], sim_fn=jaccard,
@@ -182,7 +188,8 @@ def citation_grounding(claims: List[Dict], sim_fn=jaccard,
 # ============================================================
 
 def evaluate(judgments: Dict, results: Dict, k: int,
-             sim_fn=jaccard, threshold: float = GROUNDING_THRESHOLD) -> Dict:
+             sim_fn=jaccard, threshold: float = GROUNDING_THRESHOLD,
+             judge: str = "jaccard") -> Dict:
     qrels = {q["id"]: q for q in judgments["queries"]}
     runs  = {r["query_id"]: r for r in results["results"]}
 
@@ -263,6 +270,8 @@ def evaluate(judgments: Dict, results: Dict, k: int,
         "retrieval_composite":  round(retrieval_composite, 3),
         "generation_composite": round(generation_composite, 3),
         "overall":              round(overall, 3),
+        "grounding_judge":      judge,
+        "grounding_threshold":  round(threshold, 3),
         "per_language":         per_language,
         "per_query":            per_query,
         "timestamp":            datetime.now().isoformat(timespec="seconds")
@@ -283,7 +292,12 @@ def markdown_report(metrics: Dict, k: int) -> str:
     lines.append("# IndicRAG — Evaluation Report")
     lines.append(f"\n_Generated: {metrics['timestamp']} · k={k} · {metrics['num_queries']} queries_\n")
     lines.append("> Retrieval metrics computed from ranked document lists against manually labeled relevance judgments.")
-    lines.append("> Citation grounding uses token Jaccard similarity (threshold 0.15). Claims with no citation")
+    _judge_desc = {
+        "jaccard": "token Jaccard similarity",
+        "cross-encoder": "a BAAI/bge-reranker-v2-m3 cross-encoder judge",
+    }.get(metrics.get("grounding_judge", "jaccard"), metrics.get("grounding_judge", "jaccard"))
+    _thr = metrics.get("grounding_threshold", GROUNDING_THRESHOLD)
+    lines.append(f"> Citation grounding uses {_judge_desc} (threshold {_thr}). Claims with no citation")
     lines.append("> (system correctly acknowledged absent context) are excluded from the grounding denominator.\n")
     lines.append("---\n")
 
@@ -394,8 +408,8 @@ def main():
     with open(args.results, encoding="utf-8") as f:
         results = json.load(f)
 
-    sim_fn, threshold = make_grounding_scorer(args.grounding_judge)
-    metrics = evaluate(judgments, results, args.k, sim_fn, threshold)
+    sim_fn, threshold, effective_judge = make_grounding_scorer(args.grounding_judge)
+    metrics = evaluate(judgments, results, args.k, sim_fn, threshold, judge=effective_judge)
 
     # Phase 8: label the run with the model/provider that produced the answers so
     # per-model regressions are attributable in the report/JSON (answers are

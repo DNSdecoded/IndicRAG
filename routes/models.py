@@ -74,5 +74,9 @@ def validate_model(model: str | None, provider: str | None) -> None:
 
 
 @router.get("/models", tags=["Models"])
-async def get_models():
+def get_models():
+    # Sync (not async): list_models() → _fetch_openrouter_catalog() does a blocking
+    # httpx.get on cache miss. A sync route runs in FastAPI's threadpool, so it
+    # never blocks the event loop; an `async def` would stall all requests for
+    # up to the 10s HTTP timeout.
     return {"models": list_models(), "default": (config.LLM_SELECTABLE_MODELS or [None])[0]}

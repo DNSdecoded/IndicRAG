@@ -35,7 +35,8 @@ def plan_sections(topic: str, language: str = "en", max_sections: int = None) ->
     prompt = (
         f"You are planning a literature-review report on: {topic!r}.\n"
         f"Propose at most {max_sections} section titles (e.g. background, methods "
-        f"comparison, key findings, open gaps). Reply with ONLY a JSON array of "
+        f"comparison, key findings, open gaps). Write the section titles in the "
+        f"language with code {language!r}. Reply with ONLY a JSON array of "
         f'short title strings, e.g. ["Background", "Methods", "Findings"].'
     )
     try:

@@ -16,17 +16,33 @@ from providers.base import LLMBackend, ShimResponse
 logger = logging.getLogger(__name__)
 
 
+def _flatten_contents(contents) -> str:
+    """Extract prompt text from google-genai Content/Part objects (or plain
+    strings). `str(contents)` would emit a Python repr, not the real text, so
+    walk the structure and join the actual `.text` fields."""
+    if isinstance(contents, str):
+        return contents
+    parts: list[str] = []
+    for item in contents if isinstance(contents, (list, tuple)) else [contents]:
+        if hasattr(item, "parts") and item.parts is not None:
+            for part in item.parts:
+                text = getattr(part, "text", None)
+                if text:
+                    parts.append(text)
+        elif getattr(item, "text", None):
+            parts.append(item.text)
+        elif isinstance(item, str):
+            parts.append(item)
+    return "\n".join(parts) if parts else str(contents)
+
+
 def _to_messages(contents, gen_config) -> list[dict]:
-    """contents (str) + system_instruction → OpenAI messages."""
+    """contents (str | Content/Part objects) + system_instruction → OpenAI messages."""
     messages = []
     sys_inst = getattr(gen_config, "system_instruction", None)
     if sys_inst:
         messages.append({"role": "system", "content": str(sys_inst)})
-    if isinstance(contents, str):
-        messages.append({"role": "user", "content": contents})
-    else:
-        # contents is a list of parts/strings — flatten to text
-        messages.append({"role": "user", "content": str(contents)})
+    messages.append({"role": "user", "content": _flatten_contents(contents)})
     return messages
 
 
@@ -121,6 +137,8 @@ class OpenRouterBackend(LLMBackend):
         client = self._get_client()
         emitted = False
         for chunk in client.chat.completions.create(**self._params(model, contents, gen_config, stream=True)):
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             text = getattr(delta, "content", None)
             if text:

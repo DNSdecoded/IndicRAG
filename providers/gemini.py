@@ -44,6 +44,7 @@ class GeminiBackend(LLMBackend):
                     self._init_pool()
 
     def next_client_idx(self) -> int:
+        self._ensure_pool()
         with self._lock:
             return next(self._index)
 
@@ -82,7 +83,8 @@ class GeminiBackend(LLMBackend):
             return gen_config.model_copy(update={
                 "system_instruction": None, "tools": None, "cached_content": name,
             })
-        except Exception:
+        except Exception as exc:
+            logger.debug("Gemini context caching skipped: %s", exc)
             return gen_config
 
     def _prep_config(self, client, model, gen_config):

@@ -7,32 +7,37 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
 [![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
 A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
 
-Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable.
+Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini + OpenRouter), **topic watches**, and **literature review reports**.
 
 ---
 
-## 🆕 What's New in v2.2
+## What's New in v2.3
 
-| Area | v2.1 | v2.2 |
+| Area | v2.2 | v2.3 |
 |------|------|------|
-| **Codebase** | Monolithic `api_server.py` | Split into `routes/` (query, chat, ingest, agent, management, feedback) + shared `deps.py` |
-| **Streaming** | Full-response only | Token-by-token **SSE streaming** on `/query/stream`, `/chat/stream`, `/ingest/stream` |
-| **State durability** | In-memory (lost on restart) | **SQLite-backed** session + job persistence (`sessions.db`) |
-| **Reranking** | Cross-encoder only | Optional **ColBERT** multi-vector MaxSim rerank layered on cross-encoder |
-| **Query expansion** | Sub-query decomposition | Optional **HyDE** (hypothetical document embeddings) |
-| **Ingestion** | Fixed-size chunks | **Section-aware chunking** + auto **metadata enrichment** (arXiv authors/year/DOI by title match) + title dedup |
-| **Corpus tool** | Topic only | **Year-range metadata filter** on agent corpus retrieval |
-| **Gemini cost** | LRU response cache | Opt-in **explicit Gemini prompt caching** for the stable system-instruction prefix |
-| **Reflexion** | Iteration cap only | Iteration cap **+ wall-clock budget** (`AGENT_REFLEXION_BUDGET_S`) |
-| **Feedback** | None | `/feedback` + `/prefs/{user_id}` endpoints; opt-in user preferences |
-| **Observability** | Prometheus metrics | Metrics + **request-ID correlation** across all log lines |
-| **Answer tokens** | `AGENT_MAX_TOKENS=4096` | `AGENT_MAX_TOKENS=8192` default; LaTeX equations returned verbatim with copy buttons |
+| **LLM providers** | Gemini only | **Multi-provider** — Gemini + OpenRouter (Claude, GPT, Llama, etc.) with cross-provider failover |
+| **Model selection** | Hardcoded `LLM_MODEL_NAME` | **User-selectable models** — `GET /models` endpoint + UI dropdown; per-request `model` param |
+| **Circuit breaker** | Single (provider) | **Per-(provider, model)** circuit key — one model's 429 doesn't block others |
+| **Capability gating** | None | Agent tool-selector greys out **non-tool-capable** models from the dropdown |
+| **JSON fallback** | Gemini retry only | **Structured-output fallback** — when a non-Gemini model returns text, retry with Gemini-retry parse |
+| **Contradiction detection** | None | **Phase 5** — NLI-based cross-source contradiction flagging in the answer generator |
+| **Multimodal indexing** | Text only | **Phase 3** — figure/table crop extraction + captioning + vector embedding |
+| **Figure/table surfacing** | None | API + UI show **cited figure/table crops** inline with answers |
+| **Confidence & abstention** | None | **Phase 2** — finalizer surfaces confidence score; low-confidence answers get an abstention prefix |
+| **Topic watches** | None | **Phase 6** — persistent topic monitoring (`/watch/*`) with daily/weekly/monthly cadence + background digest loop |
+| **Literature review reports** | None | **Phase 7** — async report generation (`/report/*`) with section decomposition and cited synthesis |
+| **ONNX cross-encoders** | float32 | **int8 quantized** ONNX for CPU reranker + NLI — lower memory, faster inference |
+| **Sub-query cap** | Unlimited | `AGENT_MAX_SUB_QUERIES` knob to cap per-cycle retrievals |
+| **Eval scaffold** | None | Per-language eval labels, semantic judge, regression gate |
+| **Model dropdown** | None | UI model selector fed by `/models`; shows tool-capability badges |
+| **Thinking budget** | None | `AGENT_THINKING_BUDGET`: `0`=off, `-1`=dynamic, `N`=cap |
+| **Chat history** | None | Endpoints + UI panels for browsing past conversations and topic watches |
 
 ---
 
@@ -49,9 +54,13 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
   * **calculate** — numexpr math evaluation (identifier-whitelisted)
   * **execute_python** — process-isolated Python with AST-based validation (import whitelist, dunder + dangerous-builtin blocking) + 10s timeout
 * **Reflexion loops with dual budget** — the evaluator checks faithfulness (NLI entailment, minimum across claims) and completeness (Gemini Flash). Below threshold it can regenerate, retrieve more, or reformulate — bounded by **both** an iteration cap (3) and a wall-clock budget (`AGENT_REFLEXION_BUDGET_S`). Stuck-loop detection auto-accepts when completeness stops improving.
+* **Contradiction detection** — NLI-based cross-source contradiction flagging in the answer generator; surfaces both sides with citations when sources disagree
+* **Confidence & abstention** — finalizer surfaces a confidence score; low-confidence answers get an explicit abstention prefix with partial sourcing
 * **Multi-turn conversations** — session history threaded through `AgentState` so follow-ups resolve pronouns and references
 * **Parallel tool execution** — multiple selected tools run concurrently via `ThreadPoolExecutor`
-* **Model failover + circuit breaker** — on 503/429, `gemini-3.5-flash` falls back to `gemma-4-26b-a4b-it`; the breaker skips the primary for 60s after failure
+* **Sub-query cap** — `AGENT_MAX_SUB_QUERIES` limits per-cycle retrievals to bound latency and cost
+* **Model failover + circuit breaker** — per-(provider, model) circuit keys; one model's 429 doesn't block others. Cross-provider failover (Gemini → OpenRouter, or reverse)
+* **Multi-provider LLM** — Gemini + OpenRouter (Claude, GPT, Llama, etc.) with user-selectable models, capability gating, and non-Gemini JSON fallback
 * **google-genai native function calling** — no LangChain LLM wrappers; `mode=AUTO` lets the model return an empty tool list on `regenerate` actions
 
 ### 🔍 Hybrid Retrieval Pipeline
@@ -65,6 +74,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 ### 📥 Smart Ingestion
 
 * **Section-aware chunking** — per-section chunk sizes (abstract, methods, results, …) instead of uniform splits
+* **Multimodal figure/table indexing** — extract figure/table crops from PDFs, generate captions, and embed alongside text chunks
 * **Metadata enrichment** — auto-fetch authors, year, DOI from arXiv by fuzzy title match at ingest time
 * **Title dedup** — near-duplicate papers rejected by `SequenceMatcher` ratio (`DEDUP_TITLE_THRESHOLD`)
 * **MD5 content dedup** + parallel extraction, Indic-aware chunking
@@ -84,6 +94,14 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * Startup warm-up via FastAPI lifespan (embeddings, vector store, reranker, BM25) — no cold first request
 * Request-ID correlation across log lines; Prometheus metrics
 * API-key auth, env-driven CORS, Pydantic v2 validation, path-traversal + URL-scheme guards
+* **int8 quantized ONNX** cross-encoders for CPU — lower memory, faster inference
+
+### 📡 Topic Watches & Literature Reports
+
+* **Topic watches** (`/watch/*`) — persistent monitoring with daily/weekly/monthly cadence; background digest loop fetches new papers, summarizes, and stores results
+* **Literature review reports** (`/report/*`) — async decomposition of a topic into sections, cited synthesis from the corpus, and downloadable Markdown artifact
+* **Model selection** (`GET /models`) — curated allowlist enriched with OpenRouter tool-capability metadata; UI dropdown with badges
+* **Chat history** — endpoints + UI panels for browsing past conversations and topic watches
 
 ### 🗄️ Three-Layer Caching + Gemini Prompt Cache
 
@@ -131,6 +149,11 @@ Edit `.env`:
 # Required
 LLM_API_KEY=your_gemini_api_key_here
 
+# Optional — enables multi-provider mode (OpenRouter)
+# OPENROUTER_API_KEY=your_openrouter_key_here
+# LLM_PROVIDER=gemini          # gemini|openrouter
+# LLM_FALLBACK_PROVIDER=openrouter
+
 # Optional — enables agent web search tool
 TAVILY_API_KEY=your_tavily_key_here
 
@@ -143,6 +166,10 @@ AGENT_THINKING_BUDGET=0
 # Optional — retrieval quality boosters (off by default, cost more compute)
 USE_COLBERT_RERANK=false
 USE_HYDE=false
+
+# Optional — topic watches and literature reports (off by default)
+# WATCH_ENABLE=true
+# REPORT_ENABLE=true
 ```
 
 ### Ingest Documents
@@ -239,6 +266,7 @@ for src in data['sources']:
 | `/chat/stream` | POST | Streamed multi-turn chat (SSE) |
 | `/chat/{session_id}` | DELETE | Clear a chat session |
 | `/agent/query` | POST | Agentic pipeline with reflexion loops (timeout → 504) |
+| `/models` | GET | Curated model allowlist with tool-capability metadata |
 | `/search` | POST | Retrieval-only — corpus, web, or both (no LLM) |
 | `/search/export` | GET | Export search results as plain text |
 | `/upload` | POST | Upload PDF (multipart form) |
@@ -250,6 +278,13 @@ for src in data['sources']:
 | `/ingest/reindex` | POST | Rebuild the index from stored papers |
 | `/papers` | GET | List uploaded PDFs |
 | `/papers/{paper_id}` | DELETE | Delete a single paper |
+| `/watch` | GET/POST | List or create topic watches |
+| `/watch/{id}` | GET/PUT/DELETE | Read, update, or delete a watch |
+| `/watch/{id}/run` | POST | Trigger a watch run immediately |
+| `/watch/{id}/digest` | GET | Fetch persisted digest for a watch |
+| `/report` | POST | Kick off a literature review report |
+| `/report/status/{job_id}` | GET | Report generation status |
+| `/report/{job_id}/download` | GET | Download completed report (Markdown) |
 | `/feedback` | POST | Submit answer feedback |
 | `/prefs/{user_id}` | GET / PUT | Read / update user preferences |
 | `/stats` | GET | Vector store statistics |
@@ -275,28 +310,38 @@ IndicRAG/
 │   └── patterns.json                # Regex patterns for PDF cleaning
 │
 ├── 🐍 Core Modules
-│   ├── config.py                    # Configuration + env parsing (VERSION = 2.2.0)
+│   ├── config.py                    # Configuration + env parsing (VERSION = 2.3.0-dev)
 │   ├── api_server.py                # FastAPI app: lifespan warm-up + router mounting
 │   ├── deps.py                      # Shared deps: auth, rate limit, session/job state
 │   ├── middleware.py                # Request-ID propagation
-│   ├── persistence.py               # SQLite session/job persistence
-│   ├── llm_client.py                # Gemini client pool: round-robin, failover, breaker
+│   ├── persistence.py               # SQLite session/job/watch/report persistence
+│   ├── llm_client.py                # Multi-provider dispatcher: Gemini + OpenRouter
 │   ├── gemini_cache.py              # Explicit Gemini prompt caching (per client)
 │   ├── rag.py                       # RAG pipeline orchestration
 │   ├── sse_utils.py                 # Shared SSE streaming bridge
 │   ├── embeddings.py                # BGE-M3 embeddings (thread-safe)
 │   ├── vector_store.py              # ChromaDB wrapper (HNSW knobs)
 │   ├── bm25_search.py               # BM25 + RRF fusion
-│   ├── rerank.py                    # Cross-encoder reranker
+│   ├── rerank.py                    # Cross-encoder reranker (int8 ONNX)
+│   ├── onnx_ce.py                   # int8 quantized ONNX cross-encoder inference
 │   ├── colbert_rerank.py            # ColBERT multi-vector MaxSim rerank (opt-in)
 │   ├── verify.py                    # NLI faithfulness verification
+│   ├── contradiction.py             # Cross-source contradiction detection (Phase 5)
 │   ├── lang_utils.py                # Unicode script + langdetect
 │   ├── pdf_utils.py                 # PDF extraction, Indic-aware chunking
+│   ├── figure_captioner.py          # Figure/table crop extraction + captioning (Phase 3)
 │   ├── metadata_enrich.py           # arXiv metadata auto-fetch at ingest
 │   ├── ingest.py                    # Section-aware parallel ingestion + dedup
 │   ├── translation.py               # NLLB-200 sentence-batched (Strategy B)
 │   ├── cache.py                     # Thread-safe TTL LRU cache (LLM/retrieval/tool)
+│   ├── watch_runner.py              # Background topic-watch digest loop
+│   ├── report_runner.py             # Async literature-review report generation
 │   └── purge.py                     # CLI cleanup (papers, db, models)
+│
+├── 🔌 providers/                     # LLM provider backends
+│   ├── base.py                      # LLMBackend interface
+│   ├── gemini.py                    # GeminiBackend — google-genai native
+│   └── openrouter.py                # OpenRouterBackend — OpenAI-compatible API
 │
 ├── 🌐 routes/                       # FastAPI routers
 │   ├── query.py                     # /query, /query/stream, /health, /
@@ -304,7 +349,10 @@ IndicRAG/
 │   ├── agent.py                     # /agent/query
 │   ├── ingest.py                    # /ingest*, /upload
 │   ├── management.py                # /search, /papers, /stats, /cache, /purge
-│   └── feedback.py                  # /feedback, /prefs/{user_id}
+│   ├── feedback.py                  # /feedback, /prefs/{user_id}
+│   ├── models.py                    # /models — curated model allowlist
+│   ├── watch.py                     # /watch — topic monitoring CRUD + run + digest
+│   └── report.py                    # /report — literature review generation
 │
 ├── 🤖 agent/                        # Agentic RAG Pipeline
 │   ├── state.py                     # AgentState + ReflexionFeedback schemas
@@ -316,19 +364,20 @@ IndicRAG/
 │       ├── query_planner.py         # Language detection + decomposition (+ HyDE)
 │       ├── tool_selector.py         # Gemini function calling
 │       ├── tool_executor_node.py    # Dispatch + context accumulation + audit log
-│       ├── answer_generator.py      # Reuses rag context/prompt/generate
+│       ├── answer_generator.py      # Reuses rag context/prompt/generate + contradiction detect
 │       ├── reflexion_evaluator.py   # check_claims() + Gemini completeness judge
-│       └── finalizer.py             # Terminal node
+│       └── finalizer.py             # Terminal node — confidence + abstention
 │
-├── 🌐 static/index.html             # SPA: mode toggle, stepper, source cards, copy buttons
+├── 🌐 static/index.html             # SPA: mode toggle, stepper, source cards, model dropdown, copy buttons
 ├── 📚 docs/                         # ARCHITECTURE, DEPLOYMENT, evaluation, Eval/, ...
 ├── 💡 examples/                     # example_ingest.py, example_query.py
 ├── 🔧 deploy/                       # nginx.example.conf
 │
 └── 📊 Data (git-ignored)
     ├── papers/                      # PDF documents
+    ├── figures/                     # Extracted figure/table crops (Phase 3)
     ├── chroma_db/                   # Vector database
-    ├── sessions.db                  # Persisted sessions/jobs
+    ├── sessions.db                  # Persisted sessions/jobs/watches
     └── models/                      # Cached ML models
 ```
 
@@ -341,14 +390,26 @@ Key settings (all overridable via environment variables):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LLM_API_KEY` | (required) | Google Gemini API key (comma-separate for a round-robin pool) |
+| `LLM_PROVIDER` | `gemini` | Primary LLM provider: `gemini` or `openrouter` |
+| `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down |
+| `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
 | `LLM_MODEL_NAME` | `gemini-3.5-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated) |
 | `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion loops |
 | `AGENT_THINKING_BUDGET` | `0` | Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap |
+| `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
+| `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
+| `CONTRADICTION_NLI_THRESHOLD` | `0.6` | NLI score threshold for contradiction detection |
 | `TAVILY_API_KEY` | (optional) | Enables agent web search tool |
+| `WATCH_ENABLE` | `false` | Enable topic watch endpoints (`/watch/*`) |
+| `WATCH_DEFAULT_CADENCE` | `weekly` | Default watch cadence: `daily`, `weekly`, or `monthly` |
+| `WATCH_MAX_RESULTS` | `10` | Papers fetched per watch run |
+| `REPORT_ENABLE` | `false` | Enable literature review report endpoints (`/report/*`) |
+| `REPORT_MAX_SECTIONS` | `6` | Cap report sections to bound cost/latency |
 | `USE_HYBRID_SEARCH` | `true` | BM25 + dense fusion |
 | `USE_RERANKER` | `true` | Cross-encoder reranking |
 | `USE_COLBERT_RERANK` | `false` | ColBERT multi-vector rerank layer |
@@ -362,7 +423,7 @@ Key settings (all overridable via environment variables):
 | `FAITHFULNESS_THRESHOLD` | `0.5` | NLI support score threshold |
 | `GEMINI_CACHE_ENABLED` | `false` | Explicit Gemini prompt caching |
 | `GEMINI_CACHE_TTL` | `3600` | Prompt cache lifetime (seconds) |
-| `SESSIONS_DB_PATH` | `sessions.db` | SQLite path for session/job persistence |
+| `SESSIONS_DB_PATH` | `sessions.db` | SQLite path for session/job/watch persistence |
 | `ENABLE_USER_PREFS` | `false` | Enable `/prefs` user preferences |
 | `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
 | `API_KEYS` | (none) | Comma-separated keys for request auth |
@@ -510,7 +571,7 @@ python purge.py --all --yes   # Clear everything
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-**v2.2 highlights:** modular `routes/` split · SSE streaming (query/chat/ingest) · SQLite session+job persistence · optional ColBERT rerank + HyDE · section-aware ingestion with arXiv metadata enrichment + title dedup · year-range corpus filter · explicit Gemini prompt caching · reflexion wall-clock budget · `/feedback` + `/prefs` endpoints · request-ID log correlation · HNSW tuning knobs · LaTeX equation rendering + copy buttons. Full history in the git log and `docs/`.
+**v2.3 highlights:** multi-provider LLM (Gemini + OpenRouter) with cross-provider failover · user-selectable models + capability gating · contradiction detection across retrieved sources · multimodal figure/table indexing + surfacing · confidence scoring + abstention · topic watches with background digest loop · literature review report generation · int8 ONNX cross-encoders for CPU · sub-query cap · structured-output fallback for non-Gemini models · eval scaffold. Full history in the git log and `docs/`.
 
 ---
 

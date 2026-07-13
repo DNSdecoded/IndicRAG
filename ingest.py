@@ -142,7 +142,15 @@ def _build_paper_chunks(
     # never captioned. Regions were extracted CPU-side upstream (worker / ingest_pdf).
     if config.ENABLE_MULTIMODAL_INGEST and figures:
         import figure_captioner
-        for fig in figure_captioner.caption_regions(figures, paper_id):
+        try:
+            captions = figure_captioner.caption_regions(figures, paper_id)
+        except Exception as cap_err:
+            logger.error(
+                f"Figure captioning failed for {paper_id}, continuing without "
+                f"figure chunks: {cap_err}"
+            )
+            captions = []
+        for fig in captions:
             all_chunks.append(fig["text"])
             all_metadata.append({
                 "paper_id": paper_id,
@@ -302,7 +310,14 @@ def ingest_pdf(
     figures = None
     if config.ENABLE_MULTIMODAL_INGEST:
         import figure_captioner
-        figures = figure_captioner.extract_regions(pdf_path, paper_id)
+        try:
+            figures = figure_captioner.extract_regions(pdf_path, paper_id)
+        except Exception as ext_err:
+            logger.warning(
+                f"Figure extraction failed for {paper_id}, continuing without "
+                f"figures: {ext_err}"
+            )
+            figures = None
 
     # Ingest the paper
     num_chunks = ingest_paper(
@@ -340,7 +355,14 @@ def _extract_worker(path: str, metadata: dict = None) -> tuple:
         # worker). Captioning is a network call and stays in the parent loop.
         if config.ENABLE_MULTIMODAL_INGEST:
             import figure_captioner
-            res['figures'] = figure_captioner.extract_regions(path, paper_id)
+            try:
+                res['figures'] = figure_captioner.extract_regions(path, paper_id)
+            except Exception as ext_err:
+                logger.warning(
+                    f"Figure extraction failed for {paper_id}, continuing without "
+                    f"figures: {ext_err}"
+                )
+                res['figures'] = None
 
     return path, paper_id, res, m
 

@@ -180,17 +180,21 @@ def caption_regions(
 
         out_dir.mkdir(parents=True, exist_ok=True)
         crop_path = out_dir / f"{r['page']}_{r['idx']}.png"
+        crop_written = True
         try:
             crop_path.write_bytes(r["png"])
         except Exception as e:  # a missing crop must not lose the text chunk
             logger.warning("crop write failed %s: %s", crop_path, e)
+            crop_written = False
 
         label = "Table" if r["kind"] == "table" else "Figure"
         chunks.append({
             "text": f"[{label} on page {r['page']}] {body}",
             "chunk_type": r["kind"],
             "page": r["page"],
-            "crop_path": str(crop_path),
+            # None when the write failed — don't record a path to a nonexistent
+            # file, or the UI would render a broken <img>/404.
+            "crop_path": str(crop_path) if crop_written else None,
             "caption": r["caption"],
         })
     return chunks

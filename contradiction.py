@@ -59,8 +59,10 @@ def find_contradictions(
     metas = (metadatas or [])[:max_items]
 
     def _title(i: int) -> str:
+        # Per-index fallback: two distinct untitled chunks must NOT collapse to
+        # the same title, or the same-paper guard below would skip a real pair.
         m = metas[i] if i < len(metas) else None
-        return ((m or {}).get("title") or "Unknown").strip() or "Unknown"
+        return ((m or {}).get("title") or f"Unknown-{i}").strip() or f"Unknown-{i}"
 
     found: Dict[tuple, Dict[str, Any]] = {}
     for i, j in itertools.combinations(range(len(items)), 2):

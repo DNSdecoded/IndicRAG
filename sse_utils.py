@@ -13,11 +13,14 @@ import translation
 
 
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
-                      max_tokens: int = None, query_id: str = None):
+                      max_tokens: int = None, query_id: str = None,
+                      model: str = None, provider: str = None):
     """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
 
     Strategy B + Indic target language: buffers all chunks, translates the full
     English answer, then emits a single translated chunk before the done event.
+
+    model/provider select the LLM (allowlist-validated upstream); omit for default.
     """
     q: asyncio.Queue = asyncio.Queue(maxsize=128)
     loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
@@ -30,7 +33,7 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
 
     def _run():
         try:
-            for chunk in llm_client.llm_generate_stream(prompt, max_tokens):
+            for chunk in llm_client.llm_generate_stream(prompt, max_tokens, model=model, provider=provider):
                 if stop_event.is_set():
                     break
                 _enqueue(("chunk", chunk))

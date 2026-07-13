@@ -18,8 +18,25 @@ from providers.openrouter import OpenRouterBackend
 logger = logging.getLogger(__name__)
 
 _backends: dict[str, LLMBackend] = {}
+_backends_lock = threading.Lock()
 _circuit_breaker: dict[tuple[str, str], float] = {}
+_circuit_lock = threading.Lock()
 _CIRCUIT_COOLDOWN = 60
+
+
+def _circuit_blocked(key: tuple[str, str]) -> bool:
+    with _circuit_lock:
+        return time.monotonic() < _circuit_breaker.get(key, 0)
+
+
+def _circuit_trip(key: tuple[str, str]) -> None:
+    with _circuit_lock:
+        _circuit_breaker[key] = time.monotonic() + _CIRCUIT_COOLDOWN
+
+
+def _circuit_clear(key: tuple[str, str]) -> None:
+    with _circuit_lock:
+        _circuit_breaker.pop(key, None)
 
 # ponytail: legacy back-compat shim. Pool state now lives in GeminiBackend;
 # these module globals are unused by the dispatcher and exist only so
@@ -39,7 +56,9 @@ def _next_client_idx() -> int:
 def _init_backends() -> None:
     global _backends
     if not _backends:
-        _backends = {"gemini": GeminiBackend(), "openrouter": OpenRouterBackend()}
+        with _backends_lock:
+            if not _backends:
+                _backends = {"gemini": GeminiBackend(), "openrouter": OpenRouterBackend()}
 
 
 def get_backend(provider: str) -> LLMBackend:
@@ -100,21 +119,21 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
 
     for prov, mdl in _attempts(model, provider):
         key = _circuit_key(prov, mdl)
-        if time.monotonic() < _circuit_breaker.get(key, 0):
+        if _circuit_blocked(key):
             logger.info(f"[failover] {prov}:{mdl} circuit open, skipping")
             continue
         backend = get_backend(prov)
         any_attempted = True
         try:
             result = backend.generate(mdl, contents, gen_config)
-            _circuit_breaker.pop(key, None)
+            _circuit_clear(key)
             return result
         except Exception as exc:
             last_exc = exc
             if backend.is_permanent(exc):
                 raise
             logger.warning(f"[failover] {prov}:{mdl} failed ({exc!s:.120}) — next path")
-            _circuit_breaker[key] = time.monotonic() + _CIRCUIT_COOLDOWN
+            _circuit_trip(key)
             continue
 
     if not any_attempted:
@@ -157,7 +176,7 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
     any_attempted = False
     for prov, mdl in _attempts(model, provider):
         key = _circuit_key(prov, mdl)
-        if time.monotonic() < _circuit_breaker.get(key, 0):
+        if _circuit_blocked(key):
             continue
         backend = get_backend(prov)
         if prov == "gemini":
@@ -170,7 +189,7 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
             for chunk in backend.generate_stream(mdl, prompt, gen_config):
                 emitted = True
                 yield chunk
-            _circuit_breaker.pop(key, None)
+            _circuit_clear(key)
             return
         except Exception as exc:
             last_exc = exc
@@ -179,7 +198,7 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
             if backend.is_permanent(exc):
                 raise
             logger.warning(f"[stream failover] {prov}:{mdl} failed ({exc!s:.120}) — next path")
-            _circuit_breaker[key] = time.monotonic() + _CIRCUIT_COOLDOWN
+            _circuit_trip(key)
             continue
 
     if not any_attempted:

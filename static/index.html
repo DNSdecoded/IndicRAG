@@ -1123,7 +1123,8 @@ async function sendMessage() {
             const res = await fetch(`${API}/chat/stream`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8,
-                                       paper_ids: paperIds.length ? paperIds : null }),
+                                       paper_ids: paperIds.length ? paperIds : null,
+                                       model: document.getElementById('modelSelect').value || null }),
                 signal: currentController.signal
             });
             if (!res.ok) { const d=await res.json().catch(()=>({})); throw new Error(formatError(d)||'Stream failed'); }

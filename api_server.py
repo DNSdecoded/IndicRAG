@@ -53,6 +53,15 @@ async def lifespan(app):
         import watch_runner
         watch_task = asyncio.create_task(watch_runner.watch_loop())
 
+        def _log_watch_task_result(task: asyncio.Task) -> None:
+            # Surface a crashed schedule loop immediately instead of waiting for
+            # GC to log "Task exception was never retrieved".
+            if not task.cancelled() and task.exception() is not None:
+                logger.error("[Watch] schedule loop died unexpectedly",
+                             exc_info=task.exception())
+
+        watch_task.add_done_callback(_log_watch_task_result)
+
     yield
 
     if watch_task:

@@ -30,12 +30,21 @@ class ChatRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+    provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
     @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v: str) -> str:
         if v not in ("A", "B"):
             raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
         return v
 
 
@@ -85,6 +94,8 @@ async def chat(
             strategy=body.strategy,
             top_k=top_k,
             filter_dict=build_paper_filter(body.paper_ids),
+            model=body.model,
+            provider=body.provider,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
@@ -145,7 +156,8 @@ async def chat_stream(
         full_answer: list[str] = []
         hit_error = False
         async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
-                                       strategy=body.strategy, query_id=query_id):
+                                       strategy=body.strategy, query_id=query_id,
+                                       model=body.model, provider=body.provider):
             if event.startswith('data: {"type": "error"'):
                 hit_error = True
             if event.startswith('data: {"type": "done"'):
@@ -193,7 +205,7 @@ async def list_sessions(authenticated: bool = Depends(verify_api_key)):
             msgs = s.get("messages", [])
             if not msgs:  # skip empty sessions (created but never used)
                 continue
-            first_user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+            first_user = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
             summaries.append(ChatSessionSummary(
                 session_id=sid,
                 preview=first_user[:120],
