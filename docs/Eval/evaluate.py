@@ -377,6 +377,11 @@ def main():
                         help="Committed metrics JSON to gate per-query regressions against")
     parser.add_argument("--regression-eps", type=float, default=0.02,
                         help="Max allowed per-query overall drop vs baseline before CI fails")
+    parser.add_argument("--model", default=None,
+                        help="LLM model id the answers were generated with (allowlist id). "
+                             "Labels the run so per-model regressions are visible in the report.")
+    parser.add_argument("--provider", default=None,
+                        help="LLM provider the answers were generated with (gemini|openrouter).")
     args = parser.parse_args()
 
     for path in [Path(args.judgments), Path(args.results)]:
@@ -392,9 +397,19 @@ def main():
     sim_fn, threshold = make_grounding_scorer(args.grounding_judge)
     metrics = evaluate(judgments, results, args.k, sim_fn, threshold)
 
+    # Phase 8: label the run with the model/provider that produced the answers so
+    # per-model regressions are attributable in the report/JSON (answers are
+    # generated out-of-band; this harness only scores them).
+    if args.model:
+        metrics["model"] = args.model
+    if args.provider:
+        metrics["provider"] = args.provider
+
     # Terminal output
     print("\nIndicRAG Evaluation")
     print("=" * 42)
+    if args.model or args.provider:
+        print(f"  Model   : {args.provider or 'auto'}:{args.model or 'default'}")
     print(f"  Queries : {metrics['num_queries']}   k = {metrics['k']}")
     print("-" * 42)
     print(f"  Precision@{args.k}      {metrics['mean_precision']:.3f}  {bar(metrics['mean_precision'], 15)}")
