@@ -513,6 +513,14 @@
 
         <div class="sidebar-section">
             <div class="section-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+                LLM Model
+            </div>
+            <select id="modelSelect" title="LLM model" style="width:100%;padding:8px;border-radius:8px;background:var(--card,#1a1a1a);color:inherit;border:1px solid rgba(128,128,128,.3);"></select>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-label">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 Knowledge Base
             </div>
@@ -736,8 +744,41 @@ function selectMode(m) {
     document.getElementById('radioAgent').checked = m === 'agent';
     document.getElementById('cardStandard').classList.toggle('selected', m === 'standard');
     document.getElementById('cardAgent').classList.toggle('selected', m === 'agent');
+    updateModelDisabled();
     updatePlaceholder();
 }
+
+// ── MODEL SELECTION (Phase 8) ─────────────────────────────────
+async function loadModels() {
+    try {
+        const r = await fetch(`${API}/models`);
+        const { models, default: def } = await r.json();
+        const sel = document.getElementById('modelSelect');
+        sel.innerHTML = '';
+        for (const mo of models) {
+            const opt = document.createElement('option');
+            opt.value = mo.id;
+            opt.textContent = mo.id + (mo.tools ? '' : ' (no tools)');
+            opt.dataset.tools = mo.tools;
+            if (mo.id === def) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        updateModelDisabled();
+    } catch (e) { console.warn('model list unavailable', e); }
+}
+// In agent mode, tool-incapable models can't route tools — grey them out.
+function updateModelDisabled() {
+    const agent = pipelineMode === 'agent';
+    for (const opt of document.querySelectorAll('#modelSelect option')) {
+        opt.disabled = agent && opt.dataset.tools === 'false';
+    }
+    const sel = document.getElementById('modelSelect');
+    if (sel && sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
+        const first = [...sel.options].find(o => !o.disabled);
+        if (first) first.selected = true;
+    }
+}
+loadModels();
 
 // ── STRATEGY ───────────────────────────────────────────────────
 function selectStrategy(s) {
@@ -1069,7 +1110,8 @@ async function sendMessage() {
         if (pipelineMode === 'agent') {
             res = await fetch(`${API}/agent/query`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ question: text, session_id: sessionId, strategy }),
+                body: JSON.stringify({ question: text, session_id: sessionId, strategy,
+                                       model: document.getElementById('modelSelect').value || null }),
                 signal: currentController.signal
             });
             data = await res.json();
