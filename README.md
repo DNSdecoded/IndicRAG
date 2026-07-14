@@ -41,6 +41,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 | **Failover backstop** | Fails if selected provider == fallback provider | **Guaranteed Gemini backstop** — any selected OpenRouter model falls back to Gemini, so a free-tier 429 never fails the request outright |
 | **Math rendering** | Raw LaTeX shown as text | **KaTeX renders `\(…\)` / `\[…\]`** inline & display equations in answers (plus existing `$…$` / `$$…$$`) |
 | **Response cache key** | prompt + model | prompt + model + **provider** — same model via different providers no longer collides in the LLM cache |
+| **Report citations** | Section-local numbering | **Document-global citations** — one number per paper across the whole literature review, dangling markers dropped, single References list |
 
 ---
 
