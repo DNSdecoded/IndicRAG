@@ -398,7 +398,7 @@ Key settings (all overridable via environment variables):
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
 | `LLM_MODEL_NAME` | `gemini-3.5-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,google/gemma-4-31b-it:free,google/gemma-4-26b-a4b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,nvidia/nemotron-nano-9b-v2:free` | Curated model dropdown (comma-separated) |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,nvidia/nemotron-3-ultra-550b-a55b:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Curated model dropdown (comma-separated) |
 | `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
