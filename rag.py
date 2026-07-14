@@ -68,12 +68,14 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
     import re
 
     seen_nums = set()
-    # Match [N] citation markers; the \[(\d+)\] shape still ignores ranges like [10-15] mg
-    for m in re.finditer(r'\[(\d+)\]', answer):
-        try:
-            seen_nums.add(int(m.group(1)))
-        except ValueError:
-            pass
+    # Match [N] and comma-separated [N, N, ...] citation markers.
+    # Still ignores ranges like [10-15] mg (no comma, so no match).
+    for m in re.finditer(r'\[(\d+(?:\s*,\s*\d+)*)\]', answer):
+        for part in m.group(1).split(","):
+            try:
+                seen_nums.add(int(part.strip()))
+            except ValueError:
+                pass
 
     num_to_meta = citation_number_map(metadatas)
 
