@@ -87,3 +87,6 @@ graphify-out/
 
 # Local test scratch output
 test_output.txt
+
+# Generated eval artifact — timestamped, noisy diffs; regenerate via docs/Eval/evaluate.py
+docs/Eval/eval_report.json

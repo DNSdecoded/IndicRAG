@@ -73,17 +73,6 @@
           "cited_chunk_text": null
         }
       ]
-    },
-    {
-      "query_id": "D",
-      "retrieved_papers": ["ppo_pixel", "ppo_pixel", "ppo_pixel", "ppo_pixel", "ppo_pixel"],
-      "answer_claims": [
-        {
-          "claim": "REPLACE THIS: paste a claim from your actual Test D answer here.",
-          "cited_paper": "ppo_pixel",
-          "cited_chunk_text": "REPLACE THIS: paste the chunk text that was cited."
-        }
-      ]
     }
   ]
 }

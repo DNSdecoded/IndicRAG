@@ -39,6 +39,7 @@ def _build_paper_chunks(
     metadata: Dict[str, Any],
     collection,
     seen_hashes: Optional[set] = None,
+    figures: Optional[List[dict]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run dedup checks and build chunk/metadata/id lists for one paper.
 
@@ -136,6 +137,34 @@ def _build_paper_chunks(
         chunk_counter = 0
         _build_chunks(sections, skip_refs=False)
 
+    # Phase 3: append figure/table chunks. Captioning (VLM, network) runs here —
+    # after every dedup check above has passed — so a duplicate/unchanged paper is
+    # never captioned. Regions were extracted CPU-side upstream (worker / ingest_pdf).
+    if config.ENABLE_MULTIMODAL_INGEST and figures:
+        import figure_captioner
+        try:
+            captions = figure_captioner.caption_regions(figures, paper_id)
+        except Exception as cap_err:
+            logger.error(
+                f"Figure captioning failed for {paper_id}, continuing without "
+                f"figure chunks: {cap_err}"
+            )
+            captions = []
+        for fig in captions:
+            all_chunks.append(fig["text"])
+            all_metadata.append({
+                "paper_id": paper_id,
+                "title": title,
+                "section": fig["chunk_type"],
+                "chunk_index": chunk_counter,
+                "chunk_type": fig["chunk_type"],
+                "page": fig["page"],
+                "crop_path": fig["crop_path"],
+                **metadata,
+            })
+            all_ids.append(f"{paper_id}_{fig['chunk_type']}_{chunk_counter}")
+            chunk_counter += 1
+
     if not all_chunks:
         logger.warning(f"No chunks created for paper {paper_id}")
         return None
@@ -157,7 +186,8 @@ def ingest_paper(
     title: str,
     sections: List[tuple],
     metadata: Optional[Dict[str, Any]] = None,
-    collection=None
+    collection=None,
+    figures: Optional[List[dict]] = None,
 ) -> int:
     """
     Ingest a single paper into the vector store.
@@ -175,7 +205,7 @@ def ingest_paper(
     if collection is None:
         collection = vector_store.get_or_create_collection()
 
-    prepared = _build_paper_chunks(paper_id, title, sections, metadata or {}, collection)
+    prepared = _build_paper_chunks(paper_id, title, sections, metadata or {}, collection, figures=figures)
     if prepared is None:
         return 0
 
@@ -275,13 +305,28 @@ def ingest_pdf(
             # Don't overwrite metadata the caller explicitly provided
             metadata = {**enriched, **metadata}
 
+    # Phase 3: extract figure/table regions (CPU) before ingest; captioning is
+    # deferred to _build_paper_chunks so it only runs if the paper survives dedup.
+    figures = None
+    if config.ENABLE_MULTIMODAL_INGEST:
+        import figure_captioner
+        try:
+            figures = figure_captioner.extract_regions(pdf_path, paper_id)
+        except Exception as ext_err:
+            logger.warning(
+                f"Figure extraction failed for {paper_id}, continuing without "
+                f"figures: {ext_err}"
+            )
+            figures = None
+
     # Ingest the paper
     num_chunks = ingest_paper(
         paper_id=paper_id,
         title=result['title'],
         sections=result['sections'],
         metadata=metadata,
-        collection=collection
+        collection=collection,
+        figures=figures,
     )
     
     logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
@@ -306,6 +351,18 @@ def _extract_worker(path: str, metadata: dict = None) -> tuple:
     # N concurrent arXiv requests from the pool.
     if res is not None:
         m['content_hash'] = _content_hash(res['text'])
+        # Phase 3: extract figure/table regions here (CPU-only, safe in the pool
+        # worker). Captioning is a network call and stays in the parent loop.
+        if config.ENABLE_MULTIMODAL_INGEST:
+            import figure_captioner
+            try:
+                res['figures'] = figure_captioner.extract_regions(path, paper_id)
+            except Exception as ext_err:
+                logger.warning(
+                    f"Figure extraction failed for {paper_id}, continuing without "
+                    f"figures: {ext_err}"
+                )
+                res['figures'] = None
 
     return path, paper_id, res, m
 
@@ -417,6 +474,7 @@ def ingest_directory(
                 prepared = _build_paper_chunks(
                     paper_id, result['title'], result['sections'],
                     metadata, collection, seen_hashes,
+                    figures=result.get('figures'),
                 )
                 if prepared is not None:
                     stats["successful"] += 1

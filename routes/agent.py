@@ -37,12 +37,21 @@ class AgentQueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     session_id: Optional[str] = None
     strategy: str = Field("A")
+    model: Optional[str] = None
+    provider: Optional[str] = None
 
     @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v):
         if v not in ("A", "B"):
             raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
         return v
 
 
@@ -66,6 +75,8 @@ class AgentQueryResponse(BaseModel):
     sources: List[AgentSource]
     processing_time: float
     timestamp: str
+    answer_confidence: Optional[float] = None
+    abstained: bool = False
 
 
 @router.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
@@ -97,6 +108,8 @@ async def agent_query(
         session_id=session_id,
         strategy=body.strategy,
         start_time=time.monotonic(),
+        requested_model=body.model,
+        requested_provider=body.provider,
     )
 
     try:
@@ -193,4 +206,6 @@ async def agent_query(
         sources=sources,
         processing_time=processing_time,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        answer_confidence=result.get("answer_confidence"),
+        abstained=result.get("abstained", False),
     )

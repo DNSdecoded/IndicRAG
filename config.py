@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).parent
 PAPERS_DIR = PROJECT_ROOT / "papers"
 CHROMA_DB_DIR = PROJECT_ROOT / "chroma_db"
 MODELS_CACHE_DIR = PROJECT_ROOT / "models"
+FIGURES_DIR = PROJECT_ROOT / "figures"  # Phase 3: saved figure/table crops
 SESSIONS_DB_PATH = Path(os.getenv("SESSIONS_DB_PATH", PROJECT_ROOT / "sessions.db"))
 
 
@@ -37,7 +38,8 @@ def ensure_directories():
     directories = {
         "PAPERS_DIR": PAPERS_DIR,
         "CHROMA_DB_DIR": CHROMA_DB_DIR,
-        "MODELS_CACHE_DIR": MODELS_CACHE_DIR
+        "MODELS_CACHE_DIR": MODELS_CACHE_DIR,
+        "FIGURES_DIR": FIGURES_DIR,
     }
     
     for name, directory in directories.items():
@@ -115,6 +117,22 @@ COLBERT_WEIGHT = float(os.getenv("COLBERT_WEIGHT", "0.5"))  # dense-vs-colbert f
 # HyDE: embed a drafted hypothetical answer instead of the bare query
 USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
 
+# Phase 3 — multimodal figure/table indexing.
+# On: ingest extracts figure/table crops + nearby captions, has the Gemini VLM
+# describe each, and indexes "caption + description" as chunks in the SAME
+# collection (retrieval/citation unchanged). Off by default — adds one VLM call
+# per figure at ingest, bounded by MULTIMODAL_MAX_FIGS_PER_DOC.
+ENABLE_MULTIMODAL_INGEST = os.getenv("ENABLE_MULTIMODAL_INGEST", "false").lower() == "true"
+MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12"))
+
+# Phase 5 — contradiction/consensus detection. When on, the answer generator
+# runs pairwise NLI (the same faithfulness model) over the top retrieved passages
+# and, if any pair contradicts above the threshold, instructs the model to
+# present both positions with citations instead of silently picking one. Off by
+# default — adds O(n^2) NLI passes over a capped passage set at answer time.
+CONTRADICTION_DETECT_ENABLE = os.getenv("CONTRADICTION_DETECT_ENABLE", "false").lower() == "true"
+CONTRADICTION_NLI_THRESHOLD = float(os.getenv("CONTRADICTION_NLI_THRESHOLD", "0.6"))
+
 # Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
 ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
 DEDUP_PAPERS = os.getenv("DEDUP_PAPERS", "true").lower() == "true"
@@ -124,6 +142,23 @@ DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
 # supplies user_id; not wired into agent prompts (no user-identity system
 # exists elsewhere in this app to link it to yet).
 ENABLE_USER_PREFS = os.getenv("ENABLE_USER_PREFS", "false").lower() == "true"
+
+# Phase 6 — "watch a topic" scheduled ingest + digests. When on, users can
+# register topic watches (POST /watch); each run does external search (arXiv /
+# open-access), dedups against the corpus, ingests genuinely new papers, and
+# stores a cited digest. Off by default — it makes outbound API calls and grows
+# the corpus. Cadence controls the default re-run interval for new watches.
+WATCH_ENABLE = os.getenv("WATCH_ENABLE", "false").lower() == "true"
+WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|weekly|monthly
+WATCH_MAX_RESULTS = int(os.getenv("WATCH_MAX_RESULTS", "10"))  # papers fetched per watch run
+WATCH_POLL_INTERVAL = int(os.getenv("WATCH_POLL_INTERVAL", "3600"))  # seconds between schedule-loop sweeps
+
+# Phase 7 — literature-review report workflow. POST /report decomposes a topic
+# into sections, synthesizes a cited section per part from the corpus, and
+# stores a downloadable Markdown artifact as an async job. Off by default: a
+# multi-section report is several LLM calls per request.
+REPORT_ENABLE = os.getenv("REPORT_ENABLE", "false").lower() == "true"
+REPORT_MAX_SECTIONS = int(os.getenv("REPORT_MAX_SECTIONS", "6"))  # cap sections to bound cost/latency
 
 # ============================================================================
 # Retrieval Parameters
@@ -164,6 +199,11 @@ NLI_MODEL_NAME = os.getenv(
 #   cross-encoder/nli-deberta-v3-base: 0=contradiction, 1=entailment, 2=neutral
 # Set this to match whatever NLI_MODEL_NAME you choose or scores invert silently.
 NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
+# Contradiction class index in the SAME model's logits (Phase 5 contradiction
+# detection). Mirrors NLI_ENTAILMENT_INDEX and follows the same per-model order:
+#   mDeBERTa-xnli (default):     2=contradiction
+#   cross-encoder/nli-deberta-v3-base: 0=contradiction
+NLI_CONTRADICTION_INDEX = int(os.getenv("NLI_CONTRADICTION_INDEX", "2"))
 
 # ============================================================================
 # Vector Store
@@ -225,6 +265,11 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
 # work. Keep below AGENT_TIMEOUT so it fires first.
 AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
+# Max sub-queries the planner emits (and tools run per cycle). Each sub-query does a
+# retrieve + CPU reranker pass (~15 pairs); those passes are CPU-bound so N concurrent
+# ones thrash rather than parallelize. Over a small corpus, 3 covers most queries at a
+# fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
+AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
 
@@ -251,6 +296,26 @@ if not LLM_API_KEY_POOL:
     if _single.strip() and _single.strip() != _PLACEHOLDER:
         LLM_API_KEY_POOL = [_single.strip()]
 LLM_API_KEY = LLM_API_KEY_POOL[0] if LLM_API_KEY_POOL else ""
+
+# ============================================================================
+# Phase 8 — Secondary LLM provider (OpenRouter)
+# ============================================================================
+# Default backend for LLM calls and the cross-vendor fallback. When the chosen
+# provider's models are all exhausted/circuit-open, failover crosses to the
+# other provider's default model so a whole-vendor outage isn't a total failure.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")                    # gemini|openrouter
+LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "openrouter")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+# Curated allowlist offered to the user in the model dropdown (comma-separated).
+# Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
+_raw_selectable = os.getenv(
+    "LLM_SELECTABLE_MODELS",
+    "gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+)
+LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
+# How long the enriched OpenRouter /models catalog is cached (seconds).
+MODELS_CACHE_TTL = int(os.getenv("MODELS_CACHE_TTL", "3600"))
 
 # ============================================================================
 # Cache Configuration
@@ -406,9 +471,20 @@ SECTION_HEADERS = list(SECTION_HEADERS) + INDIC_SECTION_HEADERS
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # ============================================================================
+# Phase 2 — surfaced confidence + abstention
+# ============================================================================
+# Aggregate a per-answer confidence from the final reflexion feedback and expose
+# an explicit "insufficient evidence" path. Weights are uncalibrated until the
+# Phase 1 eval reliability curve exists — treat the number as directional.
+ANSWER_CONFIDENCE_ENABLE = os.getenv("ANSWER_CONFIDENCE_ENABLE", "true").lower() == "true"
+# Abstain when the answer is grounded (high faithfulness) but the corpus does not
+# cover the query (completeness below this floor) after the reflexion budget is spent.
+ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"))
+
+# ============================================================================
 # Version
 # ============================================================================
-VERSION = "2.2.0"
+VERSION = "2.3.0-dev"
 
 # ============================================================================
 # Chat / Session

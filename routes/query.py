@@ -41,6 +41,8 @@ class QueryRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+    provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
     @field_validator('strategy')
     @classmethod
@@ -49,12 +51,27 @@ class QueryRequest(BaseModel):
             raise ValueError("Strategy must be 'A' or 'B'")
         return v
 
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
+        return v
+
+
+class FigureRef(BaseModel):
+    """A figure/table crop a cited paper contributed (Phase 3 multimodal)."""
+    page: Optional[int] = None
+    chunk_type: str
+    url: str
+
 
 class Citation(BaseModel):
     """Citation information."""
     number: str
     title: str
     section: str
+    figures: List[FigureRef] = []
 
 
 class QueryResponse(BaseModel):
@@ -181,6 +198,8 @@ async def query_question(
             strategy=body.strategy,
             top_k=top_k,
             filter_dict=build_paper_filter(body.paper_ids),
+            model=body.model,
+            provider=body.provider,
         )
 
         processing_time = time.time() - start_time
@@ -193,7 +212,8 @@ async def query_question(
             Citation(
                 number=cite['number'],
                 title=cite['title'],
-                section=cite['section']
+                section=cite['section'],
+                figures=cite.get('figures', []),
             )
             for cite in result['citations']
         ]
@@ -251,6 +271,7 @@ async def query_stream(
 
     return StreamingResponse(
         sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
-                   strategy=body.strategy, query_id=query_id),
+                   strategy=body.strategy, query_id=query_id,
+                   model=body.model, provider=body.provider),
         media_type="text/event-stream",
     )

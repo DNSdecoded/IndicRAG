@@ -22,7 +22,7 @@
     <style>
         /* ── THEME VARIABLES ───────────────────────────────── */
         :root {
-            /* Premium enterprise — indigo accent on refined slate neutrals */
+                /* Premium enterprise — indigo accent on refined slate neutrals */
             --bg:               #F7F8FA;
             --sidebar-bg:       #FFFFFF;
             --surface:          #FFFFFF;
@@ -372,6 +372,9 @@
         .cite-row { font-family: 'JetBrains Mono', monospace; font-size: .7rem; color: var(--text-3); padding: .35rem .6rem; background: var(--surface-up); border-radius: 5px; margin-bottom: .3rem; border-left: 2px solid var(--cite-bar); transition: var(--transition); border: 1px solid var(--border); }
         .cite-row:last-child { margin-bottom: 0; }
         .cite-num { font-weight: 600; color: var(--primary); margin-right: .35rem; }
+        .cite-fig-link { display: inline-block; margin: .4rem .4rem 0 0; }
+        .cite-fig { height: 72px; max-width: 160px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); vertical-align: top; transition: var(--transition); }
+        .cite-fig:hover { border-color: var(--primary); }
 
         /* Typing (standard mode) */
         .typing-row { display: flex; gap: .75rem; align-items: flex-start; }
@@ -510,6 +513,14 @@
 
         <div class="sidebar-section">
             <div class="section-label">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+                LLM Model
+            </div>
+            <select id="modelSelect" title="LLM model" style="width:100%;padding:8px;border-radius:8px;background:var(--card,#1a1a1a);color:inherit;border:1px solid rgba(128,128,128,.3);"></select>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="section-label">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 Knowledge Base
             </div>
@@ -537,6 +548,9 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
             Supported Languages
         </button>
+        <button class="sfooter-btn" onclick="showHistoryModal()">🕘 Chat History</button>
+        <button class="sfooter-btn" onclick="showWatchModal()">📡 Topic Watches</button>
+        <button class="sfooter-btn" onclick="showReportModal()">📄 Lit Review</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
     </div>
@@ -634,9 +648,67 @@
     </div>
 </div>
 
+<div class="overlay" id="watchOverlay">
+    <div class="modal" style="max-width:540px">
+        <h3>📡 Topic Watches</h3>
+        <p>Register a topic to auto-ingest matching papers and build a cited digest on a cadence.</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem">
+            <input id="watchTopic" maxlength="500" placeholder="Topic — e.g. graph neural networks for materials"
+                style="flex:1 1 100%;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+            <select id="watchLang" style="flex:1;min-width:120px;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+                <option value="en">English</option><option value="hi">हिंदी</option><option value="te">తెలుగు</option>
+                <option value="ta">தமிழ்</option><option value="bn">বাংলা</option><option value="mr">मराठी</option>
+                <option value="gu">ગુજરાતી</option><option value="kn">ಕನ್ನಡ</option><option value="ml">മലയാളം</option>
+                <option value="pa">ਪੰਜਾਬੀ</option><option value="or">ଓଡ଼ିଆ</option><option value="ur">اردو</option>
+            </select>
+            <select id="watchCadence" style="flex:1;min-width:110px;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+                <option value="daily">Daily</option><option value="weekly" selected>Weekly</option><option value="monthly">Monthly</option>
+            </select>
+            <button class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="createWatch()">+ Watch</button>
+        </div>
+        <div id="watchList" style="margin-top:1.1rem"></div>
+        <div id="watchDigest" style="margin-top:1rem"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hideWatchModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="historyOverlay">
+    <div class="modal" style="max-width:540px">
+        <h3>🕘 Chat History</h3>
+        <p>Reopen a past conversation to review it or continue where you left off.</p>
+        <div id="historyList" style="margin-top:1.1rem"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hideHistoryModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="reportOverlay">
+    <div class="modal" style="max-width:560px">
+        <h3>📄 Literature Review</h3>
+        <p>Generate a sectioned, cited review of a topic from your corpus. Runs as a background job; download the Markdown when it's done.</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem">
+            <input id="reportTopic" maxlength="500" placeholder="Topic — e.g. terahertz antenna miniaturization"
+                style="flex:1 1 100%;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+            <select id="reportLang" style="flex:1;min-width:120px;padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',sans-serif;">
+                <option value="en">English</option><option value="hi">हिंदी</option><option value="te">తెలుగు</option>
+                <option value="ta">தமிழ்</option><option value="bn">বাংলা</option><option value="mr">मराठी</option>
+                <option value="gu">ગુજરાતી</option><option value="kn">ಕನ್ನಡ</option><option value="ml">മലയാളം</option>
+                <option value="pa">ਪੰਜਾਬੀ</option><option value="or">ଓଡ଼ିଆ</option><option value="ur">اردو</option>
+            </select>
+            <button id="reportBtn" class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="generateReport()">Generate</button>
+        </div>
+        <div id="reportStatus" style="margin-top:1.1rem"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="hideReportModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 <div class="toast-wrap" id="toastWrap"></div>
-
 <script>
 // ── STATE ──────────────────────────────────────────────────────
 const API       = window.location.origin;
@@ -672,8 +744,41 @@ function selectMode(m) {
     document.getElementById('radioAgent').checked = m === 'agent';
     document.getElementById('cardStandard').classList.toggle('selected', m === 'standard');
     document.getElementById('cardAgent').classList.toggle('selected', m === 'agent');
+    updateModelDisabled();
     updatePlaceholder();
 }
+
+// ── MODEL SELECTION (Phase 8) ─────────────────────────────────
+async function loadModels() {
+    try {
+        const r = await fetch(`${API}/models`);
+        const { models, default: def } = await r.json();
+        const sel = document.getElementById('modelSelect');
+        sel.innerHTML = '';
+        for (const mo of models) {
+            const opt = document.createElement('option');
+            opt.value = mo.id;
+            opt.textContent = mo.id + (mo.tools ? '' : ' (no tools)');
+            opt.dataset.tools = mo.tools;
+            if (mo.id === def) opt.selected = true;
+            sel.appendChild(opt);
+        }
+        updateModelDisabled();
+    } catch (e) { console.warn('model list unavailable', e); }
+}
+// In agent mode, tool-incapable models can't route tools — grey them out.
+function updateModelDisabled() {
+    const agent = pipelineMode === 'agent';
+    for (const opt of document.querySelectorAll('#modelSelect option')) {
+        opt.disabled = agent && opt.dataset.tools === 'false';
+    }
+    const sel = document.getElementById('modelSelect');
+    if (sel && sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
+        const first = [...sel.options].find(o => !o.disabled);
+        if (first) first.selected = true;
+    }
+}
+loadModels();
 
 // ── STRATEGY ───────────────────────────────────────────────────
 function selectStrategy(s) {
@@ -737,6 +842,10 @@ function renderContent(text) {
         return id;
     };
     text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => stash(t, true));
+    // LLMs emit \[...\] / \(...\) LaTeX delimiters; stash them too, else marked
+    // strips the backslash and prints the raw TeX as literal "( R_f = \exp...".
+    text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => stash(t, true));
+    text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => stash(t, false));
     text = text.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, t) => stash(t, false));
     let html = marked.parse(text);
     store.forEach(({ id, tex, display }) => {
@@ -751,7 +860,17 @@ function renderContent(text) {
     });
     return DOMPurify.sanitize(html, { ADD_TAGS: ['semantics','annotation','math','mrow','mi','mn','mo','msup','msub','mfrac','mover','munder','munderover','msqrt','mroot','mtable','mtr','mtd','mtext','mspace','mpadded','mphantom','menclose','mglyph','merror','mlabeledtr','mmultiscripts','mprescripts'], ADD_ATTR: ['mathvariant','encoding','xmlns','display','accent','accentunder','notation','columnalign','rowalign','columnspacing','rowspacing','frame','framespacing','equalrows','equalcolumns','displaystyle','scriptlevel','stretchy','fence','separator','largeop','movablelimits','symmetric','lspace','rspace','linebreak','lineleading','linebreakmultchar','indentalign','indenttarget','indentshift','minsize','maxsize','mathsize','mathcolor','mathbackground','form'] });
 }
-function esc(t) { const d = document.createElement('div'); d.textContent = String(t||''); return d.innerHTML; }
+// Escapes text AND attribute contexts — quotes included, since esc() is used
+// inside href="..."/title="..." (textContent→innerHTML would leave quotes raw).
+function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// Phase 3: render a cited paper's figure/table crops as clickable thumbnails.
+function citeFigs(c) {
+    return (c.figures || []).map(f =>
+        `<a class="cite-fig-link" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"`
+        + ` title="${esc(f.chunk_type)}${f.page ? ' · p'+esc(f.page) : ''}">`
+        + `<img class="cite-fig" src="${esc(f.url)}" alt="${esc(f.chunk_type)}" loading="lazy"></a>`
+    ).join('');
+}
 function safeHref(u) { try { const p = new URL(u, window.location.origin); return (p.protocol === 'https:' || p.protocol === 'http:') ? p.href : ''; } catch { return ''; } }
 
 // ── SESSION ────────────────────────────────────────────────────
@@ -860,7 +979,7 @@ function appendAssistantBubble(data) {
     const citesHtml = cites.length ? `
         <div class="asst-citations">
             <div class="citations-label">Sources</div>
-            ${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}
+            ${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}${citeFigs(c)}</div>`).join('')}
         </div>` : '';
     const row = document.createElement('div');
     row.className = 'msg-row assistant';
@@ -995,7 +1114,8 @@ async function sendMessage() {
         if (pipelineMode === 'agent') {
             res = await fetch(`${API}/agent/query`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ question: text, session_id: sessionId, strategy }),
+                body: JSON.stringify({ question: text, session_id: sessionId, strategy,
+                                       model: document.getElementById('modelSelect').value || null }),
                 signal: currentController.signal
             });
             data = await res.json();
@@ -1007,7 +1127,8 @@ async function sendMessage() {
             const res = await fetch(`${API}/chat/stream`, {
                 method: 'POST', headers: {'Content-Type':'application/json'},
                 body: JSON.stringify({ message: text, session_id: sessionId, strategy, top_k: 8,
-                                       paper_ids: paperIds.length ? paperIds : null }),
+                                       paper_ids: paperIds.length ? paperIds : null,
+                                       model: document.getElementById('modelSelect').value || null }),
                 signal: currentController.signal
             });
             if (!res.ok) { const d=await res.json().catch(()=>({})); throw new Error(formatError(d)||'Stream failed'); }
@@ -1048,7 +1169,7 @@ async function sendMessage() {
                             (cites.length ? `<span class="meta-chip chip-cite">${cites.length} source${cites.length>1?'s':''}</span>` : '') +
                             `<span class="meta-chip chip-time">${elapsed}s</span>` +
                             _respCopyBtn(acc);
-                        if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}</div>`).join('')}</div>`;
+                        if (cites.length) sCites.innerHTML = `<div class="asst-citations"><div class="citations-label">Sources</div>${cites.map(c=>`<div class="cite-row"><span class="cite-num">[${esc(c.number)}]</span>${esc(c.title)} — ${esc(c.section)}${citeFigs(c)}</div>`).join('')}</div>`;
                         if (evt.query_id) renderFeedbackButtons(sFeedback, evt.query_id);
                         scrollBottom();
                     }
@@ -1205,6 +1326,222 @@ function showToast(msg,type='info'){
     const t=document.createElement('div'); t.className=`toast toast-${type}`; t.textContent=msg;
     wrap.appendChild(t);
     setTimeout(()=>{t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(()=>t.remove(),300);},4000);
+}
+
+// ── CHAT HISTORY ───────────────────────────────────────────────
+function showHistoryModal(){ document.getElementById('historyOverlay').classList.add('active'); loadHistory(); }
+function hideHistoryModal(){ document.getElementById('historyOverlay').classList.remove('active'); }
+
+async function loadHistory(){
+    const list=document.getElementById('historyList');
+    list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Loading…</div>';
+    try{
+        const r=await fetch(`${API}/chat`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to load history');
+        if(!d.length){ list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">No past conversations.</div>'; return; }
+        list.innerHTML=d.map(s=>`<div style="border:1px solid var(--border);border-radius:8px;padding:.6rem .7rem;margin-bottom:.5rem;display:flex;justify-content:space-between;gap:.6rem;align-items:flex-start">
+            <div style="min-width:0;flex:1;cursor:pointer" onclick="openSession('${s.session_id}')">
+                <div style="font-weight:600;font-size:.85rem;color:var(--text-1);word-break:break-word">${esc(s.preview||'(untitled)')}</div>
+                <div style="font-size:.72rem;color:var(--text-3);margin-top:.25rem">${s.turns} turn${s.turns===1?'':'s'} · ${s.updated_at?new Date(s.updated_at).toLocaleString():''}</div>
+            </div>
+            <button class="modal-btn danger" style="padding:.25rem .55rem;font-size:.75rem;flex-shrink:0" onclick="deleteSession('${s.session_id}')">Delete</button>
+        </div>`).join('');
+    }catch(e){ list.innerHTML=`<div style="color:#ef4444;font-size:.82rem;padding:.5rem 0">${esc(e.message)}</div>`; }
+}
+
+function appendHistoryAssistant(text){
+    const row=document.createElement('div');
+    row.className='msg-row assistant';
+    row.innerHTML=`<div class="bot-avatar">${botAvatarSvg}</div><div class="asst-bubble"><div class="asst-text">${renderContent(text||'')}</div></div>`;
+    document.getElementById('chatArea').appendChild(row);
+}
+
+async function openSession(id){
+    try{
+        const r=await fetch(`${API}/chat/${id}`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to open conversation');
+        sessionId=id; updateSessionBadge();
+        document.getElementById('chatArea').innerHTML='';
+        (d.messages||[]).forEach(m=>{
+            if(m.role==='user') appendUserBubble(m.content);
+            else appendHistoryAssistant(m.content);
+        });
+        hideHistoryModal();
+        scrollBottom();
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+}
+
+async function deleteSession(id){
+    try{
+        const r=await fetch(`${API}/chat/${id}`,{method:'DELETE',headers:authHeaders()});
+        if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(formatError(d)||'Delete failed'); }
+        if(sessionId===id){ sessionId=null; updateSessionBadge(); }
+        loadHistory();
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+}
+
+// ── TOPIC WATCHES ──────────────────────────────────────────────
+function authHeaders(extra){
+    const h=Object.assign({},extra||{});
+    const k=localStorage.getItem('indicrag-api-key'); if(k) h['X-API-Key']=k;
+    return h;
+}
+function watchUserId(){
+    let u=localStorage.getItem('indicrag-user-id');
+    if(!u){ u='web-'+Math.random().toString(36).slice(2,10); localStorage.setItem('indicrag-user-id',u); }
+    return u;
+}
+function showWatchModal(){ document.getElementById('watchOverlay').classList.add('active'); loadWatches(); }
+function hideWatchModal(){ document.getElementById('watchOverlay').classList.remove('active'); }
+
+async function loadWatches(){
+    const list=document.getElementById('watchList');
+    list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Loading…</div>';
+    try{
+        const r=await fetch(`${API}/watch?user_id=${encodeURIComponent(watchUserId())}`,{headers:authHeaders()});
+        if(r.status===404){ list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Topic watches are disabled (set <code>WATCH_ENABLE=true</code>).</div>'; return; }
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to load watches');
+        if(!d.length){ list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">No watches yet.</div>'; return; }
+        list.innerHTML=d.map(w=>{
+            const nextRun=w.next_run?` · next ${new Date(w.next_run).toLocaleDateString()}`:'';
+            const digest=w.has_digest?' · 📄 digest ready':'';
+            return `<div style="border:1px solid var(--border);border-radius:8px;padding:.6rem .7rem;margin-bottom:.5rem;display:flex;justify-content:space-between;gap:.6rem;align-items:flex-start">
+                <div style="min-width:0">
+                    <div style="font-weight:600;font-size:.85rem;color:var(--text-1);word-break:break-word">${esc(w.topic)}</div>
+                    <div style="font-size:.72rem;color:var(--text-3);margin-top:.25rem">${esc(w.cadence)} · ${esc(w.language)} · ${w.seen_count} seen${digest}${nextRun}</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:.3rem;flex-shrink:0">
+                    <button class="modal-btn" style="padding:.25rem .55rem;font-size:.75rem;background:var(--primary);color:#fff;border-color:var(--primary)" onclick="runWatch('${w.id}',this)">Run now</button>
+                    ${w.has_digest?`<button class="modal-btn" style="padding:.25rem .55rem;font-size:.75rem" onclick="viewDigest('${w.id}',this)">Digest</button>`:''}
+                    <button class="modal-btn danger" style="padding:.25rem .55rem;font-size:.75rem" onclick="deleteWatch('${w.id}')">Delete</button>
+                </div>
+            </div>`;
+        }).join('');
+    }catch(e){ list.innerHTML=`<div style="color:#ef4444;font-size:.82rem;padding:.5rem 0">${esc(e.message)}</div>`; }
+}
+
+async function createWatch(){
+    const topic=document.getElementById('watchTopic').value.trim();
+    if(!topic){ showToast('Enter a topic','error'); return; }
+    try{
+        const r=await fetch(`${API}/watch`,{
+            method:'POST', headers:authHeaders({'Content-Type':'application/json'}),
+            body:JSON.stringify({
+                user_id:watchUserId(), topic,
+                language:document.getElementById('watchLang').value,
+                cadence:document.getElementById('watchCadence').value,
+            })
+        });
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to create watch');
+        document.getElementById('watchTopic').value='';
+        showToast('Watch registered','success'); loadWatches();
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+}
+
+async function deleteWatch(id){
+    try{
+        const r=await fetch(`${API}/watch/${id}`,{method:'DELETE',headers:authHeaders()});
+        if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(formatError(d)||'Delete failed'); }
+        loadWatches();
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+}
+
+async function runWatch(id, btn){
+    const old=btn.textContent; btn.disabled=true; btn.textContent='Running…';
+    try{
+        const r=await fetch(`${API}/watch/${id}/run`,{method:'POST',headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Run failed');
+        showToast(`${d.new_count} new paper${d.new_count===1?'':'s'}`,'success');
+        showDigest(d.digest);
+        loadWatches();  // rebuilds rows (this button is discarded) — no need to restore it
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); btn.disabled=false; btn.textContent=old; }
+}
+
+function showDigest(text){
+    const dig=document.getElementById('watchDigest');
+    dig.innerHTML = text
+        ? `<div style="border:1px solid var(--border);border-radius:8px;padding:.8rem;background:var(--surface-up)"><div style="font-size:.72rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">Latest digest</div><div class="asst-text">${renderContent(text)}</div></div>`
+        : '';
+    dig.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+async function viewDigest(id, btn){
+    const old=btn.textContent; btn.disabled=true; btn.textContent='…';
+    try{
+        const r=await fetch(`${API}/watch/${id}/digest`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Load failed');
+        if(!d.digest){ showToast('No digest yet — run the watch first','error'); return; }
+        showDigest(d.digest);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+    finally{ btn.disabled=false; btn.textContent=old; }
+}
+
+// ── LIT REVIEW ─────────────────────────────────────────────────
+let reportPoll=null;
+function showReportModal(){ document.getElementById('reportOverlay').classList.add('active'); }
+function hideReportModal(){ document.getElementById('reportOverlay').classList.remove('active'); if(reportPoll){clearInterval(reportPoll);reportPoll=null;} }
+
+async function generateReport(){
+    const topic=document.getElementById('reportTopic').value.trim();
+    if(!topic){ showToast('Enter a topic','error'); return; }
+    const btn=document.getElementById('reportBtn'); btn.disabled=true; btn.textContent='Starting…';
+    const status=document.getElementById('reportStatus');
+    try{
+        const r=await fetch(`${API}/report`,{
+            method:'POST', headers:authHeaders({'Content-Type':'application/json'}),
+            body:JSON.stringify({topic, language:document.getElementById('reportLang').value})
+        });
+        const d=await r.json();
+        if(r.status===404){ status.innerHTML='<div style="color:var(--text-3);font-size:.82rem">Reports are disabled (set <code>REPORT_ENABLE=true</code>).</div>'; return; }
+        if(!r.ok) throw new Error(formatError(d)||'Failed to start report');
+        pollReport(d.job_id);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
+    finally{ btn.disabled=false; btn.textContent='Generate'; }
+}
+
+function pollReport(jobId){
+    const status=document.getElementById('reportStatus');
+    if(reportPoll) clearInterval(reportPoll);
+    const tick=async()=>{
+        try{
+            const r=await fetch(`${API}/report/status/${jobId}`,{headers:authHeaders()});
+            const d=await r.json();
+            if(!r.ok) throw new Error(formatError(d)||'Status failed');
+            if(d.status==='success'){
+                clearInterval(reportPoll); reportPoll=null;
+                status.innerHTML=`<div style="border:1px solid var(--border);border-radius:8px;padding:.8rem;background:var(--surface-up)">
+                    <div style="font-weight:600;font-size:.85rem;margin-bottom:.4rem">✓ Report ready</div>
+                    <div style="font-size:.75rem;color:var(--text-3);margin-bottom:.6rem">${(d.sections||[]).length} sections · ${d.citation_count||0} citations</div>
+                    <button class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="downloadReport('${jobId}')">⬇ Download Markdown</button></div>`;
+            }else if(d.status==='failed'){
+                clearInterval(reportPoll); reportPoll=null;
+                status.innerHTML=`<div style="color:#ef4444;font-size:.82rem">Report failed: ${esc(d.error||'unknown error')}</div>`;
+            }else{
+                const p=d.progress_message||'Working…';
+                const frac=d.progress_total?` (${d.progress_current}/${d.progress_total})`:'';
+                status.innerHTML=`<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">⏳ ${esc(p)}${frac}</div>`;
+            }
+        }catch(e){ clearInterval(reportPoll); reportPoll=null; status.innerHTML=`<div style="color:#ef4444;font-size:.82rem">${esc(e.message)}</div>`; }
+    };
+    tick();
+    reportPoll=setInterval(tick, 2000);
+}
+
+async function downloadReport(jobId){
+    try{
+        const r=await fetch(`${API}/report/${jobId}/download`,{headers:authHeaders()});
+        if(!r.ok) throw new Error('Download failed');
+        const blob=await r.blob();
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download=`review-${jobId.slice(0,8)}.md`;
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
 }
 
 // ── INIT ───────────────────────────────────────────────────────

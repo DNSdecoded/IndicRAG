@@ -78,11 +78,22 @@ def reciprocal_rank(retrieved: List[str], relevant: Set[str]) -> float:
 
 
 def dcg_at_k(retrieved: List[str], relevance: Dict[str, int], k: int) -> float:
-    """Discounted Cumulative Gain at k with graded relevance."""
+    """Discounted Cumulative Gain at k with graded relevance.
+
+    Dedups by first occurrence — a run that repeats the same paper_id must not
+    score its gain twice, else DCG can exceed the ideal and nDCG blows past 1.0.
+    """
     score = 0.0
-    for i, doc in enumerate(retrieved[:k]):
-        rel = relevance.get(doc, 0)
-        score += rel / math.log2(i + 2)  # i+2 because rank starts at 1
+    seen: Set[str] = set()
+    rank = 0
+    for doc in retrieved:
+        if doc in seen:
+            continue
+        seen.add(doc)
+        if rank >= k:
+            break
+        score += relevance.get(doc, 0) / math.log2(rank + 2)  # rank starts at 1
+        rank += 1
     return score
 
 
@@ -98,7 +109,37 @@ def ndcg_at_k(retrieved: List[str], relevance: Dict[str, int], k: int) -> float:
 # Citation Grounding
 # ============================================================
 
-def citation_grounding(claims: List[Dict]) -> Dict:
+def make_grounding_scorer(kind: str):
+    """Return a (similarity_fn, threshold, effective_kind) triple.
+
+    effective_kind reports which judge was actually used — it differs from the
+    requested `kind` when 'cross-encoder' falls back to Jaccard offline, so the
+    report can state its real methodology.
+
+    'jaccard'       — token overlap, offline, cheap (CI default).
+    'cross-encoder' — BAAI/bge-reranker-v2-m3 semantic judge; falls back to
+                      Jaccard if sentence-transformers is unavailable (offline CI).
+    """
+    if kind == "jaccard":
+        return jaccard, GROUNDING_THRESHOLD, "jaccard"
+    try:
+        from sentence_transformers import CrossEncoder
+        # Construct inside the try: model weights may be missing/corrupt or the
+        # download may fail (OSError/RuntimeError) even when the package imports.
+        model = CrossEncoder("BAAI/bge-reranker-v2-m3")
+    except Exception as e:
+        print(f"  [warn] cross-encoder unavailable ({e}) — falling back to Jaccard")
+        return jaccard, GROUNDING_THRESHOLD, "jaccard"
+
+    def semantic(claim: str, chunk: str) -> float:
+        raw = float(model.predict([(claim, chunk)])[0])
+        return 1.0 / (1.0 + math.exp(-raw))  # logit -> 0..1
+
+    return semantic, 0.5, "cross-encoder"  # sigmoid midpoint, tune on eval set
+
+
+def citation_grounding(claims: List[Dict], sim_fn=jaccard,
+                       threshold: float = GROUNDING_THRESHOLD) -> Dict:
     grounded = 0
     skipped = 0
     per_claim = []
@@ -118,8 +159,8 @@ def citation_grounding(claims: List[Dict]) -> Dict:
             })
             continue
 
-        sim         = jaccard(claim, chunk)
-        is_grounded = sim >= GROUNDING_THRESHOLD
+        sim         = sim_fn(claim, chunk)
+        is_grounded = sim >= threshold
 
         if is_grounded:
             grounded += 1
@@ -146,7 +187,9 @@ def citation_grounding(claims: List[Dict]) -> Dict:
 # Evaluation Core
 # ============================================================
 
-def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
+def evaluate(judgments: Dict, results: Dict, k: int,
+             sim_fn=jaccard, threshold: float = GROUNDING_THRESHOLD,
+             judge: str = "jaccard") -> Dict:
     qrels = {q["id"]: q for q in judgments["queries"]}
     runs  = {r["query_id"]: r for r in results["results"]}
 
@@ -155,6 +198,7 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
     ndcg_scores      = []
     recall20_scores  = []
     per_query        = []
+    lang_overalls    = {}   # lang -> list of per-query overall scores
 
     for qid, q in qrels.items():
         if qid not in runs:
@@ -162,6 +206,7 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
 
         relevant  = set(q["relevant_papers"])
         retrieved = runs[qid]["retrieved_papers"]
+        lang      = q.get("lang", "en")
 
         p  = precision_at_k(retrieved, relevant, k)
         r  = recall_at_k(retrieved, relevant, k)
@@ -172,23 +217,34 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
         graded = q.get("relevance_grades", {doc: 3 for doc in relevant})
         ndcg10 = ndcg_at_k(retrieved, graded, 10)
 
-        grounding = citation_grounding(runs[qid]["answer_claims"])
+        grounding = citation_grounding(runs[qid]["answer_claims"], sim_fn, threshold)
+
+        # Per-query overall — the regression-gate unit. Mean of the five signals.
+        q_overall = (p + r + rr + ndcg10 + grounding["score"]) / 5
 
         retrieval_scores.append((p, r, rr))
         grounding_scores.append(grounding["score"])
         ndcg_scores.append(ndcg10)
         recall20_scores.append(r20)
+        lang_overalls.setdefault(lang, []).append(q_overall)
 
         per_query.append({
             "id":        qid,
             "query":     q["text"],
+            "lang":      lang,
             "precision": round(p, 3),
             "recall":    round(r, 3),
             "mrr":       round(rr, 3),
             "ndcg_10":   round(ndcg10, 3),
             "recall_20": round(r20, 3),
-            "grounding": grounding
+            "grounding": grounding,
+            "overall":   round(q_overall, 3)
         })
+
+    per_language = {
+        lang: {"num_queries": len(v), "mean_overall": round(sum(v) / len(v), 3)}
+        for lang, v in sorted(lang_overalls.items())
+    }
 
     n           = len(retrieval_scores)
     mean_p      = sum(x[0] for x in retrieval_scores) / n
@@ -214,6 +270,9 @@ def evaluate(judgments: Dict, results: Dict, k: int) -> Dict:
         "retrieval_composite":  round(retrieval_composite, 3),
         "generation_composite": round(generation_composite, 3),
         "overall":              round(overall, 3),
+        "grounding_judge":      judge,
+        "grounding_threshold":  round(threshold, 3),
+        "per_language":         per_language,
         "per_query":            per_query,
         "timestamp":            datetime.now().isoformat(timespec="seconds")
     }
@@ -233,7 +292,12 @@ def markdown_report(metrics: Dict, k: int) -> str:
     lines.append("# IndicRAG — Evaluation Report")
     lines.append(f"\n_Generated: {metrics['timestamp']} · k={k} · {metrics['num_queries']} queries_\n")
     lines.append("> Retrieval metrics computed from ranked document lists against manually labeled relevance judgments.")
-    lines.append("> Citation grounding uses token Jaccard similarity (threshold 0.15). Claims with no citation")
+    _judge_desc = {
+        "jaccard": "token Jaccard similarity",
+        "cross-encoder": "a BAAI/bge-reranker-v2-m3 cross-encoder judge",
+    }.get(metrics.get("grounding_judge", "jaccard"), metrics.get("grounding_judge", "jaccard"))
+    _thr = metrics.get("grounding_threshold", GROUNDING_THRESHOLD)
+    lines.append(f"> Citation grounding uses {_judge_desc} (threshold {_thr}). Claims with no citation")
     lines.append("> (system correctly acknowledged absent context) are excluded from the grounding denominator.\n")
     lines.append("---\n")
 
@@ -249,6 +313,16 @@ def markdown_report(metrics: Dict, k: int) -> str:
     lines.append(f"| **Retrieval Score**   | **{metrics['retrieval_composite']:.3f}** | `{bar(metrics['retrieval_composite'])}` |")
     lines.append(f"| **Generation Score**  | **{metrics['generation_composite']:.3f}** | `{bar(metrics['generation_composite'])}` |")
     lines.append(f"| **Overall**           | **{metrics['overall']:.3f}** | `{bar(metrics['overall'])}` |")
+
+    if metrics.get("per_language"):
+        lines.append("\n---\n")
+        lines.append("## Per-Language Breakdown\n")
+        lines.append("> Mean per-query overall score, grouped by query language. "
+                     "Indic vs English quality is shown, not averaged away.\n")
+        lines.append("| Language | Queries | Mean Overall | Bar |")
+        lines.append("|---|---|---|---|")
+        for lang, s in metrics["per_language"].items():
+            lines.append(f"| `{lang}` | {s['num_queries']} | **{s['mean_overall']:.3f}** | `{bar(s['mean_overall'])}` |")
 
     lines.append("\n---\n")
     lines.append("## Per-Query Results\n")
@@ -311,6 +385,17 @@ def main():
     parser.add_argument("--json",      default=None, help="Path to write JSON metrics")
     parser.add_argument("--ci",        action="store_true", help="CI mode: exit 1 if overall < --threshold")
     parser.add_argument("--threshold", type=float, default=0.5, help="Minimum overall score for CI pass")
+    parser.add_argument("--grounding-judge", choices=["jaccard", "cross-encoder"],
+                        default="jaccard", help="Grounding similarity judge (default jaccard, CI-safe)")
+    parser.add_argument("--baseline", default=None,
+                        help="Committed metrics JSON to gate per-query regressions against")
+    parser.add_argument("--regression-eps", type=float, default=0.02,
+                        help="Max allowed per-query overall drop vs baseline before CI fails")
+    parser.add_argument("--model", default=None,
+                        help="LLM model id the answers were generated with (allowlist id). "
+                             "Labels the run so per-model regressions are visible in the report.")
+    parser.add_argument("--provider", default=None,
+                        help="LLM provider the answers were generated with (gemini|openrouter).")
     args = parser.parse_args()
 
     for path in [Path(args.judgments), Path(args.results)]:
@@ -318,16 +403,27 @@ def main():
             print(f"ERROR: {path} not found.")
             return
 
-    with open(args.judgments) as f:
+    with open(args.judgments, encoding="utf-8") as f:
         judgments = json.load(f)
-    with open(args.results) as f:
+    with open(args.results, encoding="utf-8") as f:
         results = json.load(f)
 
-    metrics = evaluate(judgments, results, args.k)
+    sim_fn, threshold, effective_judge = make_grounding_scorer(args.grounding_judge)
+    metrics = evaluate(judgments, results, args.k, sim_fn, threshold, judge=effective_judge)
+
+    # Phase 8: label the run with the model/provider that produced the answers so
+    # per-model regressions are attributable in the report/JSON (answers are
+    # generated out-of-band; this harness only scores them).
+    if args.model:
+        metrics["model"] = args.model
+    if args.provider:
+        metrics["provider"] = args.provider
 
     # Terminal output
     print("\nIndicRAG Evaluation")
     print("=" * 42)
+    if args.model or args.provider:
+        print(f"  Model   : {args.provider or 'auto'}:{args.model or 'default'}")
     print(f"  Queries : {metrics['num_queries']}   k = {metrics['k']}")
     print("-" * 42)
     print(f"  Precision@{args.k}      {metrics['mean_precision']:.3f}  {bar(metrics['mean_precision'], 15)}")
@@ -343,16 +439,42 @@ def main():
     print(f"  Overall          {metrics['overall']:.3f}  {bar(metrics['overall'], 15)}")
     print("=" * 42)
 
+    if metrics.get("per_language"):
+        print("  Per-language (mean overall):")
+        for lang, s in metrics["per_language"].items():
+            print(f"    {lang:<4} {s['mean_overall']:.3f}  (n={s['num_queries']})")
+        print("=" * 42)
+
     if args.output:
         report = markdown_report(metrics, args.k)
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"\n  Markdown report -> {args.output}")
 
     if args.json:
-        with open(args.json, "w") as f:
-            json.dump(metrics, f, indent=2)
+        with open(args.json, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
         print(f"  JSON metrics    -> {args.json}")
+
+    # Per-query regression gate — fail if any query drops vs committed baseline.
+    if args.baseline:
+        if not Path(args.baseline).exists():
+            print(f"\n  [warn] baseline {args.baseline} not found — skipping regression gate")
+        else:
+            with open(args.baseline, encoding="utf-8") as f:
+                base_q = {q["id"]: q for q in json.load(f)["per_query"]}
+            regressed = [
+                (q["id"], base_q[q["id"]]["overall"], q["overall"])
+                for q in metrics["per_query"]
+                if q["id"] in base_q
+                and q["overall"] < base_q[q["id"]]["overall"] - args.regression_eps
+            ]
+            if regressed:
+                print(f"\n  CI FAIL: {len(regressed)} query regression(s) > {args.regression_eps}:")
+                for qid, was, now in regressed:
+                    print(f"    {qid}: {was:.3f} -> {now:.3f}")
+                raise SystemExit(1)
+            print(f"\n  CI PASS: no per-query regression vs baseline (eps={args.regression_eps})")
 
     if args.ci:
         if metrics["overall"] < args.threshold:

@@ -35,6 +35,21 @@ def citation_number_map(metadatas: List[Dict]) -> Dict[int, Dict]:
     return num_to_meta
 
 
+def _crop_url(crop_path: str) -> Optional[str]:
+    """Map a stored crop path to its /figures URL, or None if outside FIGURES_DIR.
+
+    The path segments are percent-encoded so a crafted filename can't break out
+    of an HTML attribute when the URL is rendered into <img src>/<a href>.
+    """
+    from pathlib import Path
+    from urllib.parse import quote
+    try:
+        rel = Path(crop_path).resolve().relative_to(config.FIGURES_DIR.resolve())
+        return "/figures/" + quote(rel.as_posix())
+    except (ValueError, OSError):
+        return None
+
+
 def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
     """
     Extract [Cite:N] citations from answer text and resolve them to papers.
@@ -53,12 +68,14 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
     import re
 
     seen_nums = set()
-    # Match [N] citation markers; the \[(\d+)\] shape still ignores ranges like [10-15] mg
-    for m in re.finditer(r'\[(\d+)\]', answer):
-        try:
-            seen_nums.add(int(m.group(1)))
-        except ValueError:
-            pass
+    # Match [N] and comma-separated [N, N, ...] citation markers.
+    # Still ignores ranges like [10-15] mg (no comma, so no match).
+    for m in re.finditer(r'\[(\d+(?:\s*,\s*\d+)*)\]', answer):
+        for part in m.group(1).split(","):
+            try:
+                seen_nums.add(int(part.strip()))
+            except ValueError:
+                pass
 
     num_to_meta = citation_number_map(metadatas)
 
@@ -72,6 +89,18 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         if s not in title_sections.setdefault(t, []):
             title_sections[t].append(s)
 
+    # Phase 3: figure/table crops a paper contributed, so the UI can render them.
+    figures_by_paper: Dict[str, list] = {}
+    for m_ in metadatas:
+        if m_.get('chunk_type') in ('figure', 'table') and m_.get('crop_path'):
+            url = _crop_url(m_['crop_path'])
+            if url:
+                figures_by_paper.setdefault(m_.get('paper_id'), []).append({
+                    'page': m_.get('page'),
+                    'chunk_type': m_.get('chunk_type'),
+                    'url': url,
+                })
+
     citations = []
     for num in sorted(seen_nums):
         meta = num_to_meta.get(num)
@@ -82,6 +111,7 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
                 'number': str(num),
                 'title': meta.get('title', 'Unknown'),
                 'section': ', '.join(sections),
+                'figures': figures_by_paper.get(meta.get('paper_id'), []),
             })
     return citations
 
@@ -376,17 +406,21 @@ def build_prompt(
 
 
 def llm_generate(prompt: str, max_tokens: int = None,
-                 system_instruction: str = None) -> str:
+                 system_instruction: str = None,
+                 model: str = None, provider: str = None) -> str:
     """
-    Generate response from LLM using Google Gemini API.
-    
+    Generate response from LLM with provider/model failover.
+
     Args:
         prompt: The complete prompt to send to the LLM
         max_tokens: Maximum tokens to generate
-        
+        system_instruction: Optional system prompt override
+        model: Optional LLM model id (from the /models allowlist). Omit for default.
+        provider: Optional provider override (gemini|openrouter). Usually inferred.
+
     Returns:
         Generated text response
-        
+
     Raises:
         ValueError: If API key is not configured
         Exception: If API call fails
@@ -394,8 +428,11 @@ def llm_generate(prompt: str, max_tokens: int = None,
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
 
+    target_model = model or config.LLM_MODEL_NAME
+
     from cache import llm_cache, make_key
-    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE)
+    # Include model and provider so different models/providers never share a cached answer.
+    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider)
     cached = llm_cache.get(cache_key)
     if cached is not None:
         logger.debug("[LLM cache hit]")
@@ -411,7 +448,7 @@ def llm_generate(prompt: str, max_tokens: int = None,
     )
 
     try:
-        response = llm_client.generate_with_failover(config.LLM_MODEL_NAME, prompt, generate_config)
+        response = llm_client.generate_with_failover(target_model, prompt, generate_config, provider=provider)
 
         # Check if response has text
         if response.text:
@@ -591,7 +628,9 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
 def answer_question_strategy_a(
     user_query: str,
     top_k: int = None,
-    filter_dict: Optional[Dict] = None
+    filter_dict: Optional[Dict] = None,
+    model: str = None,
+    provider: str = None,
 ) -> Dict[str, Any]:
     """
     Answer question using Strategy A: Direct multilingual LLM.
@@ -654,7 +693,7 @@ def answer_question_strategy_a(
     
     # Generate answer
     logger.info("Generating answer...")
-    answer = llm_generate(prompt)
+    answer = llm_generate(prompt, model=model, provider=provider)
     
     # Extract citations using robust parser
     citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
@@ -674,7 +713,9 @@ def answer_question_strategy_a(
 def answer_question_strategy_b(
     user_query: str,
     top_k: int = None,
-    filter_dict: Optional[Dict] = None
+    filter_dict: Optional[Dict] = None,
+    model: str = None,
+    provider: str = None,
 ) -> Dict[str, Any]:
     """
     Answer question using Strategy B: English reasoning + translation.
@@ -740,7 +781,7 @@ def answer_question_strategy_b(
     
     # Generate answer in English
     logger.info("Generating answer in English...")
-    english_answer = llm_generate(prompt)
+    english_answer = llm_generate(prompt, model=model, provider=provider)
     
     # Extract citations from ENGLISH answer (before translation) using robust parser
     citations = extract_citations(english_answer, context_data['metadatas'], context_data.get('chunks'))
@@ -769,7 +810,9 @@ def answer_question(
     user_query: str,
     strategy: str = "A",
     top_k: int = None,
-    filter_dict: Optional[Dict] = None
+    filter_dict: Optional[Dict] = None,
+    model: str = None,
+    provider: str = None,
 ) -> Dict[str, Any]:
     """
     Main entry point: Answer a user's question in their language.
@@ -784,9 +827,9 @@ def answer_question(
         Dictionary with answer, language info, and citations
     """
     if strategy == "A":
-        return answer_question_strategy_a(user_query, top_k, filter_dict)
+        return answer_question_strategy_a(user_query, top_k, filter_dict, model=model, provider=provider)
     elif strategy == "B":
-        return answer_question_strategy_b(user_query, top_k, filter_dict)
+        return answer_question_strategy_b(user_query, top_k, filter_dict, model=model, provider=provider)
     else:
         raise ValueError(f"Invalid strategy: {strategy}. Must be 'A' or 'B'")
 
@@ -796,6 +839,8 @@ def answer_with_history(
     strategy: str = "A",
     top_k: int = None,
     filter_dict: Optional[Dict] = None,
+    model: str = None,
+    provider: str = None,
 ) -> Dict[str, Any]:
     """
     Answer the latest user message while incorporating conversation history.
@@ -878,7 +923,7 @@ def answer_with_history(
     if history_str:
         prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
 
-    english_answer = llm_generate(prompt)
+    english_answer = llm_generate(prompt, model=model, provider=provider)
     citations = extract_citations(english_answer, context_data["metadatas"], context_data.get("chunks"))
 
     if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):

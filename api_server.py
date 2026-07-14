@@ -6,6 +6,7 @@ Route handlers live in routes/*.py; shared auth/state in deps.py.
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
 
@@ -21,7 +22,7 @@ from deps import (
     limiter,
     verify_api_key,
 )
-from routes import query, chat, ingest, agent, management, feedback
+from routes import query, chat, ingest, agent, management, feedback, watch, report, models as models_route
 from middleware import RequestIdFilter, RequestIdMiddleware
 
 # Configure logging
@@ -45,7 +46,30 @@ async def lifespan(app):
     if config.USE_HYBRID_SEARCH:
         import bm25_search
         bm25_search.get_or_build_index()
+
+    # Phase 6 Increment 4: background schedule loop (single-worker, in-process).
+    watch_task = None
+    if config.WATCH_ENABLE:
+        import watch_runner
+        watch_task = asyncio.create_task(watch_runner.watch_loop())
+
+        def _log_watch_task_result(task: asyncio.Task) -> None:
+            # Surface a crashed schedule loop immediately instead of waiting for
+            # GC to log "Task exception was never retrieved".
+            if not task.cancelled() and task.exception() is not None:
+                logger.error("[Watch] schedule loop died unexpectedly",
+                             exc_info=task.exception())
+
+        watch_task.add_done_callback(_log_watch_task_result)
+
     yield
+
+    if watch_task:
+        watch_task.cancel()
+        try:
+            await watch_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down: draining in-flight requests complete.")
 
 # Initialize FastAPI app
@@ -98,6 +122,11 @@ Instrumentator().instrument(app).expose(
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Phase 3: serve figure/table crops so the UI can render cited figures.
+# StaticFiles is path-traversal safe; read-only. Only mounted when the dir exists.
+if config.FIGURES_DIR.exists():
+    app.mount("/figures", StaticFiles(directory=str(config.FIGURES_DIR)), name="figures")
+
 # CORS configuration — env-driven for deployment flexibility
 _cors_origins_env = os.getenv("CORS_ORIGINS")
 _cors_origins = (
@@ -126,6 +155,9 @@ app.include_router(ingest.router)
 app.include_router(agent.router)
 app.include_router(management.router)
 app.include_router(feedback.router)
+app.include_router(watch.router)
+app.include_router(report.router)
+app.include_router(models_route.router)
 
 
 if __name__ == "__main__":

@@ -127,3 +127,35 @@ def test_extract_citations_maps_by_paper():
     assert len(result) == 1
     assert result[0]["number"] == "2"
     assert result[0]["title"] == "Paper B"
+
+
+def test_extract_citations_comma_separated():
+    """Comma-separated markers like [1, 2] must produce one citation per number."""
+    from rag import extract_citations
+
+    metadatas = [
+        {"title": "Paper A", "section": "intro"},
+        {"title": "Paper B", "section": "methods"},
+    ]
+    result = extract_citations("see [1, 2] for details", metadatas)
+    assert len(result) == 2
+    assert result[0]["number"] == "1"
+    assert result[0]["title"] == "Paper A"
+    assert result[1]["number"] == "2"
+    assert result[1]["title"] == "Paper B"
+
+
+def test_extract_citations_comma_no_spaces():
+    """No-space variant [1,2] must also work."""
+    from rag import extract_citations
+
+    metadatas = [
+        {"title": "Paper A", "section": "intro"},
+        {"title": "Paper B", "section": "methods"},
+    ]
+    result = extract_citations("results in [1,2] above", metadatas)
+    assert len(result) == 2
+    assert result[0]["number"] == "1"
+    assert result[0]["title"] == "Paper A"
+    assert result[1]["number"] == "2"
+    assert result[1]["title"] == "Paper B"

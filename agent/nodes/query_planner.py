@@ -6,8 +6,9 @@ from google.genai import types
 import rag
 import config
 import lang_utils
+import llm_client
 from agent.state import AgentState
-from agent.json_utils import extract_json
+from agent.json_utils import extract_json_with_gemini_retry
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ _DECOMPOSE_PROMPT = """\
 Analyse this query for vector and keyword retrieval across academic databases.
 
 Extract:
-1. sub_queries — Search-optimised phrases (max 6). Split by TOPIC AXIS, not \
+1. sub_queries — Search-optimised phrases (max {max_sq}). Split by TOPIC AXIS, not \
    by sentence count. Each phrase must be self-contained and optimised for \
    keyword or semantic search in arXiv or OpenAlex. \
    IF the query contains an explicit checklist (e.g. "Extract:", "Compare:", \
@@ -30,7 +31,7 @@ Extract:
    sub-query per requested item — e.g. "reward function formulation", \
    "simulation evaluation count", "sample efficiency improvement" — so \
    field-specific facts (equations, counts, metrics) get retrieved, not just \
-   the broad topic. Prioritise these checklist items within the 6-phrase budget.
+   the broad topic. Prioritise these checklist items within the {max_sq}-phrase budget.
 2. year_from — Integer year if the query contains temporal language \
    ("after YYYY", "since YYYY", "post-YYYY", "proposed in YYYY+"). \
    null if no temporal constraint exists.
@@ -77,7 +78,7 @@ Output: {{"sub_queries": ["transformer attention long document understanding", \
 </query>\
 """
 
-_MAX_SUB_QUERIES = 6
+_MAX_SUB_QUERIES = config.AGENT_MAX_SUB_QUERIES
 
 
 def query_planner_node(state: AgentState) -> dict:
@@ -90,9 +91,12 @@ def query_planner_node(state: AgentState) -> dict:
     raw_resp = ""
 
     try:
+        _model = state.get("requested_model") or config.LLM_MODEL_NAME
+        _provider = state.get("requested_provider")
+        _prompt = _DECOMPOSE_PROMPT.format(query=query, max_sq=_MAX_SUB_QUERIES)
         resp = rag.generate_with_failover(
-            model=config.LLM_MODEL_NAME,
-            contents=_DECOMPOSE_PROMPT.format(query=query),
+            model=_model,
+            contents=_prompt,
             gen_config=types.GenerateContentConfig(
                 temperature=0,
                 max_output_tokens=1024,
@@ -100,9 +104,26 @@ def query_planner_node(state: AgentState) -> dict:
                 # Structured JSON decomposition — thinking off by default (config knob).
                 thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
             ),
+            provider=_provider,
         )
         raw_resp = resp.text or ""
-        parsed = extract_json(raw_resp)
+
+        active_provider = llm_client.resolve_provider(_model, _provider)
+
+        def _gemini_retry(p, s):
+            r = rag.generate_with_failover(
+                model=config.LLM_MODEL_NAME, contents=p,
+                gen_config=types.GenerateContentConfig(
+                    temperature=0, max_output_tokens=1024, system_instruction=s,
+                    thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                ),
+                provider="gemini",
+            )
+            return r.text or ""
+
+        parsed = extract_json_with_gemini_retry(
+            raw_resp, active_provider, _gemini_retry, _prompt, _DECOMPOSE_SYSTEM,
+        )
 
         raw_queries = parsed.get("sub_queries")
         sub_queries = (

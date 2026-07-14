@@ -34,6 +34,21 @@ def answer_generator_node(state: AgentState) -> dict:
         strategy=state.get("strategy", "A"),
     )
 
+    # Phase 5: if retrieved sources contradict each other, tell the model to
+    # present both sides with citations. Best-effort — never block the answer.
+    if config.CONTRADICTION_DETECT_ENABLE:
+        try:
+            import contradiction
+            # Only check the chunks that actually made it into the prompt —
+            # format_context may truncate the tail, and flagging a contradiction
+            # the model never saw would be misleading.
+            cons = contradiction.find_contradictions(chunks[:chunks_used], metas[:chunks_used])
+            if cons:
+                prompt += contradiction.contradiction_instruction(cons)
+                logger.info(f"[AnswerGenerator] {len(cons)} contradiction(s) flagged")
+        except Exception as e:
+            logger.warning(f"[AnswerGenerator] contradiction check failed: {e}")
+
     # Build structured multi-turn contents to preserve role separation and prevent injection
     history = state.get("conversation_history", [])
     contents = []

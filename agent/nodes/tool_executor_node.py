@@ -3,6 +3,7 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import config
 from agent.state import AgentState
 from agent.tool_executor import TOOL_DISPATCH
 from cache import tool_cache, make_key
@@ -10,10 +11,10 @@ from cache import tool_cache, make_key
 logger = logging.getLogger(__name__)
 
 _CACHEABLE_TOOLS = {"indicrag_retrieval", "arxiv_search", "open_access_search", "web_search"}
-# Matches query_planner._MAX_SUB_QUERIES so a per-checklist-item sub-query (e.g. a
-# reward-formula query) isn't truncated before running. Tools run concurrently, so
-# more calls cost extra retrieval/API work but don't add serial latency.
-_MAX_PARALLEL_TOOLS = 6
+# AGENT_MAX_SUB_QUERIES corpus calls + up to 2 external tool calls (arxiv/web/etc.).
+# Ties to the same knob so a per-checklist-item sub-query isn't truncated. Retrieval
+# reranking is CPU-bound, so concurrent calls thrash — the knob is the real latency lever.
+_MAX_PARALLEL_TOOLS = config.AGENT_MAX_SUB_QUERIES + 2
 
 
 def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:

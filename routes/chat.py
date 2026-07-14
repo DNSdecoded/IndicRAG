@@ -30,12 +30,21 @@ class ChatRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+    provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
     @field_validator("strategy")
     @classmethod
     def validate_strategy(cls, v: str) -> str:
         if v not in ("A", "B"):
             raise ValueError("Strategy must be 'A' or 'B'")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
         return v
 
 
@@ -85,6 +94,8 @@ async def chat(
             strategy=body.strategy,
             top_k=top_k,
             filter_dict=build_paper_filter(body.paper_ids),
+            model=body.model,
+            provider=body.provider,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
@@ -145,7 +156,8 @@ async def chat_stream(
         full_answer: list[str] = []
         hit_error = False
         async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
-                                       strategy=body.strategy, query_id=query_id):
+                                       strategy=body.strategy, query_id=query_id,
+                                       model=body.model, provider=body.provider):
             if event.startswith('data: {"type": "error"'):
                 hit_error = True
             if event.startswith('data: {"type": "done"'):
@@ -163,6 +175,62 @@ async def chat_stream(
             _append_session_messages(session_id, body.message, "".join(full_answer))
 
     return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
+
+
+class ChatSessionSummary(BaseModel):
+    """One row in the chat-history list."""
+    session_id: str
+    preview: str
+    turns: int
+    created_at: str
+    updated_at: str
+
+
+class ChatHistoryResponse(BaseModel):
+    """Full message history for a single session."""
+    session_id: str
+    messages: List[dict]
+    created_at: str
+    updated_at: str
+
+
+@router.get("/chat", response_model=List[ChatSessionSummary], tags=["Chat"])
+async def list_sessions(authenticated: bool = Depends(verify_api_key)):
+    """List saved chat sessions, most-recent first. Global — no per-user isolation."""
+    from deps import _sessions, _sessions_lock, _evict_stale_sessions
+    summaries: List[ChatSessionSummary] = []
+    with _sessions_lock:
+        _evict_stale_sessions()
+        for sid, s in _sessions.items():
+            msgs = s.get("messages", [])
+            if not msgs:  # skip empty sessions (created but never used)
+                continue
+            first_user = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
+            summaries.append(ChatSessionSummary(
+                session_id=sid,
+                preview=first_user[:120],
+                turns=len(msgs) // 2,
+                created_at=s.get("created_at", ""),
+                updated_at=s.get("updated_at", ""),
+            ))
+    summaries.sort(key=lambda x: x.updated_at, reverse=True)
+    return summaries
+
+
+@router.get("/chat/{session_id}", response_model=ChatHistoryResponse, tags=["Chat"])
+async def get_session_history(session_id: str, authenticated: bool = Depends(verify_api_key)):
+    """Return a session's full message history so the UI can reopen the conversation."""
+    from deps import _sessions, _sessions_lock
+    with _sessions_lock:
+        s = _sessions.get(session_id)
+        if s is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
+        return ChatHistoryResponse(
+            session_id=session_id,
+            messages=list(s.get("messages", [])),
+            created_at=s.get("created_at", ""),
+            updated_at=s.get("updated_at", ""),
+        )
 
 
 @router.delete("/chat/{session_id}", tags=["Chat"])

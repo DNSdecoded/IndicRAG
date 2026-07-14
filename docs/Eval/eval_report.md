@@ -1,22 +1,36 @@
-# IndicRAG — Computed Evaluation Report
+# IndicRAG — Evaluation Report
 
-_Generated: 2026-02-26T15:18:56 · k=5 · 4 queries_
+_Generated: 2026-07-09T22:03:09 · k=5 · 3 queries_
 
-> Metrics computed automatically from retrieved document lists and cited chunk texts.
-> Relevance judgments are manually labeled (see `relevance_judgments.json`).
-> Citation grounding uses token Jaccard similarity (threshold ≥ 0.15) as a proxy for semantic overlap.
+> Retrieval metrics computed from ranked document lists against manually labeled relevance judgments.
+> Citation grounding uses token Jaccard similarity (threshold 0.15). Claims with no citation
+> (system correctly acknowledged absent context) are excluded from the grounding denominator.
 
 ---
 
 ## Aggregate Metrics
 
-| Metric | Score | Visual |
+| Metric | Score | Bar |
 |---|---|---|
-| Precision@5 | **1.000** | `████████████████████` |
-| Recall@5    | **0.917** | `██████████████████░░` |
-| MRR           | **1.000**   | `████████████████████` |
-| Citation Grounding Accuracy | **0.938** | `███████████████████░` |
-| **Composite** | **0.964** | `███████████████████░` |
+| Precision@5         | **1.000** | `████████████████████` |
+| Recall@5            | **0.889** | `██████████████████░░` |
+| MRR                   | **1.000** | `████████████████████` |
+| nDCG@10               | **0.908** | `██████████████████░░` |
+| Recall@20             | **0.889** | `██████████████████░░` |
+| Citation Grounding    | **0.917** | `██████████████████░░` |
+| **Retrieval Score**   | **0.963** | `███████████████████░` |
+| **Generation Score**  | **0.917** | `██████████████████░░` |
+| **Overall**           | **0.940** | `███████████████████░` |
+
+---
+
+## Per-Language Breakdown
+
+> Mean per-query overall score, grouped by query language. Indic vs English quality is shown, not averaged away.
+
+| Language | Queries | Mean Overall | Bar |
+|---|---|---|---|
+| `en` | 3 | **0.943** | `███████████████████░` |
 
 ---
 
@@ -28,24 +42,22 @@ _Generated: 2026-02-26T15:18:56 · k=5 · 4 queries_
 
 | Metric | Score |
 |---|---|
-| Precision@5 | 1.000 |
-| Recall@5    | 1.000 |
-| Reciprocal Rank | 1.000 |
+| Precision@5      | 1.000 |
+| Recall@5         | 1.000 |
+| Reciprocal Rank    | 1.000 |
+| nDCG@10            | 1.000 |
+| Recall@20          | 1.000 |
 | Citation Grounding | 0.750 (3/4 claims) |
-
-**Retrieved (top 5):** tandem_nn, tandem_nn, tandem_nn, tandem_nn, tandem_nn
-
-**Expected relevant:** tandem_nn
 
 <details>
 <summary>Per-claim grounding detail</summary>
 
-| Claim (truncated) | Cited Paper | Similarity | Grounded |
-|---|---|---|---|
-| The smooth thresholding function promotes the discrete nature of design paramete... | tandem_nn | 0.091 | ❌ |
-| The ST function works in conjunction with crucial regularization terms in the ne... | tandem_nn | 0.867 | ✅ |
-| The resulting antennas can be up to 50% more compact in area and up to 18% thinn... | tandem_nn | 0.389 | ✅ |
-| The framework enables the synthesis of custom microstrip antennas in less than o... | tandem_nn | 1.000 | ✅ |
+| Claim | Similarity | Status |
+|---|---|---|
+| The smooth thresholding function promotes the discrete nature of design paramete | 0.091 | ❌ |
+| The ST function works in conjunction with crucial regularization terms in the ne | 0.867 | ✅ |
+| The resulting antennas can be up to 50% more compact in area and up to 18% thinn | 0.389 | ✅ |
+| The framework enables the synthesis of custom microstrip antennas in less than o | 1.000 | ✅ |
 
 </details>
 
@@ -55,24 +67,22 @@ _Generated: 2026-02-26T15:18:56 · k=5 · 4 queries_
 
 | Metric | Score |
 |---|---|
-| Precision@5 | 1.000 |
-| Recall@5    | 1.000 |
-| Reciprocal Rank | 1.000 |
+| Precision@5      | 1.000 |
+| Recall@5         | 1.000 |
+| Reciprocal Rank    | 1.000 |
+| nDCG@10            | 0.949 |
+| Recall@20          | 1.000 |
 | Citation Grounding | 1.000 (4/4 claims) |
-
-**Retrieved (top 5):** bayesian_techniques, bayesian_stp, ppo_pixel, bayesian_stp, ppo_wireless
-
-**Expected relevant:** bayesian_techniques, ppo_pixel, bayesian_stp, ppo_wireless
 
 <details>
 <summary>Per-claim grounding detail</summary>
 
-| Claim (truncated) | Cited Paper | Similarity | Grounded |
-|---|---|---|---|
-| BO-STP-EST demonstrated superior performance by finding a minimum value of 2.88e... | bayesian_stp | 1.000 | ✅ |
-| BO-GP-EST required 8 iterations to find its minimum. | bayesian_stp | 1.000 | ✅ |
-| The PPO algorithm obtains the probability distribution of design parameters base... | ppo_pixel | 0.469 | ✅ |
-| RL is specifically noted for its utility in dynamic environments where antennas ... | ppo_wireless | 0.833 | ✅ |
+| Claim | Similarity | Status |
+|---|---|---|
+| BO-STP-EST demonstrated superior performance by finding a minimum value of 2.88e | 1.000 | ✅ |
+| BO-GP-EST required 8 iterations to find its minimum. | 1.000 | ✅ |
+| The PPO algorithm obtains the probability distribution of design parameters base | 0.469 | ✅ |
+| RL is specifically noted for its utility in dynamic environments where antennas  | 0.833 | ✅ |
 
 </details>
 
@@ -82,62 +92,44 @@ _Generated: 2026-02-26T15:18:56 · k=5 · 4 queries_
 
 | Metric | Score |
 |---|---|
-| Precision@5 | 1.000 |
-| Recall@5    | 0.667 |
-| Reciprocal Rank | 1.000 |
+| Precision@5      | 1.000 |
+| Recall@5         | 0.667 |
+| Reciprocal Rank    | 1.000 |
+| nDCG@10            | 0.774 |
+| Recall@20          | 0.667 |
 | Citation Grounding | 1.000 (2/2 claims) |
 
 _1 claim(s) had no citation — system correctly acknowledged absent context._
 
-**Retrieved (top 5):** surrogate_lowcost, surrogate_framework, surrogate_framework, surrogate_lowcost, surrogate_framework
-
-**Expected relevant:** ppo_pixel, surrogate_framework, surrogate_lowcost
-
 <details>
 <summary>Per-claim grounding detail</summary>
 
-| Claim (truncated) | Cited Paper | Similarity | Grounded |
-|---|---|---|---|
-| GPR has strong data-fitting capabilities with small sample sizes, performing bes... | surrogate_framework | 0.688 | ✅ |
-| As sample size increases to 1000 and 1600, Decision Tree Regression slightly out... | surrogate_framework | 0.900 | ✅ |
-| The context contains no mention of policy, reinforcement learning, gradients in ... | none | — | ⚠️ N/A |
-
-</details>
-
-### Query D
-
-> What hyperparameters control PPO training stability in the cited antenna design paper?
-
-| Metric | Score |
-|---|---|
-| Precision@5 | 1.000 |
-| Recall@5    | 1.000 |
-| Reciprocal Rank | 1.000 |
-| Citation Grounding | 1.000 (1/1 claims) |
-
-**Retrieved (top 5):** ppo_pixel, ppo_pixel, ppo_pixel, ppo_pixel, ppo_pixel
-
-**Expected relevant:** ppo_pixel
-
-<details>
-<summary>Per-claim grounding detail</summary>
-
-| Claim (truncated) | Cited Paper | Similarity | Grounded |
-|---|---|---|---|
-| REPLACE THIS: paste a claim from your actual Test D answer here. | ppo_pixel | 0.182 | ✅ |
+| Claim | Similarity | Status |
+|---|---|---|
+| GPR has strong data-fitting capabilities with small sample sizes, performing bes | 0.688 | ✅ |
+| As sample size increases to 1000 and 1600, Decision Tree Regression slightly out | 0.900 | ✅ |
+| The context contains no mention of policy, reinforcement learning, gradients in  | — | ⚠️ absent |
 
 </details>
 
 ---
 
-## Methodology Notes
+## Methodology
 
-**Precision@5** — fraction of top-5 retrieved documents that appear in the manually labeled relevant set.
+**Precision@5** — fraction of top-5 retrieved documents in the relevant set.
 
-**Recall@5** — fraction of relevant documents that were retrieved in the top 5.
+**Recall@5** — fraction of relevant documents retrieved in top 5.
 
-**MRR** — reciprocal rank of the first relevant document in the retrieved list. Score of 1.0 means the most relevant paper ranked first.
+**MRR** — reciprocal rank of first relevant document. 1.0 = top result was relevant.
 
-**Citation Grounding Accuracy** — for each factual claim in the answer, token Jaccard similarity is computed between the claim and its cited chunk. Claims above the threshold (0.15) are marked grounded. Claims where the system explicitly stated no source exists are excluded from the denominator (correct behavior).
+**Citation Grounding** — Jaccard similarity between each answer claim and its cited chunk. Threshold 0.15. Claims where the system stated no source exists are excluded from the denominator (correct epistemic behavior, labeled 'absent').
 
-**Limitations** — Jaccard similarity is a weak proxy for semantic overlap; it will undercount grounding for paraphrased claims. A stronger evaluation would use a cross-encoder or an LLM judge. Relevance judgments are from a single annotator (the developer).
+**Retrieval Score** — mean of Precision, Recall, MRR.
+
+**Generation Score** — mean citation grounding across queries.
+
+**nDCG@10** — Normalized Discounted Cumulative Gain at 10. Uses graded relevance (0-3) when `relevance_grades` is present in judgments; defaults to binary (3 for relevant).
+
+**Recall@20** — fraction of relevant documents retrieved in top 20.
+
+**Limitations** — Jaccard similarity undercounts grounding for paraphrased claims. Single annotator for relevance judgments.
