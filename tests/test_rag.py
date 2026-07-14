@@ -155,3 +155,7 @@ def test_extract_citations_comma_no_spaces():
     ]
     result = extract_citations("results in [1,2] above", metadatas)
     assert len(result) == 2
+    assert result[0]["number"] == "1"
+    assert result[0]["title"] == "Paper A"
+    assert result[1]["number"] == "2"
+    assert result[1]["title"] == "Paper B"
