@@ -842,6 +842,10 @@ function renderContent(text) {
         return id;
     };
     text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => stash(t, true));
+    // LLMs emit \[...\] / \(...\) LaTeX delimiters; stash them too, else marked
+    // strips the backslash and prints the raw TeX as literal "( R_f = \exp...".
+    text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => stash(t, true));
+    text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => stash(t, false));
     text = text.replace(/(?<!\$)\$([^\$\n]+?)\$(?!\$)/g, (_, t) => stash(t, false));
     let html = marked.parse(text);
     store.forEach(({ id, tex, display }) => {
