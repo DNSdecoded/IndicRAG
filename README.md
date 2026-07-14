@@ -38,6 +38,9 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 | **Model dropdown** | None | UI model selector fed by `/models`; shows tool-capability badges |
 | **Thinking budget** | None | `AGENT_THINKING_BUDGET`: `0`=off, `-1`=dynamic, `N`=cap |
 | **Chat history** | None | Endpoints + UI panels for browsing past conversations and topic watches |
+| **Failover backstop** | Fails if selected provider == fallback provider | **Guaranteed Gemini backstop** — any selected OpenRouter model falls back to Gemini, so a free-tier 429 never fails the request outright |
+| **Math rendering** | Raw LaTeX shown as text | **KaTeX renders `\(…\)` / `\[…\]`** inline & display equations in answers (plus existing `$…$` / `$$…$$`) |
+| **Response cache key** | prompt + model | prompt + model + **provider** — same model via different providers no longer collides in the LLM cache |
 
 ---
 
@@ -59,7 +62,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Multi-turn conversations** — session history threaded through `AgentState` so follow-ups resolve pronouns and references
 * **Parallel tool execution** — multiple selected tools run concurrently via `ThreadPoolExecutor`
 * **Sub-query cap** — `AGENT_MAX_SUB_QUERIES` limits per-cycle retrievals to bound latency and cost
-* **Model failover + circuit breaker** — per-(provider, model) circuit keys; one model's 429 doesn't block others. Cross-provider failover (Gemini → OpenRouter, or reverse)
+* **Model failover + circuit breaker** — per-(provider, model) circuit keys; one model's 429 doesn't block others. Cross-provider failover (Gemini → OpenRouter, or reverse), with a **guaranteed Gemini backstop** so any selected OpenRouter model still resolves when its free-tier endpoint 429s
 * **Multi-provider LLM** — Gemini + OpenRouter (Claude, GPT, Llama, etc.) with user-selectable models, capability gating, and non-Gemini JSON fallback
 * **google-genai native function calling** — no LangChain LLM wrappers; `mode=AUTO` lets the model return an empty tool list on `regenerate` actions
 
@@ -395,7 +398,7 @@ Key settings (all overridable via environment variables):
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
 | `LLM_MODEL_NAME` | `gemini-3.5-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated) |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,google/gemma-4-31b-it:free,google/gemma-4-26b-a4b:free,nvidia/nemotron-nano-9b-v2:free` | Curated model dropdown (comma-separated) |
 | `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
