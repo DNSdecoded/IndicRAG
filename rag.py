@@ -429,8 +429,8 @@ def llm_generate(prompt: str, max_tokens: int = None,
     target_model = model or config.LLM_MODEL_NAME
 
     from cache import llm_cache, make_key
-    # Include model in the cache key so different models never share a cached answer.
-    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model)
+    # Include model and provider so different models/providers never share a cached answer.
+    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider)
     cached = llm_cache.get(cache_key)
     if cached is not None:
         logger.debug("[LLM cache hit]")
