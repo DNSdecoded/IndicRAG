@@ -107,6 +107,11 @@ def _attempts(model: str, provider: str) -> list[tuple[str, str]]:
     fb_provider = _config.LLM_FALLBACK_PROVIDER
     if fb_provider and fb_provider != provider:
         attempts.append((fb_provider, _fallback_model_for(fb_provider)))
+    # Guarantee a gemini backstop. A selected OpenRouter model whose fallback
+    # provider is also OpenRouter (fb_provider == provider) would otherwise have
+    # no working fallback and fail outright when the free-tier model 429s.
+    if _config.LLM_MODEL_NAME and not any(p == "gemini" for p, _ in attempts):
+        attempts.append(("gemini", _config.LLM_MODEL_NAME))
     return attempts
 
 
