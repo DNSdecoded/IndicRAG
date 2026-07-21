@@ -213,6 +213,55 @@ async def export_search_results(
     return "\n\n".join(entries)
 
 
+class BibtexSource(BaseModel):
+    """One cited source, as carried by a QueryResponse/AgentQueryResponse citation."""
+    title: str = Field(..., min_length=1)
+    authors: str = ""
+    year: str = ""
+
+
+class ExportBibtexRequest(BaseModel):
+    sources: List[BibtexSource] = Field(..., min_length=1)
+
+
+def _cite_key(authors: str, year: str, index: int) -> str:
+    """First-author-surname + year, e.g. 'Smith2020'; falls back to 'refN' when
+    authors/year are unknown (common for Standard RAG citations, which don't
+    carry bibliographic metadata)."""
+    first_author_words = (authors or "").split(",")[0].split()
+    surname = re.sub(r"[^A-Za-z0-9]", "", first_author_words[-1]) if first_author_words else ""
+    yr = re.sub(r"[^0-9]", "", year or "")
+    if surname:
+        return f"{surname}{yr}" if yr else surname
+    return f"ref{index + 1}"
+
+
+@router.post("/export/bibtex", response_class=PlainTextResponse, tags=["Export"])
+async def export_bibtex(
+    body: ExportBibtexRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Export a generated answer/report's cited sources as BibTeX entries."""
+    seen_keys: dict = {}
+    entries = []
+    for i, src in enumerate(body.sources):
+        base_key = _cite_key(src.authors, src.year, i)
+        n = seen_keys.get(base_key, 0)
+        seen_keys[base_key] = n + 1
+        # ponytail: a-z suffixes only, wraps past 26 dupes on identical author+year
+        # for one export — switch to aa/ab if that ever bites.
+        key = base_key if n == 0 else f"{base_key}{chr(ord('a') + n - 1)}"
+
+        fields = [f"  title = {{{_bibtex_escape(src.title)}}}"]
+        if src.authors:
+            fields.append(f"  author = {{{_bibtex_escape(src.authors)}}}")
+        if src.year:
+            fields.append(f"  year = {{{_bibtex_escape(src.year)}}}")
+        entries.append(f"@article{{{key},\n" + ",\n".join(fields) + "\n}")
+
+    return "\n\n".join(entries)
+
+
 @router.get("/papers", response_model=List[PaperInfo], tags=["Management"])
 def list_papers(authenticated: bool = Depends(verify_api_key)):
     """List all PDF files in the papers directory."""
