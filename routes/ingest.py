@@ -124,6 +124,32 @@ class UploadResponse(BaseModel):
     message: str
 
 
+@router.get("/ingest/health", tags=["Ingest"])
+async def ingest_health(authenticated: bool = Depends(verify_api_key)):
+    """Per-paper indexed chunk counts, so a corrupted/failed PDF (0 chunks)
+    doesn't silently vanish from the corpus without anyone noticing."""
+    import vector_store
+    chunk_counts = await run_in_threadpool(vector_store.get_paper_chunk_counts)
+
+    papers = []
+    for pdf_file in sorted(config.PAPERS_DIR.glob("*.pdf")):
+        paper_id = pdf_file.stem
+        chunks = chunk_counts.get(paper_id, 0)
+        papers.append({
+            "paper_id": paper_id,
+            "filename": pdf_file.name,
+            "chunks": chunks,
+            "status": "indexed" if chunks > 0 else "failed",
+        })
+
+    return {
+        "paper_count": len(papers),
+        "chunk_count": sum(p["chunks"] for p in papers),
+        "failed_count": sum(1 for p in papers if p["status"] == "failed"),
+        "papers": papers,
+    }
+
+
 @router.post("/ingest", response_model=IngestResponse, tags=["Management"])
 @limiter.limit("5/minute")
 async def ingest_document(
