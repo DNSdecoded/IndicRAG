@@ -60,6 +60,45 @@ def test_search_export_rejects_unknown_format(client):
     assert resp.status_code == 400
 
 
+def test_list_feedback_returns_query_context(client):
+    import persistence
+    persistence.log_query(
+        query_id="q-ctx-1", question="What is BERT?", answer="A transformer model.",
+        mode="standard_A", model="default", language="en", confidence=0.8, coverage=0.5,
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+    client.post("/feedback", json={"query_id": "q-ctx-1", "rating": "up"})
+
+    resp = client.get("/feedback")
+    assert resp.status_code == 200
+    entry = next(e for e in resp.json() if e["query_id"] == "q-ctx-1")
+    assert entry["question"] == "What is BERT?"
+    assert entry["answer"] == "A transformer model."
+    assert entry["rating"] == "up"
+
+
+def test_feedback_stats_aggregates_by_language(client):
+    import persistence
+    persistence.log_query(
+        query_id="q-stats-en", question="q", answer="a", mode="standard_A",
+        model="default", language="en", confidence=0.9, coverage=0.5,
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+    persistence.log_query(
+        query_id="q-stats-hi", question="q", answer="a", mode="standard_A",
+        model="default", language="hi", confidence=0.9, coverage=0.5,
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+    client.post("/feedback", json={"query_id": "q-stats-en", "rating": "up"})
+    client.post("/feedback", json={"query_id": "q-stats-hi", "rating": "down"})
+
+    resp = client.get("/feedback/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["by_language"]["en"]["approval_rate"] == 1.0
+    assert body["by_language"]["hi"]["approval_rate"] == 0.0
+
+
 def test_search_export_returns_bibtex(client):
     fake_context = {
         "chunks": ["chunk text"],

@@ -6,14 +6,17 @@ import asyncio
 import logging
 import threading
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 import config
+import persistence
 import rag
 from agent.state import AgentState
+from agent.nodes.finalizer import citation_coverage
 from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
 
 logger = logging.getLogger(__name__)
@@ -77,6 +80,7 @@ class AgentQueryResponse(BaseModel):
     timestamp: str
     answer_confidence: Optional[float] = None
     abstained: bool = False
+    query_id: str = ""
 
 
 @router.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
@@ -197,6 +201,19 @@ async def agent_query(
     # Order the panel by citation number so [1],[2],... read in sequence.
     sources.sort(key=lambda s: s.number)
 
+    query_id = str(uuid.uuid4())
+    try:
+        persistence.log_query(
+            query_id=query_id, question=body.question, answer=result["final_answer"],
+            mode=f"agent_{body.strategy}", model=body.model or "default",
+            language=result.get("detected_language", "en"),
+            confidence=result.get("answer_confidence") or 0.0,
+            coverage=citation_coverage(result["final_answer"]),
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception:
+        logger.warning("Failed to log query for feedback correlation", exc_info=True)
+
     return AgentQueryResponse(
         answer=result["final_answer"],
         session_id=session_id,
@@ -208,4 +225,5 @@ async def agent_query(
         timestamp=datetime.now(timezone.utc).isoformat(),
         answer_confidence=result.get("answer_confidence"),
         abstained=result.get("abstained", False),
+        query_id=query_id,
     )

@@ -35,6 +35,12 @@ _conn.execute(
     "CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, user_id TEXT, data TEXT, "
     "next_run TEXT, last_run TEXT, created_at TEXT)"
 )
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS query_log ("
+    "query_id TEXT PRIMARY KEY, question TEXT, answer TEXT, mode TEXT, "
+    "model TEXT, language TEXT, confidence REAL, coverage REAL, "
+    "created_at TEXT)"
+)
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -106,6 +112,61 @@ def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, cr
             (feedback_id, query_id, rating, comment, created_at),
         )
         _conn.commit()
+
+
+def log_query(query_id: str, question: str, answer: str, mode: str,
+              model: str, language: str, confidence: float, coverage: float,
+              created_at: str) -> None:
+    """Persist a query/answer record so feedback can be correlated with it."""
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO query_log "
+            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(query_id) DO UPDATE SET "
+            "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
+            (query_id, question, answer, mode, model, language, confidence, coverage, created_at),
+        )
+        _conn.commit()
+
+
+_FEEDBACK_CONTEXT_COLUMNS = [
+    "id", "query_id", "rating", "comment", "created_at",
+    "question", "answer", "mode", "model", "language", "confidence", "coverage",
+]
+
+
+def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Return feedback joined with its query context, newest first."""
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT f.id, f.query_id, f.rating, f.comment, f.created_at, "
+            "q.question, q.answer, q.mode, q.model, q.language, q.confidence, q.coverage "
+            "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            "ORDER BY f.created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    return [
+        dict(zip(_FEEDBACK_CONTEXT_COLUMNS, r))
+        for r in rows
+    ]
+
+
+def feedback_stats() -> dict:
+    """Aggregate feedback totals and per-language approval rate."""
+    with _db_lock:
+        total = _conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+        up = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='up'").fetchone()[0]
+        down = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='down'").fetchone()[0]
+        by_lang = _conn.execute(
+            "SELECT q.language, COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
+            "FROM feedback f JOIN query_log q ON f.query_id = q.query_id "
+            "GROUP BY q.language"
+        ).fetchall()
+    return {
+        "total": total, "up": up, "down": down,
+        "by_language": {r[0]: {"count": r[1], "approval_rate": round(r[2], 3)} for r in by_lang},
+    }
 
 
 def get_prefs(user_id: str) -> dict:
