@@ -1,5 +1,30 @@
 """Unit tests for rag.py — citation parsing, prompt building, context formatting."""
 
+from unittest.mock import patch
+
+
+def test_run_faithfulness_returns_mean_confidence():
+    from rag import _run_faithfulness
+
+    claims = [
+        {"claim": "a", "support": 0.9, "grounded": True},
+        {"claim": "b", "support": 0.3, "grounded": False},
+    ]
+    with patch("verify.check_claims", return_value=claims):
+        result = _run_faithfulness("answer text", ["chunk"], [{"title": "P"}])
+
+    assert result["claims"] == claims
+    assert result["confidence"] == 0.6
+
+
+def test_run_faithfulness_zero_confidence_when_no_claims():
+    from rag import _run_faithfulness
+
+    with patch("verify.check_claims", return_value=[]):
+        result = _run_faithfulness("answer text", ["chunk"], [{"title": "P"}])
+
+    assert result == {"claims": [], "confidence": 0.0}
+
 
 def test_extract_citations_cite_format():
     from rag import extract_citations

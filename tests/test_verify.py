@@ -120,6 +120,40 @@ def test_metadatas_none_falls_back_to_chunk_index():
     assert premises == ["second"]
 
 
+def _fake_model_per_pair(rows):
+    """CrossEncoder stand-in returning a distinct logit row per input pair, in order."""
+    m = MagicMock()
+    m.predict = MagicMock(side_effect=lambda pairs: np.array(rows[:len(pairs)]))
+    return m
+
+
+def test_check_claims_returns_argmax_supporting_chunk():
+    """The winning (highest-entailment) chunk must be surfaced, not just its score."""
+    chunks = ["chunk with weak overlap", "chunk that strongly supports the claim"]
+    metadatas = [{"title": "PaperA"}, {"title": "PaperA"}]
+    answer = "The claim is well supported. [1]"
+
+    fake_model = _fake_model_per_pair([
+        [-2.0, 0.0, 1.0],   # low entailment for chunk 0
+        [5.0, -2.0, -3.0],  # high entailment for chunk 1
+    ])
+    with patch("verify._load", return_value=fake_model):
+        results = verify.check_claims(answer, chunks, metadatas)
+
+    assert results[0]["supporting_chunk_index"] == 1
+    assert results[0]["supporting_chunk"] == chunks[1]
+
+
+def test_supporting_chunk_truncated_for_payload_size():
+    chunks = ["x" * 1000]
+    answer = "Claim. [1]"
+
+    with patch("verify._load", return_value=_fake_model()):
+        results = verify.check_claims(answer, chunks)
+
+    assert len(results[0]["supporting_chunk"]) == 500
+
+
 def test_not_found_marker_also_merges_as_citation_only_fragment():
     answer = "No information was available on this topic. [NOT FOUND: topic] Second sentence. [1]"
     chunks = ["relevant chunk"]

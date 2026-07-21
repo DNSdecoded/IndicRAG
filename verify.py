@@ -112,7 +112,13 @@ def check_claims(answer: str, chunks: List[str], metadatas=None) -> List[dict]:
         # (config.NLI_ENTAILMENT_INDEX), since label order differs across NLI models.
         e = np.exp(raw - raw.max(axis=1, keepdims=True))
         probs = e / e.sum(axis=1, keepdims=True)
-        score = float(probs[:, config.NLI_ENTAILMENT_INDEX].max())
-        results.append({"claim": sent, "support": score,
-                        "grounded": score >= config.FAITHFULNESS_THRESHOLD})
+        entail_probs = probs[:, config.NLI_ENTAILMENT_INDEX]
+        best_idx = int(entail_probs.argmax())
+        score = float(entail_probs[best_idx])
+        results.append({
+            "claim": sent, "support": score,
+            "grounded": score >= config.FAITHFULNESS_THRESHOLD,
+            "supporting_chunk": cited_chunks[best_idx][:500],  # truncate for payload size
+            "supporting_chunk_index": best_idx,
+        })
     return results

@@ -65,6 +65,48 @@ def test_patch_paper_invalid_field(client):
     assert resp.status_code == 400
 
 
+def test_query_response_includes_confidence_and_evidence(client):
+    claim = {"claim": "x", "support": 0.82, "grounded": True,
+              "supporting_chunk": "chunk text", "supporting_chunk_index": 0}
+    with patch("rag.answer_question") as mock_query:
+        mock_query.return_value = {
+            "answer": "Test answer",
+            "language": "en",
+            "language_name": "English",
+            "chunks_used": 1,
+            "citations": [],
+            "processing_time": 0.1,
+            "timestamp": "2026-06-30T00:00:00Z",
+            "answer_confidence": 0.82,
+            "faithfulness": [claim],
+        }
+        resp = client.post("/query", json={"question": "What is IndicRAG?"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["confidence"] == 0.82
+    assert body["evidence"] == [claim]
+
+
+def test_query_response_defaults_confidence_and_evidence_when_absent(client):
+    with patch("rag.answer_question") as mock_query:
+        mock_query.return_value = {
+            "answer": "Test answer",
+            "language": "en",
+            "language_name": "English",
+            "chunks_used": 1,
+            "citations": [],
+            "processing_time": 0.1,
+            "timestamp": "2026-06-30T00:00:00Z",
+        }
+        resp = client.post("/query", json={"question": "What is IndicRAG?"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["confidence"] == 0.0
+    assert body["evidence"] == []
+
+
 # ---------------------------------------------------------------------------
 # Rate limiting wired up
 # ---------------------------------------------------------------------------
