@@ -110,6 +110,40 @@ def test_no_new_papers_keeps_prior_digest(monkeypatch):
     assert persistence.get_watch("w1")["latest_digest"] == "OLD"  # unchanged
 
 
+def test_pdf_ingest_triggers_cache_refresh(monkeypatch):
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.001")])
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == [1]  # BM25/cache must be invalidated so the paper is searchable
+
+
+def test_corpus_duplicate_does_not_trigger_cache_refresh(monkeypatch):
+    _save("w1")
+    # ingest_pdf returns 0 chunks → duplicate/unchanged in corpus, nothing indexed
+    _patch(monkeypatch, [_hit("2401.001")], ingest=lambda *a, **k: (0, "Dup"))
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == []  # duplicate content, nothing new to make searchable
+
+
+def test_abstract_only_does_not_trigger_cache_refresh(monkeypatch):
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.003", pdf=False)])
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == []  # nothing was actually indexed, no refresh needed
+
+
 def test_run_due_watches_runs_each_due_and_survives_failures(monkeypatch):
     ran = []
     monkeypatch.setattr(watch_runner.persistence, "due_watches",

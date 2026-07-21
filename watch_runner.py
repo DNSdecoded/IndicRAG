@@ -16,6 +16,7 @@ import config
 import persistence
 import rag
 from agent.tool_executor import execute_arxiv_search, execute_open_access_search
+from cache_refresh import _post_ingest_refresh
 from ingest import ingest_pdf
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ def run_watch(watch_id: str) -> dict:
 
     ingested: list[dict] = []
     new_ids: list[str] = []
+    indexed = False  # True once at least one paper was actually added to the vector store
     for p in passages:
         arxiv_id = p.get("arxiv_id")
         if not arxiv_id or arxiv_id in seen:
@@ -114,10 +116,15 @@ def run_watch(watch_id: str) -> dict:
                         pass
                 if n_chunks > 0:  # 0 = duplicate/unchanged in corpus → seen, but not "new"
                     ingested.append({"arxiv_id": arxiv_id, "title": title or p.get("title", ""), "text": p.get("text", "")})
+                    indexed = True
                 continue
         # ponytail: no PDF (or download failed) → abstract feeds the digest only;
         # indexing an abstract-only chunk is deferred to a later increment.
         ingested.append({"arxiv_id": arxiv_id, "title": p.get("title", ""), "text": p.get("text", "")})
+
+    if indexed:
+        # Invalidate caches so newly ingested papers are searchable
+        _post_ingest_refresh()
 
     digest = _summarize(topic, ingested, language) if ingested else w.get("latest_digest")
 

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional
 import logging
 import re as _re
-import threading
 import time
 import uuid
 
@@ -15,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import config
+from cache_refresh import _post_ingest_refresh
 from deps import limiter, verify_api_key, _jobs, _jobs_lock, _update_job
 
 logger = logging.getLogger(__name__)
@@ -24,22 +24,6 @@ router = APIRouter()
 # We rely on the is_absolute() + relative_to() checks for traversal; the regex
 # only needs to reject characters that can't appear in safe filenames.
 _UNSAFE_CHARS_RE = _re.compile(r'[\x00\|;&`$<>"\'\!\*\?\{\}\[\]\\~]')
-
-
-def _post_ingest_refresh():
-    """Rebuild BM25 index (async) and invalidate retrieval/tool caches after an ingest."""
-    try:
-        import bm25_search
-        bm25_search.invalidate()
-        threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
-    except Exception:
-        pass
-    try:
-        from cache import retrieval_cache, tool_cache
-        retrieval_cache.invalidate()
-        tool_cache.invalidate()
-    except Exception:
-        logger.warning("Failed to invalidate caches after ingestion", exc_info=True)
 
 
 def _resolve_papers_path(rel_path: str) -> Path:
