@@ -33,6 +33,30 @@ def build_paper_filter(paper_ids: Optional[List[str]]) -> Optional[Dict]:
     return {"paper_id": {"$in": ids}}
 
 
+def build_tags_filter(tags: Optional[str]) -> Optional[Dict]:
+    """Parse comma-separated tags into a rag.retrieve_context post-filter sentinel, or None.
+
+    Not a ChromaDB where-clause: PATCH /papers stores tags as one unsplit
+    string, so a native $in match against split tag names would never equal
+    the stored value for any paper with more than one tag. rag.retrieve_context
+    (via rag._extract_tags_post_filter) pulls this sentinel back out and
+    applies it as a Python-side post-filter instead.
+    """
+    tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    if not tag_list:
+        return None
+    import rag
+    return {rag._TAGS_SENTINEL: tag_list}
+
+
+def combine_filters(*filters: Optional[Dict]) -> Optional[Dict]:
+    """AND together any number of ChromaDB filters, dropping the None ones."""
+    clauses = [f for f in filters if f]
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
 class QueryRequest(BaseModel):
     """Request model for question answering."""
     question: str = Field(..., min_length=1, max_length=1000, description="User question in any language")
@@ -41,6 +65,7 @@ class QueryRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    tags: Optional[str] = Field(None, description="Comma-separated tags to filter retrieval.")
     model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
     provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
@@ -197,7 +222,7 @@ async def query_question(
             user_query=body.question,
             strategy=body.strategy,
             top_k=top_k,
-            filter_dict=build_paper_filter(body.paper_ids),
+            filter_dict=combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)),
             model=body.model,
             provider=body.provider,
         )
@@ -259,7 +284,7 @@ async def query_stream(
         top_k = max(1, min(top_k, 20))
 
     prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k,
-                                       build_paper_filter(body.paper_ids))
+                                       combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
     query_id = str(uuid.uuid4())
 
     if prepared["chunks_used"] == 0:

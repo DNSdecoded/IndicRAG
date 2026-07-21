@@ -36,6 +36,13 @@ FUNCTION_DECLARATIONS = [
                         "earlier. Optional."
                     ),
                 },
+                "tags": {
+                    "type": "string",
+                    "description": (
+                        "Comma-separated tags to filter retrieval (e.g. 'transformer,efficiency'). "
+                        "Only return passages from papers tagged with at least one of these tags. Optional."
+                    ),
+                },
             },
             "required": ["query"],
         },

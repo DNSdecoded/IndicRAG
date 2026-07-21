@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import rag
 from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
-from routes.query import Citation, build_paper_filter
+from routes.query import Citation, build_paper_filter, build_tags_filter, combine_filters
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class ChatRequest(BaseModel):
     paper_ids: Optional[List[str]] = Field(
         None, description="Restrict retrieval to these paper_ids (PDF filename stems). Omit for whole corpus."
     )
+    tags: Optional[str] = Field(None, description="Comma-separated tags to filter retrieval.")
     model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
     provider: Optional[str] = Field(None, description="LLM provider override (gemini|openrouter). Usually inferred from model.")
 
@@ -93,7 +94,7 @@ async def chat(
             messages=full_messages,
             strategy=body.strategy,
             top_k=top_k,
-            filter_dict=build_paper_filter(body.paper_ids),
+            filter_dict=combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)),
             model=body.model,
             provider=body.provider,
         )
@@ -141,7 +142,7 @@ async def chat_stream(
     full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
     prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
-                                       build_paper_filter(body.paper_ids))
+                                       combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
     query_id = str(uuid.uuid4())
 
     if prepared["chunks_used"] == 0:
