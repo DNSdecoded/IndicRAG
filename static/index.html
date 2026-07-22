@@ -1009,6 +1009,12 @@
         </div>
     </header>
 
+    <div id="scopeIndicator" style="display:none;align-items:center;gap:.5rem;padding:.4rem .9rem;background:var(--primary-bg);border-bottom:1px solid var(--primary-border);color:var(--primary);font-size:.78rem">
+        <span>📌</span>
+        <span id="scopeIndicatorText" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <button onclick="clearPaperScope()" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:.9rem;line-height:1;padding:0" title="Clear scope">✕</button>
+    </div>
+
     <div class="chat-area" id="chatArea">
         <div class="welcome-row" id="welcomeMsg">
             <div class="bot-avatar">
@@ -1700,6 +1706,27 @@ async function refreshKB() {
         }).join('');
     } catch(e){ console.error('Failed to load knowledge base:', e); }
 }
+
+// "Chat with this paper": the paper-scope checkboxes already restrict retrieval
+// (paper_ids sent on /chat/stream) — this just makes the active scope visible.
+function updateScopeIndicator(){
+    const checked=[...document.querySelectorAll('.paper-scope:checked')];
+    const bar=document.getElementById('scopeIndicator');
+    const text=document.getElementById('scopeIndicatorText');
+    if(!checked.length){ bar.style.display='none'; return; }
+    text.textContent=checked.length===1
+        ? `Scoped to: ${checked[0].dataset.pid}`
+        : `Scoped to ${checked.length} papers: ${checked.map(c=>c.dataset.pid).join(', ')}`;
+    bar.style.display='flex';
+}
+function clearPaperScope(){
+    document.querySelectorAll('.paper-scope:checked').forEach(c=>{c.checked=false;});
+    updateScopeIndicator();
+}
+document.addEventListener('change', e=>{
+    if(e.target.classList && e.target.classList.contains('paper-scope')) updateScopeIndicator();
+});
+
 async function ingestOne(filename,sid) {
     const btn=document.getElementById(`ib-${sid}`); if(!btn)return;
     const orig=btn.textContent; btn.disabled=true; btn.textContent='…';
