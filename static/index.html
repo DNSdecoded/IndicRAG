@@ -1154,10 +1154,11 @@
 <div class="overlay" id="compareOverlay">
     <div class="modal" style="max-width:720px">
         <h3>🔀 Compare Papers</h3>
-        <p>Comma-separated paper IDs (2+) and dimensions to compare them on.</p>
+        <p>Pick 2+ papers and list dimensions to compare them on.</p>
         <div style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem">
-            <input id="comparePaperIds" placeholder="paper_id_1, paper_id_2, ..."
-                style="padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',system-ui,sans-serif;">
+            <div id="comparePaperList" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:7px;padding:.4rem .6rem;background:var(--surface-up)">
+                <div style="color:var(--text-3);font-size:.8rem;padding:.3rem 0">Loading papers…</div>
+            </div>
             <input id="compareDimensions" placeholder="methodology, dataset, results, ..."
                 style="padding:.5rem .6rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.85rem;font-family:'Inter',system-ui,sans-serif;">
             <button id="compareBtn" class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary);align-self:flex-start" onclick="runCompare()">Compare</button>
@@ -2025,15 +2026,30 @@ async function reindexPaper(paperId,btn){
 }
 
 // ── COMPARE PAPERS ─────────────────────────────────────────────
-function showCompareModal(){ document.getElementById('compareOverlay').classList.add('active'); }
+function showCompareModal(){ document.getElementById('compareOverlay').classList.add('active'); loadComparePapers(); }
 function hideCompareModal(){ document.getElementById('compareOverlay').classList.remove('active'); }
 
+async function loadComparePapers(){
+    const list=document.getElementById('comparePaperList');
+    list.innerHTML='<div style="color:var(--text-3);font-size:.8rem;padding:.3rem 0">Loading papers…</div>';
+    try{
+        const r=await fetch(`${API}/papers`,{headers:authHeaders()});
+        const papers=r.ok?await r.json():[];
+        if(!papers.length){ list.innerHTML='<div style="color:var(--text-3);font-size:.8rem;padding:.3rem 0">No papers ingested yet.</div>'; return; }
+        list.innerHTML=papers.map(p=>`
+            <label style="display:flex;align-items:center;gap:.4rem;padding:.25rem 0;font-size:.82rem;color:var(--text-1);cursor:pointer">
+                <input type="checkbox" class="compare-pid" value="${esc(p.paper_id)}">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.filename)}</span>
+            </label>`).join('');
+    }catch(e){ list.innerHTML=`<div style="color:#ef4444;font-size:.8rem;padding:.3rem 0">${esc(e.message)}</div>`; }
+}
+
 async function runCompare(){
-    const paperIds=document.getElementById('comparePaperIds').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const paperIds=[...document.querySelectorAll('.compare-pid:checked')].map(el=>el.value);
     const dimensions=document.getElementById('compareDimensions').value.split(',').map(s=>s.trim()).filter(Boolean);
     const statusEl=document.getElementById('compareStatus');
     const tableWrap=document.getElementById('compareTableWrap');
-    if(paperIds.length<2){ showToast('Enter at least 2 paper IDs','error'); return; }
+    if(paperIds.length<2){ showToast('Select at least 2 papers','error'); return; }
     if(!dimensions.length){ showToast('Enter at least 1 dimension','error'); return; }
 
     const btn=document.getElementById('compareBtn');

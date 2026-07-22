@@ -56,6 +56,7 @@ class SearchResponse(BaseModel):
 
 class PaperInfo(BaseModel):
     """Information about an uploaded paper."""
+    paper_id: str
     filename: str
     size_bytes: int
     size_mb: float
@@ -270,6 +271,7 @@ def list_papers(authenticated: bool = Depends(verify_api_key)):
         for pdf_file in config.PAPERS_DIR.glob("*.pdf"):
             size = pdf_file.stat().st_size
             papers.append(PaperInfo(
+                paper_id=pdf_file.stem,
                 filename=pdf_file.name,
                 size_bytes=size,
                 size_mb=round(size / (1024 * 1024), 2)

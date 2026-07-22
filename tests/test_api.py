@@ -42,6 +42,25 @@ def test_health_returns_healthy(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /papers
+# ---------------------------------------------------------------------------
+
+def test_list_papers_includes_paper_id(client, tmp_path, monkeypatch):
+    """paper_id (the value /compare, /ingest/reindex, etc. actually need) must
+    be in the response — filename alone doesn't tell the UI what to send."""
+    (tmp_path / "smith_2020_transformer.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    resp = client.get("/papers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["paper_id"] == "smith_2020_transformer"
+    assert body[0]["filename"] == "smith_2020_transformer.pdf"
+
+
+# ---------------------------------------------------------------------------
 # POST /compare
 # ---------------------------------------------------------------------------
 
