@@ -99,6 +99,56 @@ def test_feedback_stats_aggregates_by_language(client):
     assert body["by_language"]["hi"]["approval_rate"] == 0.0
 
 
+def test_export_bibtex_from_answer_sources(client):
+    resp = client.post("/export/bibtex", json={
+        "sources": [
+            {"title": "A {Great} Paper", "authors": "John Smith, Jane Doe", "year": "2020"},
+            {"title": "Another Paper", "authors": "", "year": ""},
+        ]
+    })
+    assert resp.status_code == 200
+    assert "@article{Smith2020," in resp.text
+    assert "title = {A Great Paper}" in resp.text
+    assert "author = {John Smith, Jane Doe}" in resp.text
+    assert "year = {2020}" in resp.text
+    # No authors/year → falls back to a ref-style key, no dangling empty fields
+    assert "@article{ref2," in resp.text
+    assert "author = {}" not in resp.text
+    assert "year = {}" not in resp.text
+
+
+def test_export_bibtex_leading_comma_authors_no_crash(client):
+    """Regression: authors=', John Smith' must not IndexError inside _cite_key."""
+    resp = client.post("/export/bibtex", json={
+        "sources": [{"title": "Solo Title", "authors": ", John Smith", "year": "2021"}]
+    })
+    assert resp.status_code == 200
+    assert "@article{ref1," in resp.text
+
+
+def test_export_bibtex_no_authors_or_year_at_index_zero(client):
+    resp = client.post("/export/bibtex", json={"sources": [{"title": "Only A Title"}]})
+    assert resp.status_code == 200
+    assert "@article{ref1," in resp.text
+
+
+def test_export_bibtex_dedupes_colliding_keys(client):
+    resp = client.post("/export/bibtex", json={
+        "sources": [
+            {"title": "Paper One", "authors": "John Smith", "year": "2020"},
+            {"title": "Paper Two", "authors": "John Smith", "year": "2020"},
+        ]
+    })
+    assert resp.status_code == 200
+    assert "@article{Smith2020," in resp.text
+    assert "@article{Smith2020a," in resp.text
+
+
+def test_export_bibtex_rejects_empty_sources(client):
+    resp = client.post("/export/bibtex", json={"sources": []})
+    assert resp.status_code == 422
+
+
 def test_search_export_returns_bibtex(client):
     fake_context = {
         "chunks": ["chunk text"],
