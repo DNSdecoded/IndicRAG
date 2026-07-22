@@ -1,7 +1,9 @@
 """Routes: /search, /papers, /papers/{id}, /purge/*, /stats, /cache/*."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
+import json
 import logging
 import re
 import threading
@@ -16,6 +18,8 @@ import config
 import lang_utils
 import rag
 from deps import verify_api_key, verify_admin_key
+
+_EVAL_REPORT_PATH = Path(__file__).resolve().parent.parent / "docs" / "Eval" / "eval_report.json"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -432,6 +436,14 @@ async def clear_caches(authenticated: bool = Depends(verify_api_key)):
     retrieval_cache.invalidate()
     tool_cache.invalidate()
     return {"status": "cleared"}
+
+
+@router.get("/quality", tags=["Management"])
+async def get_quality_metrics(authenticated: bool = Depends(verify_api_key)):
+    """Return the latest retrieval/generation eval metrics (docs/Eval/evaluate.py)."""
+    if _EVAL_REPORT_PATH.exists():
+        return json.loads(_EVAL_REPORT_PATH.read_text(encoding="utf-8"))
+    return {"error": "No eval report available"}
 
 
 @router.get("/stats", tags=["Management"])

@@ -186,6 +186,31 @@ def test_delete_paper_not_found(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /quality
+# ---------------------------------------------------------------------------
+
+def test_quality_returns_report_when_present(client, tmp_path, monkeypatch):
+    report = {"overall": 0.94, "num_queries": 3}
+    report_path = tmp_path / "eval_report.json"
+    report_path.write_text(__import__("json").dumps(report), encoding="utf-8")
+    monkeypatch.setattr("routes.management._EVAL_REPORT_PATH", report_path)
+
+    resp = client.get("/quality")
+
+    assert resp.status_code == 200
+    assert resp.json() == report
+
+
+def test_quality_returns_error_when_absent(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("routes.management._EVAL_REPORT_PATH", tmp_path / "does_not_exist.json")
+
+    resp = client.get("/quality")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"error": "No eval report available"}
+
+
+# ---------------------------------------------------------------------------
 # PATCH /papers/{paper_id}
 # ---------------------------------------------------------------------------
 
