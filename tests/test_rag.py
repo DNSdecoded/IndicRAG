@@ -26,6 +26,53 @@ def test_run_faithfulness_zero_confidence_when_no_claims():
     assert result == {"claims": [], "confidence": 0.0}
 
 
+def test_compare_papers_builds_matrix():
+    """compare_papers must scope retrieval per paper and ask one extraction
+    per dimension, keyed matrix[paper_id][dimension]."""
+    from rag import compare_papers
+
+    scoped_by_paper = {
+        "p1": {"chunks": ["p1 text"], "metadatas": [{"paper_id": "p1"}],
+               "formatted_context": "[1] Paper One - body:\np1 text\n", "chunks_used": 1},
+        "p2": {"chunks": ["p2 text"], "metadatas": [{"paper_id": "p2"}],
+               "formatted_context": "[1] Paper Two - body:\np2 text\n", "chunks_used": 1},
+    }
+
+    def fake_retrieve_scoped(filter_dict, collection):
+        pid = filter_dict["paper_id"]["$in"][0]
+        return scoped_by_paper[pid]
+
+    def fake_llm_generate(prompt, max_tokens=None, model=None):
+        # Echo back which paper/dimension the prompt was built for, so the
+        # test can assert the matrix cell actually came from the right call.
+        return f"answer for {prompt.splitlines()[-1]}"
+
+    with patch("rag._retrieve_scoped", side_effect=fake_retrieve_scoped), \
+         patch("rag.llm_generate", side_effect=fake_llm_generate), \
+         patch("vector_store.get_or_create_collection", return_value=object()):
+        result = compare_papers(["p1", "p2"], ["methodology", "dataset"])
+
+    assert result["dimensions"] == ["methodology", "dataset"]
+    assert set(result["matrix"].keys()) == {"p1", "p2"}
+    assert "p1 text" in result["matrix"]["p1"]["methodology"]
+    assert "p2 text" in result["matrix"]["p2"]["dataset"]
+
+
+def test_compare_papers_missing_paper_marks_na_without_llm_call():
+    """A paper_id with no chunks in the corpus must not burn an LLM call per
+    dimension — every cell for it is N/A."""
+    from rag import compare_papers
+
+    with patch("rag._retrieve_scoped", return_value={"chunks": [], "metadatas": [],
+                                                       "formatted_context": "", "chunks_used": 0}), \
+         patch("rag.llm_generate") as mock_llm, \
+         patch("vector_store.get_or_create_collection", return_value=object()):
+        result = compare_papers(["missing_paper"], ["methodology"])
+
+    assert result["matrix"]["missing_paper"]["methodology"] == "N/A — paper not found in corpus"
+    mock_llm.assert_not_called()
+
+
 def test_extract_citations_cite_format():
     from rag import extract_citations
 

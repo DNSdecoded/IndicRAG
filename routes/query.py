@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -15,7 +15,7 @@ import config
 import persistence
 import rag
 from agent.nodes.finalizer import citation_coverage
-from deps import STATIC_DIR, limiter, verify_api_key
+from deps import STATIC_DIR, limiter, verify_api_key, _jobs, _jobs_lock, _update_job
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -318,3 +318,70 @@ async def query_stream(
                    model=body.model, provider=body.provider),
         media_type="text/event-stream",
     )
+
+
+class CompareRequest(BaseModel):
+    """Request model for a cross-paper comparison table."""
+    paper_ids: List[str] = Field(..., min_length=2, description="Paper IDs to compare (2 or more)")
+    dimensions: List[str] = Field(..., min_length=1, description="Dimensions to compare on")
+    model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+
+
+class CompareJobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+def _run_compare_job(job_id: str, paper_ids: List[str], dimensions: List[str], model: Optional[str]):
+    """Background worker: N papers x M dimensions is N*M LLM calls, so this
+    runs as a job rather than blocking the request (same pattern as bulk ingest)."""
+    _update_job(job_id, status="running")
+    try:
+        result = rag.compare_papers(paper_ids, dimensions, model)
+        _update_job(
+            job_id, status="success",
+            dimensions=result["dimensions"], matrix=result["matrix"],
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"Compare job {job_id} failed: {e}", exc_info=True)
+        _update_job(
+            job_id, status="failed", error=str(e),
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+
+@router.post("/compare", response_model=CompareJobResponse, status_code=202, tags=["Comparison"])
+@limiter.limit("5/minute")
+async def compare_papers_endpoint(
+    request: Request,
+    body: CompareRequest,
+    background_tasks: BackgroundTasks,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Generate a papers x dimensions comparison table across the corpus.
+
+    Returns 202 with a job_id immediately; poll GET /compare/status/{job_id}.
+    """
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id, "status": "pending",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": None, "dimensions": None, "matrix": None, "error": None,
+        }
+    background_tasks.add_task(_run_compare_job, job_id, body.paper_ids, body.dimensions, body.model)
+    return CompareJobResponse(
+        job_id=job_id, status="pending",
+        message="Comparison started. Poll /compare/status/{job_id} for the result.",
+    )
+
+
+@router.get("/compare/status/{job_id}", tags=["Comparison"])
+async def get_compare_status(job_id: str, authenticated: bool = Depends(verify_api_key)):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job '{job_id}' not found.")
+    return job

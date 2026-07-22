@@ -445,6 +445,35 @@ def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
     }
 
 
+def compare_papers(paper_ids: List[str], dimensions: List[str], model: str = None) -> Dict[str, Any]:
+    """Build a papers x dimensions comparison matrix.
+
+    Reuses the paper-scoped exhaustive retrieval (_retrieve_scoped) to see the
+    whole paper per row, then asks one grounded extraction per dimension.
+    Returns {"dimensions": [...], "matrix": {paper_id: {dimension: text}}}.
+    """
+    collection = vector_store.get_or_create_collection()
+
+    matrix: Dict[str, Dict[str, str]] = {}
+    for paper_id in paper_ids:
+        scoped = _retrieve_scoped({"paper_id": {"$in": [paper_id]}}, collection)
+        context = scoped["formatted_context"]
+        matrix[paper_id] = {}
+        if not context:
+            for dim in dimensions:
+                matrix[paper_id][dim] = "N/A — paper not found in corpus"
+            continue
+        for dim in dimensions:
+            prompt = (
+                f"Based ONLY on the following paper text, extract the information about: {dim}\n"
+                f"If the paper does not address this dimension, say 'N/A'.\n"
+                f"Be concise — 1-3 sentences. Cite with [1] if possible.\n\n{context}"
+            )
+            matrix[paper_id][dim] = llm_generate(prompt, max_tokens=300, model=model)
+
+    return {"dimensions": dimensions, "matrix": matrix}
+
+
 def build_prompt(
     user_query: str,
     context: str,

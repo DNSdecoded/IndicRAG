@@ -42,6 +42,36 @@ def test_health_returns_healthy(client):
 
 
 # ---------------------------------------------------------------------------
+# POST /compare
+# ---------------------------------------------------------------------------
+
+def test_compare_rejects_single_paper(client):
+    resp = client.post("/compare", json={"paper_ids": ["p1"], "dimensions": ["methodology"]})
+    assert resp.status_code == 422
+
+
+def test_compare_runs_job_and_status_returns_matrix(client):
+    fake_matrix = {"dimensions": ["methodology"], "matrix": {"p1": {"methodology": "x"}, "p2": {"methodology": "y"}}}
+    with patch("rag.compare_papers", return_value=fake_matrix) as mock_compare:
+        resp = client.post("/compare", json={"paper_ids": ["p1", "p2"], "dimensions": ["methodology"]})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+
+        status_resp = client.get(f"/compare/status/{job_id}")
+
+    mock_compare.assert_called_once_with(["p1", "p2"], ["methodology"], None)
+    assert status_resp.status_code == 200
+    body = status_resp.json()
+    assert body["status"] == "success"
+    assert body["matrix"] == fake_matrix["matrix"]
+
+
+def test_compare_status_404_for_unknown_job(client):
+    resp = client.get("/compare/status/does-not-exist")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # POST /chat — paper_ids + tags filter combination
 # ---------------------------------------------------------------------------
 
