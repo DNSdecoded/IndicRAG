@@ -86,6 +86,8 @@ class QueryResponse(BaseModel):
     citations: List[Citation]
     processing_time: float
     timestamp: str
+    confidence: float = 0.0
+    evidence: List[dict] = []
 
 
 class HealthResponse(BaseModel):
@@ -240,7 +242,9 @@ async def query_question(
             chunks_used=result['chunks_used'],
             citations=citations,
             processing_time=processing_time,
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            confidence=result.get('answer_confidence', 0.0),
+            evidence=result.get('faithfulness', []),
         )
 
     except ValueError as e:

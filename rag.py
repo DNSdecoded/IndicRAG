@@ -607,11 +607,14 @@ def safe_extract_text(response) -> str:
     return ""
 
 
-def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> List[dict]:
+def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> dict:
     """Run faithfulness verification if configured; log warnings for ungrounded claims.
 
     metadatas (aligned with chunks) lets each [N] resolve to the right paper's
     chunk(s), since citations are numbered per-paper, not per-chunk.
+
+    Returns {"claims": [...], "confidence": float} — confidence is the mean
+    per-claim support score, surfaced to callers as answer_confidence.
     """
     try:
         import verify
@@ -619,10 +622,11 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
-        return results
+        confidence = sum(r["support"] for r in results) / len(results) if results else 0.0
+        return {"claims": results, "confidence": round(confidence, 4)}
     except Exception as e:
         logger.warning(f"Faithfulness check failed: {e}", exc_info=True)
-        return []
+        return {"claims": [], "confidence": 0.0}
 
 
 def answer_question_strategy_a(
@@ -705,8 +709,10 @@ def answer_question_strategy_a(
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
-    result['faithfulness'] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         answer, context_data.get('chunks', []), context_data.get('metadatas', []))
+    result['faithfulness'] = faith_result["claims"]
+    result['answer_confidence'] = faith_result["confidence"]
     return result
 
 
@@ -801,8 +807,10 @@ def answer_question_strategy_b(
         'citations': citations,
         'english_answer': english_answer
     }
-    result['faithfulness'] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
+    result['faithfulness'] = faith_result["claims"]
+    result['answer_confidence'] = faith_result["confidence"]
     return result
 
 
@@ -943,8 +951,10 @@ def answer_with_history(
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
-    result["faithfulness"] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         english_answer, context_data.get("chunks", []), context_data.get("metadatas", []))
+    result["faithfulness"] = faith_result["claims"]
+    result["answer_confidence"] = faith_result["confidence"]
     return result
 
 
