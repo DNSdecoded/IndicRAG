@@ -9,54 +9,19 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
 import os
-import tempfile
-import urllib.request
 
 import config
 import persistence
 import rag
 from agent.tool_executor import execute_arxiv_search, execute_open_access_search
 from cache_refresh import _post_ingest_refresh
+from download_utils import download_pdf as _download_pdf
 from ingest import ingest_pdf
 
 logger = logging.getLogger(__name__)
 
 _CADENCES = {"daily": timedelta(days=1), "weekly": timedelta(days=7), "monthly": timedelta(days=30)}
 _DIGEST_MAX_TOKENS = 1200
-_MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB cap — guards against OOM on hostile URLs
-
-
-def _download_pdf(url: str) -> str | None:
-    """Fetch a PDF to a temp file; return its path, or None on failure.
-
-    Rejects non-HTTP(S) URLs (blocks file://, ftp://, gopher:// SSRF vectors)
-    and streams with a hard size cap so a huge response can't OOM the process.
-    """
-    from urllib.parse import urlparse
-
-    if urlparse(url).scheme not in ("http", "https"):
-        logger.warning(f"[Watch] Rejected non-HTTP(S) URL: {url}")
-        return None
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "IndicRAG/2.0"})
-        fd, path = tempfile.mkstemp(suffix=".pdf")
-        with urllib.request.urlopen(req, timeout=30) as resp, os.fdopen(fd, "wb") as f:
-            total = 0
-            while True:
-                chunk = resp.read(8192)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > _MAX_PDF_BYTES:
-                    logger.warning(f"[Watch] PDF too large (>{_MAX_PDF_BYTES} bytes), aborting: {url}")
-                    f.close()
-                    os.unlink(path)
-                    return None
-                f.write(chunk)
-        return path
-    except Exception as e:
-        logger.warning(f"[Watch] PDF download failed {url}: {e}")
-        return None
 
 
 def _summarize(topic: str, papers: list[dict], language: str) -> str:

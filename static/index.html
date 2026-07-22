@@ -534,6 +534,11 @@
             </div>
             <input type="file" id="fileInput" accept=".pdf" multiple onchange="handleFiles(event)">
             <button class="ingest-all-btn" id="ingestAllBtn" onclick="ingestAll()">⚡ Ingest All PDFs</button>
+            <div style="display:flex;gap:.4rem;margin-top:.5rem">
+                <input id="urlIngestInput" placeholder="arXiv ID, DOI, or PDF URL…"
+                    style="flex:1;min-width:0;padding:.45rem .55rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.8rem;font-family:'Inter',sans-serif;">
+                <button class="modal-btn" style="padding:.35rem .6rem;font-size:.78rem;flex-shrink:0" onclick="ingestFromUrl()">+ Add</button>
+            </div>
             <div id="papersList">
                 <div class="papers-empty" id="papersEmpty">No documents ingested yet.<br>ChromaDB is empty.</div>
             </div>
@@ -1283,6 +1288,40 @@ async function ingestAll() {
             }catch(err){console.warn('Polling error:',err);}
         },2000);
     }catch(e){showToast(`✗ ${e.message}`,'error');btn.disabled=false;btn.textContent='⚡ Ingest All PDFs';}
+}
+
+async function ingestFromUrl() {
+    const input=document.getElementById('urlIngestInput');
+    const raw=input.value.trim();
+    if(!raw){ showToast('Enter an arXiv ID, DOI, or PDF URL','error'); return; }
+
+    let body;
+    if(raw.includes('\n')) body={reading_list:raw};
+    else if(raw.startsWith('http')) body={url:raw};
+    else if(raw.startsWith('10.')||raw.includes('doi.org')) body={doi:raw};
+    else body={arxiv_id:raw};
+
+    try {
+        const r=await fetch(`${API}/ingest/from-url`,{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to resolve input');
+        input.value='';
+        showToast('Job started — polling for completion…','info');
+        let attempts=0;
+        const poll=setInterval(async()=>{
+            if(++attempts>300){clearInterval(poll);showToast('Ingest timed out.','error');return;}
+            try {
+                const s=await fetch(`${API}/ingest/status/${d.job_id}`,{headers:authHeaders()}); if(!s.ok)return;
+                const st=await s.json();
+                if(['success','partial','failed'].includes(st.status)){
+                    clearInterval(poll);
+                    if(st.status==='failed')showToast(`Ingest failed: ${st.error||'unknown'}`,'error');
+                    else showToast(`✓ ${st.chunks_ingested||0} chunks from ${st.successful||0}/${st.total_files||0} paper(s)`,'success');
+                    refreshKB();
+                }
+            }catch(err){console.warn('Polling error:',err);}
+        },2000);
+    }catch(e){ showToast(`✗ ${e.message}`,'error'); }
 }
 
 // ── PURGE ──────────────────────────────────────────────────────

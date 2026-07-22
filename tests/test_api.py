@@ -109,6 +109,23 @@ def test_ingest_health_empty_papers_dir(client, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# POST /ingest/from-url
+# ---------------------------------------------------------------------------
+
+def test_ingest_from_url_rejects_unresolvable_input(client):
+    resp = client.post("/ingest/from-url", json={})
+    assert resp.status_code == 400
+
+
+def test_ingest_from_url_accepts_direct_url(client):
+    resp = client.post("/ingest/from-url", json={"url": "http://example.com/paper.pdf"})
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["job_id"]
+
+
+# ---------------------------------------------------------------------------
 # DELETE /papers/{paper_id}
 # ---------------------------------------------------------------------------
 
