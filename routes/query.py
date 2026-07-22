@@ -12,7 +12,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import config
+import persistence
 import rag
+from agent.nodes.finalizer import citation_coverage
 from deps import STATIC_DIR, limiter, verify_api_key
 from sse_utils import sse_stream
 
@@ -218,8 +220,20 @@ async def query_question(
             for cite in result['citations']
         ]
 
+        query_id = str(uuid.uuid4())
+        try:
+            persistence.log_query(
+                query_id=query_id, question=body.question, answer=result['answer'],
+                mode=f"standard_{body.strategy}", model=body.model or "default",
+                language=result['language'], confidence=0.0,
+                coverage=citation_coverage(result['answer']),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception:
+            logger.warning("Failed to log query for feedback correlation", exc_info=True)
+
         return QueryResponse(
-            query_id=str(uuid.uuid4()),
+            query_id=query_id,
             answer=result['answer'],
             language=result['language'],
             language_name=result['language_name'],
