@@ -41,6 +41,10 @@ _conn.execute(
     "model TEXT, language TEXT, confidence REAL, coverage REAL, "
     "created_at TEXT)"
 )
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, watch_id TEXT, topic TEXT, "
+    "language TEXT, markdown TEXT, citation_count INTEGER, created_at TEXT)"
+)
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -243,3 +247,52 @@ def delete_watch(watch_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
         _conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Literature-review reports — a durable artifact, unlike the generic job store
+# (deps._jobs) which prunes completed entries after 24h. A watch-owned "living
+# review" needs to survive indefinitely and be regenerated in place.
+# ---------------------------------------------------------------------------
+def save_report(report_id: str, watch_id: str, topic: str, language: str,
+                markdown: str, citation_count: int, created_at: str) -> None:
+    """Insert or update a report. Re-saving the same report_id overwrites in place
+    (that's how a watch-owned living review gets regenerated)."""
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
+            "markdown=excluded.markdown, citation_count=excluded.citation_count",
+            (report_id, watch_id, topic, language, markdown, citation_count, created_at),
+        )
+        _conn.commit()
+
+
+def get_report(report_id: str) -> dict | None:
+    with _db_lock:
+        row = _conn.execute(
+            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at "
+            "FROM reports WHERE id = ?", (report_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "watch_id": row[1], "topic": row[2], "language": row[3],
+            "markdown": row[4], "citation_count": row[5], "created_at": row[6]}
+
+
+def list_reports(watch_id: str | None = None) -> list[dict]:
+    """Summary rows (no markdown body) — newest first, or scoped to one watch."""
+    with _db_lock:
+        if watch_id:
+            rows = _conn.execute(
+                "SELECT id, watch_id, topic, language, citation_count, created_at "
+                "FROM reports WHERE watch_id = ? ORDER BY created_at DESC", (watch_id,),
+            ).fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT id, watch_id, topic, language, citation_count, created_at "
+                "FROM reports ORDER BY created_at DESC",
+            ).fetchall()
+    return [{"id": r[0], "watch_id": r[1], "topic": r[2], "language": r[3],
+             "citation_count": r[4], "created_at": r[5]} for r in rows]

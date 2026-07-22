@@ -91,6 +91,22 @@ def run_watch(watch_id: str) -> dict:
         # Invalidate caches so newly ingested papers are searchable
         _post_ingest_refresh()
 
+        # A watch that owns a "living review" regenerates it in place whenever
+        # it actually indexes something new — no button a user could forget to click.
+        if w.get("report_id"):
+            try:
+                import report_runner
+                new_report = report_runner.run_report(topic, language)
+                persistence.save_report(
+                    report_id=w["report_id"], watch_id=watch_id,
+                    topic=topic, language=language,
+                    markdown=new_report["markdown"],
+                    citation_count=new_report["citation_count"],
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception as e:
+                logger.error(f"[Watch] living-review regeneration failed for {watch_id}: {e}")
+
     digest = _summarize(topic, ingested, language) if ingested else w.get("latest_digest")
 
     now = datetime.now(timezone.utc)

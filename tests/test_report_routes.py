@@ -79,3 +79,75 @@ def test_download_before_ready_409(client):
         job_id = client.post("/report", json={"topic": "x"}).json()["job_id"]
         assert client.get(f"/report/status/{job_id}").json()["status"] == "failed"
         assert client.get(f"/report/{job_id}/download").status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Report persistence (survives restart, unlike the job store's 24h prune)
+# ---------------------------------------------------------------------------
+
+def test_save_get_list_report_roundtrip():
+    import persistence
+
+    persistence.save_report(
+        report_id="r1", watch_id="w1", topic="graphene sensors", language="en",
+        markdown="# Review\n\ntext [1]\n", citation_count=3,
+        created_at="2026-07-20T00:00:00+00:00",
+    )
+
+    got = persistence.get_report("r1")
+    assert got["topic"] == "graphene sensors"
+    assert got["markdown"] == "# Review\n\ntext [1]\n"
+    assert got["citation_count"] == 3
+
+    listed = persistence.list_reports(watch_id="w1")
+    assert any(r["id"] == "r1" for r in listed)
+    assert "markdown" not in listed[0]  # list is summary-only, not the full body
+
+
+def test_save_report_upsert_overwrites_same_id():
+    import persistence
+
+    persistence.save_report(
+        report_id="r2", watch_id="", topic="t", language="en",
+        markdown="v1", citation_count=1, created_at="2026-07-20T00:00:00+00:00",
+    )
+    persistence.save_report(
+        report_id="r2", watch_id="", topic="t", language="en",
+        markdown="v2", citation_count=2, created_at="2026-07-21T00:00:00+00:00",
+    )
+    assert persistence.get_report("r2")["markdown"] == "v2"
+
+
+def test_get_report_missing_returns_none():
+    import persistence
+    assert persistence.get_report("does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
+# GET /reports, GET /reports/{report_id}
+# ---------------------------------------------------------------------------
+
+def test_list_reports_endpoint(client):
+    import persistence
+    persistence.save_report(
+        report_id="r3", watch_id="", topic="t3", language="en",
+        markdown="body", citation_count=1, created_at="2026-07-20T00:00:00+00:00",
+    )
+    resp = client.get("/reports")
+    assert resp.status_code == 200
+    assert any(r["id"] == "r3" for r in resp.json())
+
+
+def test_get_report_endpoint_404(client):
+    assert client.get("/reports/does-not-exist").status_code == 404
+
+
+def test_get_report_endpoint_returns_full_report(client):
+    import persistence
+    persistence.save_report(
+        report_id="r4", watch_id="", topic="t4", language="en",
+        markdown="full body [1]", citation_count=1, created_at="2026-07-20T00:00:00+00:00",
+    )
+    resp = client.get("/reports/r4")
+    assert resp.status_code == 200
+    assert resp.json()["markdown"] == "full body [1]"
