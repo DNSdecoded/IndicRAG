@@ -74,6 +74,86 @@ def test_build_paper_filter_none_when_empty():
     assert build_paper_filter(["", "   "]) is None
 
 
+def test_build_tags_filter_parses_comma_separated():
+    from routes.query import build_tags_filter
+    import rag
+
+    assert build_tags_filter("transformer, efficiency") == {
+        rag._TAGS_SENTINEL: ["transformer", "efficiency"]
+    }
+
+
+def test_build_tags_filter_none_when_blank():
+    from routes.query import build_tags_filter
+
+    assert build_tags_filter(None) is None
+    assert build_tags_filter("") is None
+    assert build_tags_filter("  ,  ") is None
+
+
+def test_combine_filters_ands_multiple_present():
+    from routes.query import combine_filters
+
+    assert combine_filters({"paper_id": {"$in": ["p1"]}}, {"tags": {"$in": ["t1"]}}) == {
+        "$and": [{"paper_id": {"$in": ["p1"]}}, {"tags": {"$in": ["t1"]}}]
+    }
+    assert combine_filters({"paper_id": {"$in": ["p1"]}}, None) == {"paper_id": {"$in": ["p1"]}}
+    assert combine_filters(None, None) is None
+
+
+def test_extract_tags_post_filter_sentinel_only():
+    from rag import _extract_tags_post_filter, _TAGS_SENTINEL
+
+    chroma_safe, tags = _extract_tags_post_filter({_TAGS_SENTINEL: ["a", "b"]})
+    assert chroma_safe is None
+    assert tags == ["a", "b"]
+
+
+def test_extract_tags_post_filter_combined_with_and():
+    """paper_id must resurface as a top-level key after extraction, so the
+    paper-scoped retrieval branch (`'paper_id' in filter_dict`) still fires."""
+    from rag import _extract_tags_post_filter, _TAGS_SENTINEL
+
+    combined = {"$and": [{"paper_id": {"$in": ["p1"]}}, {_TAGS_SENTINEL: ["a"]}]}
+    chroma_safe, tags = _extract_tags_post_filter(combined)
+    assert chroma_safe == {"paper_id": {"$in": ["p1"]}}
+    assert tags == ["a"]
+
+
+def test_extract_tags_post_filter_no_sentinel_passthrough():
+    from rag import _extract_tags_post_filter
+
+    original = {"year": {"$gte": "2020"}}
+    chroma_safe, tags = _extract_tags_post_filter(original)
+    assert chroma_safe == original
+    assert tags is None
+
+
+def test_apply_tags_post_filter_matches_multi_tag_comma_joined_paper():
+    """The actual regression this card exists to fix: PATCH /papers stores tags
+    as one unsplit string (e.g. 'transformer,efficiency'), so a paper tagged with
+    2+ tags must still match a filter for just one of them."""
+    from rag import _apply_tags_post_filter
+
+    results = {
+        "chunks": ["c1", "c2"],
+        "metadatas": [{"tags": "transformer,efficiency"}, {"tags": "unrelated"}],
+        "distances": [0.1, 0.2],
+    }
+    filtered = _apply_tags_post_filter(results, ["transformer"])
+    assert filtered["chunks"] == ["c1"]
+    assert filtered["metadatas"] == [{"tags": "transformer,efficiency"}]
+    assert filtered["distances"] == [0.1]
+
+
+def test_apply_tags_post_filter_no_match_returns_empty():
+    from rag import _apply_tags_post_filter
+
+    results = {"chunks": ["c1"], "metadatas": [{"tags": "unrelated"}], "distances": [0.1]}
+    filtered = _apply_tags_post_filter(results, ["transformer"])
+    assert filtered["chunks"] == []
+
+
 class _ScopedFakeCollection:
     """Returns all stored chunks for a where-filter; ignores include details."""
     def __init__(self, rows):

@@ -93,12 +93,37 @@ def _year_filter(year_from=None, year_to=None):
     return clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
 
+def _tags_filter(tags):
+    """Parse comma-separated tags into a rag.retrieve_context post-filter sentinel, or None.
+
+    Not a ChromaDB where-clause: PATCH /papers stores tags as one unsplit
+    string, so a native $in match against split tag names would never equal
+    the stored value for any paper with more than one tag. rag.retrieve_context
+    (via rag._extract_tags_post_filter) pulls this sentinel back out and
+    applies it as a Python-side post-filter instead.
+    """
+    if not tags:
+        return None
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    if not tag_list:
+        return None
+    import rag
+    return {rag._TAGS_SENTINEL: tag_list}
+
+
+def _combine_filters(*filters):
+    clauses = [f for f in filters if f]
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
 def execute_indicrag(query: str, expand_query: bool = False,
-                     year_from=None, year_to=None) -> dict:
+                     year_from=None, year_to=None, tags=None) -> dict:
     import hashlib
     _MIN_EXPAND_WORDS = 4
     should_expand = expand_query and len(query.split()) >= _MIN_EXPAND_WORDS
-    filter_dict = _year_filter(year_from, year_to)
+    filter_dict = _combine_filters(_year_filter(year_from, year_to), _tags_filter(tags))
 
     if should_expand:
         variants = _expand_query_variants(query)
@@ -571,7 +596,7 @@ def execute_open_access_search(
 TOOL_DISPATCH = {
     "indicrag_retrieval": lambda args: execute_indicrag(
         args["query"], args.get("expand_query", False),
-        args.get("year_from"), args.get("year_to")
+        args.get("year_from"), args.get("year_to"), args.get("tags")
     ),
     "web_search": lambda args: execute_web_search(
         args["query"], args.get("num_results", 5)

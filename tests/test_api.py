@@ -42,6 +42,36 @@ def test_health_returns_healthy(client):
 
 
 # ---------------------------------------------------------------------------
+# POST /chat — paper_ids + tags filter combination
+# ---------------------------------------------------------------------------
+
+def test_chat_combines_paper_and_tags_filter(client):
+    """routes/chat.py must reach rag.answer_with_history with the same
+    combine_filters(paper_filter, tags_filter) wiring routes/query.py uses."""
+    import rag
+
+    with patch("rag.answer_with_history") as mock_chat:
+        mock_chat.return_value = {
+            "answer": "Test answer", "language": "en", "language_name": "English",
+            "chunks_used": 1, "citations": [],
+        }
+        resp = client.post("/chat", json={
+            "message": "What is IndicRAG?",
+            "paper_ids": ["p1"],
+            "tags": "transformer, efficiency",
+        })
+
+    assert resp.status_code == 200
+    _, kwargs = mock_chat.call_args
+    assert kwargs["filter_dict"] == {
+        "$and": [
+            {"paper_id": {"$in": ["p1"]}},
+            {rag._TAGS_SENTINEL: ["transformer", "efficiency"]},
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
 # DELETE /papers/{paper_id}
 # ---------------------------------------------------------------------------
 

@@ -690,6 +690,42 @@ def test_indicrag_year_range_passed_as_filter():
     assert kwargs["filter_dict"] == {"year": {"$gte": "2020"}}
 
 
+def test_indicrag_tags_passed_as_post_filter_sentinel():
+    """execute_indicrag must forward tags as a rag post-filter sentinel, not a ChromaDB $in
+    clause — PATCH /papers stores tags as one unsplit string, so $in would never match."""
+    import agent.tool_executor as te
+    import rag
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", tags="transformer, efficiency")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {rag._TAGS_SENTINEL: ["transformer", "efficiency"]}
+
+
+def test_indicrag_tags_and_year_combined_with_and():
+    import agent.tool_executor as te
+    import rag
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", year_from=2020, tags="transformer")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {
+        "$and": [{"year": {"$gte": "2020"}}, {rag._TAGS_SENTINEL: ["transformer"]}]
+    }
+
+
+def test_indicrag_blank_tags_no_filter():
+    import agent.tool_executor as te
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", tags="  ,  ")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] is None
+
+
 def test_reflexion_time_budget_finalises_draft():
     """Over the wall-clock budget, the loop finalises the current draft instead of
     starting another retrieve→generate→verify cycle (returns before any LLM/NLI call)."""
