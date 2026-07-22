@@ -72,6 +72,43 @@ def test_chat_combines_paper_and_tags_filter(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /ingest/health
+# ---------------------------------------------------------------------------
+
+def test_ingest_health_reports_indexed_and_failed_papers(client, tmp_path, monkeypatch):
+    """A PDF with 0 indexed chunks (extraction failed, corrupted figure, etc.)
+    must show up as failed rather than silently vanishing from the count."""
+    (tmp_path / "good_paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "failed_paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    with patch("vector_store.get_paper_chunk_counts", return_value={"good_paper": 5}):
+        resp = client.get("/ingest/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["paper_count"] == 2
+    assert body["chunk_count"] == 5
+    assert body["failed_count"] == 1
+    by_id = {p["paper_id"]: p for p in body["papers"]}
+    assert by_id["good_paper"]["status"] == "indexed"
+    assert by_id["good_paper"]["chunks"] == 5
+    assert by_id["failed_paper"]["status"] == "failed"
+    assert by_id["failed_paper"]["chunks"] == 0
+
+
+def test_ingest_health_empty_papers_dir(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    with patch("vector_store.get_paper_chunk_counts", return_value={}):
+        resp = client.get("/ingest/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"paper_count": 0, "chunk_count": 0, "failed_count": 0, "papers": []}
+
+
+# ---------------------------------------------------------------------------
 # DELETE /papers/{paper_id}
 # ---------------------------------------------------------------------------
 

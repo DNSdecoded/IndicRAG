@@ -251,6 +251,19 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     
     return stats
 
+def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, int]:
+    """Chunk count per paper_id, for ingestion health / re-ingest tooling."""
+    if collection is None:
+        collection = get_or_create_collection()
+    got = _chroma_call(collection.get, include=['metadatas'])
+    counts: Dict[str, int] = {}
+    for meta in got.get('metadatas', []):
+        pid = (meta or {}).get('paper_id', '')
+        if pid:
+            counts[pid] = counts.get(pid, 0) + 1
+    return counts
+
+
 def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) -> int:
     """
     Delete all chunks for a specific paper.

@@ -17,6 +17,19 @@ def test_delete_returns_count():
     coll.delete.assert_called_once()
 
 
+def test_get_paper_chunk_counts_groups_by_paper_id():
+    import vector_store
+
+    coll = MagicMock()
+    coll.get.return_value = {"metadatas": [
+        {"paper_id": "p1"}, {"paper_id": "p1"}, {"paper_id": "p2"}, {},
+    ]}
+
+    counts = vector_store.get_paper_chunk_counts(collection=coll)
+
+    assert counts == {"p1": 2, "p2": 1}
+
+
 def test_timeout_wrapper():
     """_chroma_call raises TimeoutError when the ChromaDB operation exceeds the timeout."""
     from vector_store import _chroma_call

@@ -551,6 +551,7 @@
         <button class="sfooter-btn" onclick="showHistoryModal()">🕘 Chat History</button>
         <button class="sfooter-btn" onclick="showWatchModal()">📡 Topic Watches</button>
         <button class="sfooter-btn" onclick="showReportModal()">📄 Lit Review</button>
+        <button class="sfooter-btn" onclick="showHealthModal()">🩺 Ingestion Health</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
     </div>
@@ -703,6 +704,19 @@
         <div id="reportStatus" style="margin-top:1.1rem"></div>
         <div class="modal-actions">
             <button class="modal-btn" onclick="hideReportModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="healthOverlay">
+    <div class="modal" style="max-width:560px">
+        <h3>🩺 Ingestion Health</h3>
+        <p>Per-paper indexed chunk counts. A paper with 0 chunks failed to index — re-ingest it in place.</p>
+        <div id="healthSummary" style="margin-top:.6rem;font-size:.8rem;color:var(--text-3)"></div>
+        <div id="healthList" style="margin-top:.8rem;max-height:50vh;overflow-y:auto"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="loadIngestHealth()">Refresh</button>
+            <button class="modal-btn" onclick="hideHealthModal()">Close</button>
         </div>
     </div>
 </div>
@@ -1486,6 +1500,44 @@ async function viewDigest(id, btn){
 let reportPoll=null;
 function showReportModal(){ document.getElementById('reportOverlay').classList.add('active'); }
 function hideReportModal(){ document.getElementById('reportOverlay').classList.remove('active'); if(reportPoll){clearInterval(reportPoll);reportPoll=null;} }
+
+// ── INGESTION HEALTH ───────────────────────────────────────────
+function showHealthModal(){ document.getElementById('healthOverlay').classList.add('active'); loadIngestHealth(); }
+function hideHealthModal(){ document.getElementById('healthOverlay').classList.remove('active'); }
+
+async function loadIngestHealth(){
+    const summary=document.getElementById('healthSummary');
+    const list=document.getElementById('healthList');
+    summary.textContent=''; list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Loading…</div>';
+    try{
+        const r=await fetch(`${API}/ingest/health`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to load ingestion health');
+        summary.textContent=`${d.paper_count} papers · ${d.chunk_count} chunks · ${d.failed_count} failed`;
+        if(!d.papers.length){ list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">No PDFs in the papers directory.</div>'; return; }
+        list.innerHTML=d.papers.map(p=>{
+            const ok=p.status==='indexed';
+            return `<div style="border:1px solid var(--border);border-radius:8px;padding:.55rem .7rem;margin-bottom:.45rem;display:flex;justify-content:space-between;gap:.6rem;align-items:center">
+                <div style="min-width:0">
+                    <div style="font-weight:600;font-size:.82rem;color:var(--text-1);word-break:break-word">${esc(p.filename)}</div>
+                    <div style="font-size:.72rem;color:${ok?'var(--text-3)':'#ef4444'}">${ok?`${p.chunks} chunks`:'Failed — 0 chunks indexed'}</div>
+                </div>
+                <button class="modal-btn" style="padding:.25rem .55rem;font-size:.75rem;flex-shrink:0" onclick="reindexPaper('${esc(p.paper_id)}',this)">Re-ingest</button>
+            </div>`;
+        }).join('');
+    }catch(e){ list.innerHTML=`<div style="color:#ef4444;font-size:.82rem;padding:.5rem 0">${esc(e.message)}</div>`; }
+}
+
+async function reindexPaper(paperId,btn){
+    btn.disabled=true; btn.textContent='Re-ingesting…';
+    try{
+        const r=await fetch(`${API}/ingest/reindex`,{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({paper_id:paperId})});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Re-ingest failed');
+        showToast(`Re-ingested ${paperId}: ${d.chunks_ingested} chunks`,'success');
+        loadIngestHealth();
+    }catch(e){ showToast(e.message,'error'); btn.disabled=false; btn.textContent='Re-ingest'; }
+}
 
 async function generateReport(){
     const topic=document.getElementById('reportTopic').value.trim();
