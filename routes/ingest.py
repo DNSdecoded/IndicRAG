@@ -21,6 +21,15 @@ from deps import limiter, verify_api_key, _jobs, _jobs_lock, _update_job
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Process-wide collision lock for concurrent URL-ingest jobs.
+# Two _run_batch_url_ingest jobs running concurrently could each see a paper_id
+# as "not existing" before either ingests it.  This lock + registry ensures each
+# paper_id is reserved atomically before download/ingest begins.
+# ---------------------------------------------------------------------------
+_ingest_lock = __import__("threading").Lock()
+_inflight_paper_ids: set = set()
+
 # Block the genuinely dangerous characters: null bytes, shell metacharacters.
 # We rely on the is_absolute() + relative_to() checks for traversal; the regex
 # only needs to reject characters that can't appear in safe filenames.
@@ -511,11 +520,11 @@ def _resolve_urls_to_ingest(
 def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
     """Background worker: download → ingest → refresh caches for each resolved URL.
 
-    Skips any item whose sanitized paper_id already exists in the corpus —
-    unlike /upload (409s on filename collision) or /reindex (explicit,
-    intentional overwrite), this route has no confirmation step, so silently
-    ingesting over an existing paper_id would let a crafted arxiv_id/doi/url
-    overwrite another paper's chunks with attacker-supplied content.
+    Skips any item whose sanitized paper_id already exists in the corpus or is
+    currently being ingested by another concurrent job.  The in-flight registry
+    (_inflight_paper_ids) is checked-and-reserved atomically under _ingest_lock
+    before download begins, preventing two overlapping jobs from ingesting the
+    same paper_id (which would silently overwrite another paper's chunks).
     """
     import ingest as ingest_module
     import vector_store
@@ -538,8 +547,17 @@ def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
             logger.warning(f"Skipping {item['id']}: paper_id '{paper_id}' already exists")
             failed += 1
             continue
+        # Atomically reserve: prevents a concurrent job from ingesting the same paper_id
+        with _ingest_lock:
+            if paper_id in _inflight_paper_ids:
+                logger.warning(f"Skipping {item['id']}: paper_id '{paper_id}' is being ingested by another job")
+                failed += 1
+                continue
+            _inflight_paper_ids.add(paper_id)
         path = download_pdf(item["url"])
         if not path:
+            with _ingest_lock:
+                _inflight_paper_ids.discard(paper_id)
             failed += 1
             continue
         try:
@@ -554,6 +572,8 @@ def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
             logger.warning(f"Ingest failed for {item['id']}: {e}")
             failed += 1
         finally:
+            with _ingest_lock:
+                _inflight_paper_ids.discard(paper_id)
             try:
                 Path(path).unlink()
             except OSError:
