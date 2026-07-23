@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.5%20Flash-blueviolet.svg)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.6%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.3-blue.svg)
+![Version](https://img.shields.io/badge/version-2.4-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
@@ -17,31 +17,17 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 
 ---
 
-## What's New in v2.3
+## What's New in v2.4
 
-| Area | v2.2 | v2.3 |
+| Area | v2.3 | v2.4 |
 |------|------|------|
-| **LLM providers** | Gemini only | **Multi-provider** — Gemini + OpenRouter (Claude, GPT, Llama, etc.) with cross-provider failover |
-| **Model selection** | Hardcoded `LLM_MODEL_NAME` | **User-selectable models** — `GET /models` endpoint + UI dropdown; per-request `model` param |
-| **Circuit breaker** | Single (provider) | **Per-(provider, model)** circuit key — one model's 429 doesn't block others |
-| **Capability gating** | None | Agent tool-selector greys out **non-tool-capable** models from the dropdown |
-| **JSON fallback** | Gemini retry only | **Structured-output fallback** — when a non-Gemini model returns text, retry with Gemini-retry parse |
-| **Contradiction detection** | None | **Phase 5** — NLI-based cross-source contradiction flagging in the answer generator |
-| **Multimodal indexing** | Text only | **Phase 3** — figure/table crop extraction + captioning + vector embedding |
-| **Figure/table surfacing** | None | API + UI show **cited figure/table crops** inline with answers |
-| **Confidence & abstention** | None | **Phase 2** — finalizer surfaces confidence score; low-confidence answers get an abstention prefix |
-| **Topic watches** | None | **Phase 6** — persistent topic monitoring (`/watch/*`) with daily/weekly/monthly cadence + background digest loop |
-| **Literature review reports** | None | **Phase 7** — async report generation (`/report/*`) with section decomposition and cited synthesis |
-| **ONNX cross-encoders** | float32 | **int8 quantized** ONNX for CPU reranker + NLI — lower memory, faster inference |
-| **Sub-query cap** | Unlimited | `AGENT_MAX_SUB_QUERIES` knob to cap per-cycle retrievals |
-| **Eval scaffold** | None | Per-language eval labels, semantic judge, regression gate |
-| **Model dropdown** | None | UI model selector fed by `/models`; shows tool-capability badges |
-| **Thinking budget** | None | `AGENT_THINKING_BUDGET`: `0`=off, `-1`=dynamic, `N`=cap |
-| **Chat history** | None | Endpoints + UI panels for browsing past conversations and topic watches |
-| **Failover backstop** | Fails if selected provider == fallback provider | **Guaranteed Gemini backstop** — any selected OpenRouter model falls back to Gemini, so a free-tier 429 never fails the request outright |
-| **Math rendering** | Raw LaTeX shown as text | **KaTeX renders `\(…\)` / `\[…\]`** inline & display equations in answers (plus existing `$…$` / `$$…$$`) |
-| **Response cache key** | prompt + model | prompt + model + **provider** — same model via different providers no longer collides in the LLM cache |
-| **Report citations** | Section-local numbering | **Document-global citations** — one number per paper across the whole literature review, dangling markers dropped, single References list |
+| **Default model** | gemini-3.5-flash | **gemini-3.6-flash** — latest Gemini Flash, faster and more capable |
+| **Multi-user support** | Single-user API key | **Per-user data isolation** — sessions, watches, feedback, preferences scoped to API key |
+| **User preferences** | None | **GET/PUT /prefs/{user_id}** — per-user settings with opt-in `ENABLE_USER_PREFS` |
+| **Admin API key** | Falls back to API_KEYS | **Dedicated ADMIN_API_KEY** for destructive /purge/* operations |
+| **Session management** | Basic eviction | **Configurable** — `SESSION_MAX_AGE_HOURS`, `CHAT_HISTORY_MAX_TURNS` |
+| **Rate limiting** | Per-IP only | **Per-API-key** — each user gets their own rate-limit bucket |
+| **Linting** | CI failures on unused imports | **Clean CI** — fixed F401/E401 linting errors |
 
 ---
 
@@ -314,7 +300,7 @@ IndicRAG/
 │   └── patterns.json                # Regex patterns for PDF cleaning
 │
 ├── 🐍 Core Modules
-│   ├── config.py                    # Configuration + env parsing (VERSION = 2.3.0-dev)
+│   ├── config.py                    # Configuration + env parsing (VERSION = 2.4.0-dev)
 │   ├── api_server.py                # FastAPI app: lifespan warm-up + router mounting
 │   ├── deps.py                      # Shared deps: auth, rate limit, session/job state
 │   ├── middleware.py                # Request-ID propagation
@@ -397,9 +383,9 @@ Key settings (all overridable via environment variables):
 | `LLM_PROVIDER` | `gemini` | Primary LLM provider: `gemini` or `openrouter` |
 | `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down |
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
-| `LLM_MODEL_NAME` | `gemini-3.5-flash` | Gemini model for generation |
+| `LLM_MODEL_NAME` | `gemini-3.6-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.5-flash,nvidia/nemotron-3-ultra-550b-a55b:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,openai/gpt-oss-20b:free` | Curated model dropdown (comma-separated) |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.6-flash,gemini-3.5-flash,nvidia/nemotron-3-ultra-550b-a55b:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,openai/gpt-oss-20b:free` | Curated model dropdown (comma-separated) |
 | `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
@@ -429,8 +415,10 @@ Key settings (all overridable via environment variables):
 | `GEMINI_CACHE_TTL` | `3600` | Prompt cache lifetime (seconds) |
 | `SESSIONS_DB_PATH` | `sessions.db` | SQLite path for session/job/watch persistence |
 | `ENABLE_USER_PREFS` | `false` | Enable `/prefs` user preferences |
+| `SESSION_MAX_AGE_HOURS` | `24` | Max session age before eviction (hours) |
+| `CHAT_HISTORY_MAX_TURNS` | `20` | Max conversation turns per session |
 | `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
-| `API_KEYS` | (none) | Comma-separated keys for request auth |
+| `API_KEYS` | (none) | Comma-separated keys for request auth (each key = isolated user) |
 | `CORS_ORIGINS` | localhost | Comma-separated allowed origins |
 | `LLM_CACHE_SIZE` / `LLM_CACHE_TTL` | `128` / `600` | LLM response cache |
 | `RETRIEVAL_CACHE_SIZE` / `RETRIEVAL_CACHE_TTL` | `64` / `300` | Retrieval cache |
@@ -575,7 +563,7 @@ python purge.py --all --yes   # Clear everything
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-**v2.3 highlights:** multi-provider LLM (Gemini + OpenRouter) with cross-provider failover · user-selectable models + capability gating · contradiction detection across retrieved sources · multimodal figure/table indexing + surfacing · confidence scoring + abstention · topic watches with background digest loop · literature review report generation · int8 ONNX cross-encoders for CPU · sub-query cap · structured-output fallback for non-Gemini models · eval scaffold. Full history in the git log and `docs/`.
+**v2.4 highlights:** gemini-3.6-flash default model · multi-user data isolation with per-API-key scoping · configurable session management · dedicated admin API key · clean CI linting. Full history in the git log and `docs/`.
 
 ---
 
