@@ -83,7 +83,9 @@ def test_create_watch_rejects_empty_topic(client):
 def test_list_watches_scoped_to_authenticated_user(client):
     """Each user sees only their own watches; owner comes from the API key,
     not a client-supplied field (multi-user support)."""
-    import persistence, deps, auth_utils
+    import persistence
+    import deps
+    import auth_utils
     for name, key in (("alice", "k_alice"), ("bob", "k_bob")):
         s, h = auth_utils.hash_password("pw")
         persistence.save_user(name, s, h, key, "2026-07-23T00:00:00+00:00")

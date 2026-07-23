@@ -17,7 +17,7 @@ import persistence
 import rag
 from agent.state import AgentState
 from agent.nodes.finalizer import citation_coverage
-from deps import limiter, verify_api_key, get_current_user, _get_or_create_session, _append_session_messages
+from deps import limiter, get_current_user, _get_or_create_session, _append_session_messages
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import rag
-from deps import (limiter, verify_api_key, get_current_user, _get_or_create_session,
+from deps import (limiter, get_current_user, _get_or_create_session,
                   _append_session_messages, _session_owner)
 from routes.query import Citation, build_paper_filter, build_tags_filter, combine_filters
 from sse_utils import sse_stream

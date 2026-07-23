@@ -878,7 +878,8 @@ def test_dispatch_gated_by_config_flags():
 
 
 def test_dispatch_create_watch_enabled(tmp_path):
-    import config, persistence
+    import config
+    import persistence
     from agent.tool_executor import TOOL_DISPATCH
     saved = {}
     with patch.object(config, "WATCH_ENABLE", True), \

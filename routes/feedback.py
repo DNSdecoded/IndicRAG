@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import config
 import persistence
-from deps import verify_api_key, get_current_user
+from deps import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
