@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 import config
 import persistence
-from deps import verify_api_key, _jobs, _jobs_lock, _update_job
+from deps import verify_api_key, get_current_user, _jobs, _jobs_lock, _update_job
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -67,7 +67,7 @@ def _make_progress_cb(job_id: str):
     return _cb
 
 
-def _run_report_job(job_id: str, topic: str, language: str):
+def _run_report_job(job_id: str, topic: str, language: str, user_id: str):
     """Background worker: build the report and store the Markdown on the job."""
     import report_runner
     _update_job(job_id, status="running")
@@ -85,7 +85,7 @@ def _run_report_job(job_id: str, topic: str, language: str):
         persistence.save_report(
             report_id=job_id, watch_id="", topic=topic, language=language,
             markdown=result["markdown"], citation_count=result["citation_count"],
-            created_at=completed_at,
+            created_at=completed_at, user_id=user_id,
         )
         logger.info(f"[Report] job {job_id} finished ({len(result['sections'])} sections)")
     except Exception as e:
@@ -96,7 +96,7 @@ def _run_report_job(job_id: str, topic: str, language: str):
 
 @router.post("/report", response_model=ReportJobResponse, status_code=202, tags=["Report"])
 async def create_report(body: ReportRequest, background_tasks: BackgroundTasks,
-                        authenticated: bool = Depends(verify_api_key)):
+                        user_id: str = Depends(get_current_user)):
     """Start a literature-review report job. Returns 202 with a job_id to poll."""
     _require_enabled()
     job_id = str(uuid.uuid4())
@@ -108,7 +108,7 @@ async def create_report(body: ReportRequest, background_tasks: BackgroundTasks,
             "submitted_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
             "progress_current": 0, "progress_total": None, "progress_message": "Queued",
         }
-    background_tasks.add_task(_run_report_job, job_id, body.topic, body.language)
+    background_tasks.add_task(_run_report_job, job_id, body.topic, body.language, user_id)
     logger.info(f"[Report] job {job_id} queued topic={body.topic!r}")
     return ReportJobResponse(job_id=job_id, status="pending",
                              message="Report started. Poll /report/status/{job_id}.")
@@ -145,19 +145,19 @@ async def download_report(job_id: str, authenticated: bool = Depends(verify_api_
 
 
 @router.get("/reports", tags=["Report"])
-async def list_persisted_reports(watch_id: str = None, authenticated: bool = Depends(verify_api_key)):
-    """List durably-stored reports (survives restart), newest first.
+async def list_persisted_reports(watch_id: str = None, user_id: str = Depends(get_current_user)):
+    """List the caller's durably-stored reports (survives restart), newest first.
 
     Distinct from GET /report/status/{job_id}: that's the in-memory job store
     for a report still being generated; this is the persisted artifact,
     including watch-owned living reviews that get regenerated in place.
     """
-    return persistence.list_reports(watch_id)
+    return persistence.list_reports(watch_id, user_id=user_id)
 
 
 @router.get("/reports/{report_id}", tags=["Report"])
-async def get_persisted_report(report_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_persisted_report(report_id: str, user_id: str = Depends(get_current_user)):
     report = persistence.get_report(report_id)
-    if report is None:
+    if report is None or report.get("user_id") != user_id:  # 404 (not 403) on another user's report
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Report '{report_id}' not found.")
     return report

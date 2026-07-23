@@ -47,15 +47,41 @@ limiter = Limiter(key_func=_rate_limit_key)
 # ---------------------------------------------------------------------------
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-raw_keys = os.getenv("API_KEYS")
-if raw_keys:
-    VALID_API_KEYS = {k.strip() for k in raw_keys.split(",") if k.strip()}
-    if not VALID_API_KEYS:
-        VALID_API_KEYS = None
-else:
-    VALID_API_KEYS = None
+def _build_key_to_user():
+    """Map every valid X-API-Key -> user_id, from seeded users + env API_KEYS.
+
+    Users (manage_users.py) supply {api_key: username}. Env API_KEYS entries are
+    bare keys that map to themselves (back-compat with the pre-multi-user setup).
+    Returns None when nothing is configured -> auth disabled (single-user mode).
+    """
+    mapping = {}
+    try:
+        import persistence
+        for api_key, username in persistence.all_key_user_pairs():
+            if api_key:
+                mapping[api_key] = username
+    except Exception:  # persistence not ready (e.g. during early import) — env only
+        pass
+    raw = os.getenv("API_KEYS")
+    if raw:
+        for k in (s.strip() for s in raw.split(",")):
+            if k:
+                mapping.setdefault(k, k)  # bare key: user_id == key
+    return mapping or None
+
+
+KEY_TO_USER = _build_key_to_user()
+# Keys-only set kept for the unchanged bool gate verify_api_key / _key_matches.
+VALID_API_KEYS = set(KEY_TO_USER) if KEY_TO_USER else None
 
 _admin_key = os.getenv("ADMIN_API_KEY")
+
+
+def _refresh_key_map():
+    """Rebuild the key map so a freshly-seeded user works without a restart."""
+    global KEY_TO_USER, VALID_API_KEYS
+    KEY_TO_USER = _build_key_to_user()
+    VALID_API_KEYS = set(KEY_TO_USER) if KEY_TO_USER else None
 
 
 def _key_matches(candidate: Optional[str], valid) -> bool:
@@ -102,6 +128,37 @@ async def verify_admin_key(api_key: str = Security(API_KEY_HEADER)):
             )
         return True
     return await verify_api_key(api_key)
+
+
+async def get_current_user(api_key: str = Security(API_KEY_HEADER)) -> str:
+    """Resolve the caller to a user_id for per-user data ownership.
+
+    Auth disabled (no users seeded and no env API_KEYS) -> everyone is
+    config.DEFAULT_USER_ID (single-user back-compat). Otherwise the presented
+    key must match a known key (401 on miss); returns its owner username.
+    """
+    if KEY_TO_USER is None:
+        return config.DEFAULT_USER_ID
+    user = _lookup_user(api_key)
+    if user is None:  # a user seeded after startup won't be in the cached map yet
+        _refresh_key_map()
+        user = _lookup_user(api_key)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Invalid or missing API key", "code": "INVALID_API_KEY"},
+        )
+    return user
+
+
+def _lookup_user(api_key: Optional[str]) -> Optional[str]:
+    """Constant-time match of the presented key against the map; owner or None."""
+    if not api_key or not KEY_TO_USER:
+        return None
+    for k, user in KEY_TO_USER.items():
+        if hmac.compare_digest(api_key.encode("utf-8"), k.encode("utf-8")):
+            return user
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +210,15 @@ def _evict_stale_sessions():
         persistence.delete_session(sid)
 
 
-def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
-    """Return (session_id, messages_list). Creates a new session when id is None."""
+def _get_or_create_session(session_id: Optional[str], user_id: str = None) -> tuple[str, list]:
+    """Return (session_id, messages_list). Creates a new session when id is None.
+
+    New sessions are stamped with `user_id` (the owner) so chat-history listing
+    and reads can be scoped per user. Reopening an existing session does not
+    re-stamp — ownership is set once, at creation.
+    """
+    if user_id is None:
+        user_id = config.DEFAULT_USER_ID
     with _sessions_lock:
         _evict_stale_sessions()
         if session_id and session_id in _sessions:
@@ -163,12 +227,18 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
         now = datetime.now(timezone.utc).isoformat()
         _sessions[new_id] = {
             "id": new_id,
+            "user_id": user_id,
             "messages": [],
             "created_at": now,
             "updated_at": now,
         }
         persistence.save_session(new_id, _sessions[new_id])
         return new_id, list(_sessions[new_id]["messages"])
+
+
+def _session_owner(session: dict) -> str:
+    """Owner of a session; legacy sessions with no owner belong to DEFAULT_USER_ID."""
+    return session.get("user_id") or config.DEFAULT_USER_ID
 
 
 def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:

@@ -28,6 +28,7 @@ class AgentState(TypedDict):
     conversation_history: List[dict]
 
     session_id: str
+    user_id: str  # owner of this run; agent-created watches are stamped with it
     strategy: Literal["A", "B"]
 
     # monotonic() timestamp stamped at run start, used by the reflexion loop to

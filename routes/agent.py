@@ -17,7 +17,7 @@ import persistence
 import rag
 from agent.state import AgentState
 from agent.nodes.finalizer import citation_coverage
-from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
+from deps import limiter, verify_api_key, get_current_user, _get_or_create_session, _append_session_messages
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -88,14 +88,14 @@ class AgentQueryResponse(BaseModel):
 async def agent_query(
     request: Request,
     body: AgentQueryRequest,
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
     """
     Answer a question using the agentic IndicRAG pipeline with reflexion loops.
     Supports the same 10+ languages as /query and /chat.
     """
     start_time = time.time()
-    session_id, messages = _get_or_create_session(body.session_id)
+    session_id, messages = _get_or_create_session(body.session_id, user_id)
 
     initial_state = AgentState(
         original_query=body.question,
@@ -110,6 +110,7 @@ async def agent_query(
         tool_calls_log=[],
         conversation_history=list(messages),
         session_id=session_id,
+        user_id=user_id,
         strategy=body.strategy,
         start_time=time.monotonic(),
         requested_model=body.model,
@@ -209,7 +210,7 @@ async def agent_query(
             language=result.get("detected_language", "en"),
             confidence=result.get("answer_confidence") or 0.0,
             coverage=citation_coverage(result["final_answer"]),
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(), user_id=user_id,
         )
     except Exception:
         logger.warning("Failed to log query for feedback correlation", exc_info=True)

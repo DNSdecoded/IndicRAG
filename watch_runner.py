@@ -103,6 +103,7 @@ def run_watch(watch_id: str) -> dict:
                     markdown=new_report["markdown"],
                     citation_count=new_report["citation_count"],
                     created_at=datetime.now(timezone.utc).isoformat(),
+                    user_id=w.get("user_id"),
                 )
             except Exception as e:
                 logger.error(f"[Watch] living-review regeneration failed for {watch_id}: {e}")

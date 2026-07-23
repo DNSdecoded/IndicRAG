@@ -114,6 +114,14 @@ def tool_executor_node(state: AgentState) -> dict:
         )
         tool_calls = tool_calls[:_MAX_PARALLEL_TOOLS]
 
+    # Stamp the run's owner onto state-changing tools so an agent-created watch
+    # belongs to the requesting user, not a generic "agent" label.
+    owner = state.get("user_id")
+    if owner:
+        for call in tool_calls:
+            if call.get("name") == "create_watch":
+                call.setdefault("args", {}).setdefault("user_id", owner)
+
     if len(tool_calls) <= 1:
         for call in tool_calls:
             name, args, result, latency_ms = _run_tool(call["name"], call.get("args", {}))

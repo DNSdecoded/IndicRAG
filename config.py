@@ -143,6 +143,13 @@ DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
 # exists elsewhere in this app to link it to yet).
 ENABLE_USER_PREFS = os.getenv("ENABLE_USER_PREFS", "false").lower() == "true"
 
+# Multi-user support. Users are pre-provisioned (manage_users.py); login by
+# name+password returns the user's api_key, then used as X-API-Key. When no
+# users are seeded and API_KEYS is unset, auth is off and everyone is
+# DEFAULT_USER_ID (single-user back-compat; legacy NULL-owner rows belong here).
+DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "default")
+PBKDF2_ITERATIONS = int(os.getenv("PBKDF2_ITERATIONS", "200000"))
+
 # Phase 6 — "watch a topic" scheduled ingest + digests. When on, users can
 # register topic watches (POST /watch); each run does external search (arXiv /
 # open-access), dedups against the corpus, ingests genuinely new papers, and

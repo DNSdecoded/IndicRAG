@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import config
 import persistence
-from deps import verify_api_key
+from deps import verify_api_key, get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,13 +37,13 @@ class FeedbackResponse(BaseModel):
 @router.post("/feedback", response_model=FeedbackResponse, tags=["Feedback"])
 async def submit_feedback(
     body: FeedbackRequest,
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
     """Record thumbs up/down feedback for a previously returned answer."""
     feedback_id = str(uuid.uuid4())
     persistence.save_feedback(
         feedback_id, body.query_id, body.rating, body.comment or "",
-        datetime.now(timezone.utc).isoformat(),
+        datetime.now(timezone.utc).isoformat(), user_id=user_id,
     )
     return FeedbackResponse(status="recorded", feedback_id=feedback_id)
 
@@ -52,16 +52,16 @@ async def submit_feedback(
 async def list_feedback(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
-    """Return feedback entries joined with their query context, newest first."""
-    return persistence.get_feedback_with_context(limit, offset)
+    """Return the caller's own feedback entries joined with query context, newest first."""
+    return persistence.get_feedback_with_context(limit, offset, user_id=user_id)
 
 
 @router.get("/feedback/stats", tags=["Feedback"])
-async def get_feedback_stats(authenticated: bool = Depends(verify_api_key)):
-    """Aggregate feedback totals and per-language approval rates."""
-    return persistence.feedback_stats()
+async def get_feedback_stats(user_id: str = Depends(get_current_user)):
+    """Aggregate the caller's feedback totals and per-language approval rates."""
+    return persistence.feedback_stats(user_id=user_id)
 
 
 class PrefsRequest(BaseModel):
@@ -79,14 +79,15 @@ def _require_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User preferences are not enabled")
 
 
-@router.get("/prefs/{user_id}", response_model=PrefsResponse, tags=["Preferences"])
-async def get_user_prefs(user_id: str, authenticated: bool = Depends(verify_api_key)):
+@router.get("/prefs", response_model=PrefsResponse, tags=["Preferences"])
+async def get_user_prefs(user_id: str = Depends(get_current_user)):
+    """The caller's own preferences (owner derived from the API key)."""
     _require_enabled()
     return PrefsResponse(user_id=user_id, prefs=persistence.get_prefs(user_id))
 
 
-@router.put("/prefs/{user_id}", response_model=PrefsResponse, tags=["Preferences"])
-async def put_user_prefs(user_id: str, body: PrefsRequest, authenticated: bool = Depends(verify_api_key)):
+@router.put("/prefs", response_model=PrefsResponse, tags=["Preferences"])
+async def put_user_prefs(body: PrefsRequest, user_id: str = Depends(get_current_user)):
     _require_enabled()
     persistence.save_prefs(user_id, body.prefs, datetime.now(timezone.utc).isoformat())
     return PrefsResponse(user_id=user_id, prefs=body.prefs)

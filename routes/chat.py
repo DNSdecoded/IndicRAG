@@ -13,7 +13,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import rag
-from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
+from deps import (limiter, verify_api_key, get_current_user, _get_or_create_session,
+                  _append_session_messages, _session_owner)
 from routes.query import Citation, build_paper_filter, build_tags_filter, combine_filters
 from sse_utils import sse_stream
 
@@ -68,7 +69,7 @@ class ChatResponse(BaseModel):
 async def chat(
     request: Request,
     body: ChatRequest,
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
     """
     Send a message in a multi-turn conversation.
@@ -83,7 +84,7 @@ async def chat(
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(body.session_id)
+    session_id, messages = _get_or_create_session(body.session_id, user_id)
     turn_index = len(messages) // 2  # number of completed user+assistant pairs
 
     full_messages = list(messages) + [{"role": "user", "content": body.message}]
@@ -131,14 +132,14 @@ async def chat(
 async def chat_stream(
     request: Request,
     body: ChatRequest,
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
     """Stream a multi-turn chat answer as Server-Sent Events."""
     top_k = body.top_k
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(body.session_id)
+    session_id, messages = _get_or_create_session(body.session_id, user_id)
     full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
     prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
@@ -196,13 +197,15 @@ class ChatHistoryResponse(BaseModel):
 
 
 @router.get("/chat", response_model=List[ChatSessionSummary], tags=["Chat"])
-async def list_sessions(authenticated: bool = Depends(verify_api_key)):
-    """List saved chat sessions, most-recent first. Global — no per-user isolation."""
+async def list_sessions(user_id: str = Depends(get_current_user)):
+    """List the caller's own saved chat sessions, most-recent first."""
     from deps import _sessions, _sessions_lock, _evict_stale_sessions
     summaries: List[ChatSessionSummary] = []
     with _sessions_lock:
         _evict_stale_sessions()
         for sid, s in _sessions.items():
+            if _session_owner(s) != user_id:  # only the caller's conversations
+                continue
             msgs = s.get("messages", [])
             if not msgs:  # skip empty sessions (created but never used)
                 continue
@@ -219,12 +222,12 @@ async def list_sessions(authenticated: bool = Depends(verify_api_key)):
 
 
 @router.get("/chat/{session_id}", response_model=ChatHistoryResponse, tags=["Chat"])
-async def get_session_history(session_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_session_history(session_id: str, user_id: str = Depends(get_current_user)):
     """Return a session's full message history so the UI can reopen the conversation."""
     from deps import _sessions, _sessions_lock
     with _sessions_lock:
         s = _sessions.get(session_id)
-        if s is None:
+        if s is None or _session_owner(s) != user_id:  # 404 (not 403) on someone else's session
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
         return ChatHistoryResponse(
             session_id=session_id,
@@ -237,13 +240,14 @@ async def get_session_history(session_id: str, authenticated: bool = Depends(ver
 @router.delete("/chat/{session_id}", tags=["Chat"])
 async def delete_session(
     session_id: str,
-    authenticated: bool = Depends(verify_api_key),
+    user_id: str = Depends(get_current_user),
 ):
     """Delete a chat session and its history."""
     import persistence
     from deps import _sessions, _sessions_lock
     with _sessions_lock:
-        if session_id not in _sessions:
+        s = _sessions.get(session_id)
+        if s is None or _session_owner(s) != user_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
         del _sessions[session_id]
         persistence.delete_session(session_id)

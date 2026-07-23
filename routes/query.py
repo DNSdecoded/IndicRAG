@@ -15,7 +15,7 @@ import config
 import persistence
 import rag
 from agent.nodes.finalizer import citation_coverage
-from deps import STATIC_DIR, limiter, verify_api_key, _jobs, _jobs_lock, _update_job
+from deps import STATIC_DIR, limiter, verify_api_key, get_current_user, _jobs, _jobs_lock, _update_job
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ async def health_check(deep: bool = False):
 async def query_question(
     request: Request,
     body: QueryRequest,
-    authenticated: bool = Depends(verify_api_key)
+    user_id: str = Depends(get_current_user),
 ):
     """
     Answer a question in any language using the RAG system.
@@ -254,7 +254,7 @@ async def query_question(
                 mode=f"standard_{body.strategy}", model=body.model or "default",
                 language=result['language'], confidence=0.0,
                 coverage=citation_coverage(result['answer']),
-                created_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(timezone.utc).isoformat(), user_id=user_id,
             )
         except Exception:
             logger.warning("Failed to log query for feedback correlation", exc_info=True)

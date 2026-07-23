@@ -80,15 +80,34 @@ def test_create_watch_rejects_empty_topic(client):
         assert resp.status_code == 422
 
 
-def test_list_watches_all_and_by_user(client):
-    with patch("config.WATCH_ENABLE", True):
-        client.post("/watch", json={"user_id": "u1", "topic": "a"})
-        client.post("/watch", json={"user_id": "u1", "topic": "b"})
-        client.post("/watch", json={"user_id": "u2", "topic": "c"})
+def test_list_watches_scoped_to_authenticated_user(client):
+    """Each user sees only their own watches; owner comes from the API key,
+    not a client-supplied field (multi-user support)."""
+    import persistence, deps, auth_utils
+    for name, key in (("alice", "k_alice"), ("bob", "k_bob")):
+        s, h = auth_utils.hash_password("pw")
+        persistence.save_user(name, s, h, key, "2026-07-23T00:00:00+00:00")
+    deps._refresh_key_map()
+    try:
+        with patch("config.WATCH_ENABLE", True):
+            client.post("/watch", json={"topic": "a"}, headers={"X-API-Key": "k_alice"})
+            client.post("/watch", json={"topic": "b"}, headers={"X-API-Key": "k_alice"})
+            client.post("/watch", json={"topic": "c"}, headers={"X-API-Key": "k_bob"})
 
-        assert len(client.get("/watch").json()) == 3
-        u1 = client.get("/watch", params={"user_id": "u1"}).json()
-        assert len(u1) == 2 and all(w["user_id"] == "u1" for w in u1)
+            alice = client.get("/watch", headers={"X-API-Key": "k_alice"}).json()
+            bob = client.get("/watch", headers={"X-API-Key": "k_bob"}).json()
+            assert len(alice) == 2 and all(w["user_id"] == "alice" for w in alice)
+            assert len(bob) == 1 and bob[0]["user_id"] == "bob"
+
+            # bob cannot see or delete alice's watch — 404, not 403 (no existence leak)
+            a_id = alice[0]["id"]
+            assert client.get(f"/watch/{a_id}", headers={"X-API-Key": "k_bob"}).status_code == 404
+            assert client.delete(f"/watch/{a_id}", headers={"X-API-Key": "k_bob"}).status_code == 404
+            assert client.get(f"/watch/{a_id}", headers={"X-API-Key": "k_alice"}).status_code == 200
+    finally:
+        for name in ("alice", "bob"):
+            persistence.delete_user(name)
+        deps._refresh_key_map()
 
 
 def test_get_watch_roundtrip_and_404(client):

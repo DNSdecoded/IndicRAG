@@ -40,17 +40,18 @@ def test_submit_feedback_rejects_invalid_rating(client):
 
 def test_get_prefs_404_when_disabled(client):
     with patch("config.ENABLE_USER_PREFS", False):
-        resp = client.get("/prefs/user-1")
+        resp = client.get("/prefs")
     assert resp.status_code == 404
 
 
 def test_put_and_get_prefs_when_enabled(client):
+    # Owner comes from auth; with auth disabled the caller is the default user.
     with patch("config.ENABLE_USER_PREFS", True):
-        put_resp = client.put("/prefs/user-1", json={"prefs": {"language": "hi"}})
+        put_resp = client.put("/prefs", json={"prefs": {"language": "hi"}})
         assert put_resp.status_code == 200
         assert put_resp.json()["prefs"] == {"language": "hi"}
 
-        get_resp = client.get("/prefs/user-1")
+        get_resp = client.get("/prefs")
         assert get_resp.status_code == 200
         assert get_resp.json()["prefs"] == {"language": "hi"}
 

@@ -596,7 +596,8 @@ def execute_open_access_search(
 _WATCH_CADENCES = {"daily": 1, "weekly": 7, "monthly": 30}  # days until first auto-run
 
 
-def execute_create_watch(topic: str, cadence: str = "weekly", language: str = "en") -> dict:
+def execute_create_watch(topic: str, cadence: str = "weekly", language: str = "en",
+                         user_id: str = "agent") -> dict:
     """Create a scheduled topic watch. Returns watch_id + confirmation."""
     import uuid
     from datetime import datetime, timezone, timedelta
@@ -607,7 +608,7 @@ def execute_create_watch(topic: str, cadence: str = "weekly", language: str = "e
     now = datetime.now(timezone.utc)
     watch_id = str(uuid.uuid4())
     watch = {
-        "id": watch_id, "user_id": "agent", "topic": topic, "language": language,
+        "id": watch_id, "user_id": user_id, "topic": topic, "language": language,
         "cadence": cadence, "seen_ids": [], "latest_digest": None,
         "next_run": (now + timedelta(days=_WATCH_CADENCES[cadence])).isoformat(),
         "last_run": None, "created_at": now.isoformat(),
@@ -657,7 +658,8 @@ TOOL_DISPATCH = {
         args.get("year_range", ""), args.get("open_access_only", True)
     ),
     "create_watch": lambda args: (
-        execute_create_watch(args["topic"], args.get("cadence", "weekly"), args.get("language", "en"))
+        execute_create_watch(args["topic"], args.get("cadence", "weekly"),
+                             args.get("language", "en"), args.get("user_id", "agent"))
         if config.WATCH_ENABLE else {"status": "disabled", "message": "Watches are not enabled."}
     ),
     "generate_report": lambda args: (

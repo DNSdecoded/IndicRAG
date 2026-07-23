@@ -22,7 +22,7 @@ from deps import (
     limiter,
     verify_api_key,
 )
-from routes import query, chat, ingest, agent, management, feedback, watch, report, models as models_route
+from routes import query, chat, ingest, agent, management, feedback, watch, report, auth, models as models_route
 from middleware import RequestIdFilter, RequestIdMiddleware
 
 # Configure logging
@@ -157,6 +157,7 @@ app.include_router(management.router)
 app.include_router(feedback.router)
 app.include_router(watch.router)
 app.include_router(report.router)
+app.include_router(auth.router)
 app.include_router(models_route.router)
 
 

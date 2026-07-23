@@ -983,6 +983,8 @@
         <button class="sfooter-btn" onclick="showHealthModal()">🩺 Ingestion Health</button>
         <button class="sfooter-btn" onclick="showCompareModal()">🔀 Compare Papers</button>
         <button class="sfooter-btn" onclick="showMapModal()">🗺 Library Map</button>
+        <button class="sfooter-btn" id="userBadge" onclick="showLogin()">Not logged in</button>
+        <button class="sfooter-btn" onclick="logout()">🚪 Log out</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
     </div>
@@ -1190,6 +1192,22 @@
     </div>
 </div>
 
+<div class="overlay" id="loginOverlay">
+    <div class="modal" style="max-width:380px">
+        <h3>🔐 Log in</h3>
+        <p>Enter your username and password to access your watches, reports, and history.</p>
+        <div style="display:flex;flex-direction:column;gap:.6rem;margin-top:.8rem">
+            <input id="loginUser" placeholder="Username" autocomplete="username"
+                style="padding:.55rem .7rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.9rem">
+            <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password"
+                onkeydown="if(event.key==='Enter')doLogin()"
+                style="padding:.55rem .7rem;border-radius:7px;border:1px solid var(--border);background:var(--surface-up);color:var(--text-1);font-size:.9rem">
+            <div id="loginError" style="color:#ef4444;font-size:.8rem;min-height:1em"></div>
+            <button class="modal-btn" style="background:var(--primary);color:#fff;border-color:var(--primary)" onclick="doLogin()">Log in</button>
+        </div>
+    </div>
+</div>
+
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 <div class="toast-wrap" id="toastWrap"></div>
 <script>
@@ -1249,6 +1267,7 @@ async function loadModels() {
         updateModelDisabled();
     } catch (e) { console.warn('model list unavailable', e); }
 }
+updateUserBadge();
 // In agent mode, tool-incapable models can't route tools — grey them out.
 function updateModelDisabled() {
     const agent = pipelineMode === 'agent';
@@ -1928,10 +1947,43 @@ function authHeaders(extra){
     const k=localStorage.getItem('indicrag-api-key'); if(k) h['X-API-Key']=k;
     return h;
 }
-function watchUserId(){
-    let u=localStorage.getItem('indicrag-user-id');
-    if(!u){ u='web-'+Math.random().toString(36).slice(2,10); localStorage.setItem('indicrag-user-id',u); }
-    return u;
+
+// ── LOGIN ──────────────────────────────────────────────────────
+// Name+password -> POST /login -> the user's api_key, stored and sent as
+// X-API-Key on every request (deps.get_current_user resolves it to the user).
+function showLogin(){ document.getElementById('loginOverlay').classList.add('active'); document.getElementById('loginError').textContent=''; }
+function hideLogin(){ document.getElementById('loginOverlay').classList.remove('active'); }
+function currentUser(){ return localStorage.getItem('indicrag-username') || ''; }
+
+async function doLogin(){
+    const username=document.getElementById('loginUser').value.trim();
+    const password=document.getElementById('loginPass').value;
+    const err=document.getElementById('loginError');
+    if(!username||!password){ err.textContent='Enter username and password.'; return; }
+    try{
+        const r=await fetch(`${API}/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+        if(!r.ok){ err.textContent = r.status===401 ? 'Invalid username or password.' : 'Login failed.'; return; }
+        const d=await r.json();
+        localStorage.setItem('indicrag-api-key',d.api_key);
+        localStorage.setItem('indicrag-username',d.username);
+        document.getElementById('loginPass').value='';
+        hideLogin();
+        updateUserBadge();
+        showToast(`Logged in as ${d.username}`,'success');
+    }catch(e){ err.textContent='Network error.'; }
+}
+
+function logout(){
+    localStorage.removeItem('indicrag-api-key');
+    localStorage.removeItem('indicrag-username');
+    updateUserBadge();
+    showLogin();
+}
+
+function updateUserBadge(){
+    const b=document.getElementById('userBadge'); if(!b) return;
+    const u=currentUser();
+    b.textContent = u ? `👤 ${u}` : 'Not logged in';
 }
 function showWatchModal(){ document.getElementById('watchOverlay').classList.add('active'); loadWatches(); }
 function hideWatchModal(){ document.getElementById('watchOverlay').classList.remove('active'); }
@@ -1940,7 +1992,7 @@ async function loadWatches(){
     const list=document.getElementById('watchList');
     list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Loading…</div>';
     try{
-        const r=await fetch(`${API}/watch?user_id=${encodeURIComponent(watchUserId())}`,{headers:authHeaders()});
+        const r=await fetch(`${API}/watch`,{headers:authHeaders()});
         if(r.status===404){ list.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Topic watches are disabled (set <code>WATCH_ENABLE=true</code>).</div>'; return; }
         const d=await r.json();
         if(!r.ok) throw new Error(formatError(d)||'Failed to load watches');
@@ -1970,7 +2022,7 @@ async function createWatch(){
         const r=await fetch(`${API}/watch`,{
             method:'POST', headers:authHeaders({'Content-Type':'application/json'}),
             body:JSON.stringify({
-                user_id:watchUserId(), topic,
+                topic,
                 language:document.getElementById('watchLang').value,
                 cadence:document.getElementById('watchCadence').value,
             })

@@ -886,3 +886,21 @@ def test_dispatch_create_watch_enabled(tmp_path):
         r = TOOL_DISPATCH["create_watch"]({"topic": "graphene", "cadence": "monthly"})
     assert r["status"] == "created"
     assert saved["cadence"] == "monthly"
+
+
+def test_tool_executor_node_stamps_watch_owner():
+    """A create_watch call routed through the agent node inherits the run's owner."""
+    import config
+    from agent.nodes import tool_executor_node as ten
+    captured = {}
+    def _fake_create(topic, cadence="weekly", language="en", user_id="agent"):
+        captured["user_id"] = user_id
+        return {"status": "created", "watch_id": "w1"}
+    with patch.object(config, "WATCH_ENABLE", True), \
+         patch("agent.tool_executor.execute_create_watch", _fake_create):
+        state = {
+            "tool_calls_requested": [{"name": "create_watch", "args": {"topic": "x"}}],
+            "retrieved_contexts": [], "tool_calls_log": [], "user_id": "alice",
+        }
+        ten.tool_executor_node(state)
+    assert captured["user_id"] == "alice"

@@ -53,7 +53,31 @@ _conn.execute(
 )
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON graph_edges(source_paper)")
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON graph_edges(target_paper)")
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS users ("
+    "username TEXT PRIMARY KEY, pw_salt TEXT, pw_hash TEXT, "
+    "api_key TEXT UNIQUE, created_at TEXT)"
+)
 _conn.commit()
+
+
+def _migrate_add_column(table: str, column: str, decl: str) -> None:
+    """Idempotently add a column to an existing table (older DBs predate it).
+
+    Existing rows get NULL for the new column; callers treat NULL owner as the
+    config.DEFAULT_USER_ID so legacy single-user data stays reachable.
+    """
+    cols = [r[1] for r in _conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+# Owner columns for per-user isolation (multi-user support). watches already has
+# user_id; user_prefs is keyed by it; sessions carry it inside the JSON blob.
+for _t in ("reports", "feedback", "query_log"):
+    _migrate_add_column(_t, "user_id", "TEXT")
+_conn.commit()
+
 _db_lock = threading.Lock()
 
 
@@ -117,27 +141,29 @@ def save_job(job_id: str, job: dict) -> None:
         _conn.commit()
 
 
-def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, created_at: str) -> None:
+def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str,
+                  created_at: str, user_id: str = None) -> None:
     with _db_lock:
         _conn.execute(
-            "INSERT INTO feedback (id, query_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?)",
-            (feedback_id, query_id, rating, comment, created_at),
+            "INSERT INTO feedback (id, query_id, rating, comment, created_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (feedback_id, query_id, rating, comment, created_at, user_id),
         )
         _conn.commit()
 
 
 def log_query(query_id: str, question: str, answer: str, mode: str,
               model: str, language: str, confidence: float, coverage: float,
-              created_at: str) -> None:
+              created_at: str, user_id: str = None) -> None:
     """Persist a query/answer record so feedback can be correlated with it."""
     with _db_lock:
         _conn.execute(
             "INSERT INTO query_log "
-            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(query_id) DO UPDATE SET "
             "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
-            (query_id, question, answer, mode, model, language, confidence, coverage, created_at),
+            (query_id, question, answer, mode, model, language, confidence, coverage, created_at, user_id),
         )
         _conn.commit()
 
@@ -148,15 +174,23 @@ _FEEDBACK_CONTEXT_COLUMNS = [
 ]
 
 
-def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
-    """Return feedback joined with its query context, newest first."""
+def get_feedback_with_context(limit: int = 50, offset: int = 0, user_id: str = None) -> list[dict]:
+    """Return feedback joined with its query context, newest first.
+
+    Scoped to `user_id` when given (NULL-owner legacy rows map to DEFAULT_USER_ID).
+    """
+    where, params = "", []
+    if user_id is not None:
+        where = "WHERE COALESCE(f.user_id, ?) = ? "
+        params = [config.DEFAULT_USER_ID, user_id]
     with _db_lock:
         rows = _conn.execute(
             "SELECT f.id, f.query_id, f.rating, f.comment, f.created_at, "
             "q.question, q.answer, q.mode, q.model, q.language, q.confidence, q.coverage "
             "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            + where +
             "ORDER BY f.created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            (*params, limit, offset),
         ).fetchall()
     return [
         dict(zip(_FEEDBACK_CONTEXT_COLUMNS, r))
@@ -164,16 +198,22 @@ def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
     ]
 
 
-def feedback_stats() -> dict:
-    """Aggregate feedback totals and per-language approval rate."""
+def feedback_stats(user_id: str = None) -> dict:
+    """Aggregate feedback totals and per-language approval rate, optionally per user."""
+    where, params = "", []
+    if user_id is not None:
+        where = "WHERE COALESCE(f.user_id, ?) = ? "
+        params = [config.DEFAULT_USER_ID, user_id]
     with _db_lock:
-        total = _conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
-        up = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='up'").fetchone()[0]
-        down = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='down'").fetchone()[0]
+        total = _conn.execute("SELECT COUNT(*) FROM feedback f " + where, params).fetchone()[0]
+        up = _conn.execute("SELECT COUNT(*) FROM feedback f " + where + ("AND" if where else "WHERE") + " rating='up'", params).fetchone()[0]
+        down = _conn.execute("SELECT COUNT(*) FROM feedback f " + where + ("AND" if where else "WHERE") + " rating='down'", params).fetchone()[0]
         by_lang = _conn.execute(
             "SELECT q.language, COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
             "FROM feedback f JOIN query_log q ON f.query_id = q.query_id "
-            "GROUP BY q.language"
+            + where +
+            "GROUP BY q.language",
+            params,
         ).fetchall()
     return {
         "total": total, "up": up, "down": down,
@@ -263,16 +303,16 @@ def delete_watch(watch_id: str) -> None:
 # review" needs to survive indefinitely and be regenerated in place.
 # ---------------------------------------------------------------------------
 def save_report(report_id: str, watch_id: str, topic: str, language: str,
-                markdown: str, citation_count: int, created_at: str) -> None:
+                markdown: str, citation_count: int, created_at: str, user_id: str = None) -> None:
     """Insert or update a report. Re-saving the same report_id overwrites in place
     (that's how a watch-owned living review gets regenerated)."""
     with _db_lock:
         _conn.execute(
-            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
             "markdown=excluded.markdown, citation_count=excluded.citation_count",
-            (report_id, watch_id, topic, language, markdown, citation_count, created_at),
+            (report_id, watch_id, topic, language, markdown, citation_count, created_at, user_id),
         )
         _conn.commit()
 
@@ -280,28 +320,35 @@ def save_report(report_id: str, watch_id: str, topic: str, language: str,
 def get_report(report_id: str) -> dict | None:
     with _db_lock:
         row = _conn.execute(
-            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at "
+            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at, user_id "
             "FROM reports WHERE id = ?", (report_id,),
         ).fetchone()
     if not row:
         return None
     return {"id": row[0], "watch_id": row[1], "topic": row[2], "language": row[3],
-            "markdown": row[4], "citation_count": row[5], "created_at": row[6]}
+            "markdown": row[4], "citation_count": row[5], "created_at": row[6],
+            "user_id": row[7] if row[7] is not None else config.DEFAULT_USER_ID}
 
 
-def list_reports(watch_id: str | None = None) -> list[dict]:
-    """Summary rows (no markdown body) — newest first, or scoped to one watch."""
+def list_reports(watch_id: str | None = None, user_id: str | None = None) -> list[dict]:
+    """Summary rows (no markdown body) — newest first; scoped to a watch and/or owner.
+
+    NULL-owner legacy rows map to DEFAULT_USER_ID when filtering by user_id.
+    """
+    clauses, params = [], []
+    if watch_id:
+        clauses.append("watch_id = ?")
+        params.append(watch_id)
+    if user_id is not None:
+        clauses.append("COALESCE(user_id, ?) = ?")
+        params.extend([config.DEFAULT_USER_ID, user_id])
+    where = ("WHERE " + " AND ".join(clauses) + " ") if clauses else ""
     with _db_lock:
-        if watch_id:
-            rows = _conn.execute(
-                "SELECT id, watch_id, topic, language, citation_count, created_at "
-                "FROM reports WHERE watch_id = ? ORDER BY created_at DESC", (watch_id,),
-            ).fetchall()
-        else:
-            rows = _conn.execute(
-                "SELECT id, watch_id, topic, language, citation_count, created_at "
-                "FROM reports ORDER BY created_at DESC",
-            ).fetchall()
+        rows = _conn.execute(
+            "SELECT id, watch_id, topic, language, citation_count, created_at "
+            "FROM reports " + where + "ORDER BY created_at DESC",
+            params,
+        ).fetchall()
     return [{"id": r[0], "watch_id": r[1], "topic": r[2], "language": r[3],
              "citation_count": r[4], "created_at": r[5]} for r in rows]
 
@@ -356,3 +403,50 @@ def get_paper_edges(paper_id: str) -> list[dict]:
         ).fetchall()
     return [{"source": r[0], "target": r[1], "type": r[2], "score": r[3],
              "metadata": json.loads(r[4])} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Users (multi-user support). Pre-provisioned via manage_users.py — no signup
+# path here. api_key is the per-user X-API-Key; deps.py maps key -> username.
+# ---------------------------------------------------------------------------
+def save_user(username: str, pw_salt: str, pw_hash: str, api_key: str, created_at: str) -> None:
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO users (username, pw_salt, pw_hash, api_key, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(username) DO UPDATE SET pw_salt=excluded.pw_salt, "
+            "pw_hash=excluded.pw_hash, api_key=excluded.api_key",
+            (username, pw_salt, pw_hash, api_key, created_at),
+        )
+        _conn.commit()
+
+
+def get_user(username: str) -> dict | None:
+    with _db_lock:
+        row = _conn.execute(
+            "SELECT username, pw_salt, pw_hash, api_key, created_at FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"username": row[0], "pw_salt": row[1], "pw_hash": row[2],
+            "api_key": row[3], "created_at": row[4]}
+
+
+def list_users() -> list[dict]:
+    with _db_lock:
+        rows = _conn.execute("SELECT username, created_at FROM users ORDER BY username").fetchall()
+    return [{"username": r[0], "created_at": r[1]} for r in rows]
+
+
+def delete_user(username: str) -> None:
+    with _db_lock:
+        _conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        _conn.commit()
+
+
+def all_key_user_pairs() -> list[tuple]:
+    """(api_key, username) for every user — deps.py builds its key->user map from this."""
+    with _db_lock:
+        rows = _conn.execute("SELECT api_key, username FROM users").fetchall()
+    return [(r[0], r[1]) for r in rows]
