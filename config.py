@@ -271,10 +271,10 @@ AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.6-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
-# gemini-3.5-flash already does IMPLICIT caching for free; explicit caching adds
+# gemini-3.6-flash already does IMPLICIT caching for free; explicit caching adds
 # guaranteed reuse but is billed per token-hour of storage — so it's OFF by default.
 # Enable only if your system prompts clear the model's min-token cache floor and you
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
@@ -311,7 +311,7 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(
     "LLM_SELECTABLE_MODELS",
-    "gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+    "gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
 # How long the enriched OpenRouter /models catalog is cached (seconds).
