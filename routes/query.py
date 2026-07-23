@@ -252,7 +252,7 @@ async def query_question(
             persistence.log_query(
                 query_id=query_id, question=body.question, answer=result['answer'],
                 mode=f"standard_{body.strategy}", model=body.model or "default",
-                language=result['language'], confidence=0.0,
+                language=result['language'], confidence=result.get('answer_confidence', 0.0),
                 coverage=citation_coverage(result['answer']),
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
@@ -322,9 +322,16 @@ async def query_stream(
 
 class CompareRequest(BaseModel):
     """Request model for a cross-paper comparison table."""
-    paper_ids: List[str] = Field(..., min_length=2, description="Paper IDs to compare (2 or more)")
-    dimensions: List[str] = Field(..., min_length=1, description="Dimensions to compare on")
+    paper_ids: List[str] = Field(..., min_length=2, max_length=20, description="Paper IDs to compare (2-20)")
+    dimensions: List[str] = Field(..., min_length=1, max_length=10, description="Dimensions to compare on (max 10)")
     model: Optional[str] = Field(None, description="LLM model id from the /models allowlist. Omit for default.")
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_allowlisted(cls, v):
+        from routes.models import validate_model
+        validate_model(v, None)
+        return v
 
 
 class CompareJobResponse(BaseModel):

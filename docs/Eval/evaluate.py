@@ -48,7 +48,7 @@ def write_history_snapshot(metrics: dict, history_dir: str = None) -> Path:
     time are visible instead of each run overwriting the last report."""
     hist_dir = Path(history_dir) if history_dir else Path(__file__).parent / "eval_history"
     hist_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     path = hist_dir / f"{ts}_eval_report.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
@@ -467,8 +467,9 @@ def main():
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False)
         print(f"  JSON metrics    -> {args.json}")
-        hist_path = write_history_snapshot(metrics)
-        print(f"  History snapshot -> {hist_path}")
+
+    hist_path = write_history_snapshot(metrics)
+    print(f"  History snapshot -> {hist_path}")
 
     # Per-query regression gate — fail if any query drops vs committed baseline.
     if args.baseline:

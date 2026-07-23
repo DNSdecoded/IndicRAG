@@ -15,7 +15,7 @@ def _post_ingest_refresh():
         bm25_search.invalidate()
         threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
     except Exception:
-        pass
+        logger.warning("Failed to invalidate/rebuild BM25 index after ingestion", exc_info=True)
     try:
         from cache import retrieval_cache, tool_cache
         retrieval_cache.invalidate()

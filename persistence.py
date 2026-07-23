@@ -163,9 +163,9 @@ def feedback_stats() -> dict:
         up = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='up'").fetchone()[0]
         down = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='down'").fetchone()[0]
         by_lang = _conn.execute(
-            "SELECT q.language, COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
-            "FROM feedback f JOIN query_log q ON f.query_id = q.query_id "
-            "GROUP BY q.language"
+            "SELECT COALESCE(q.language, 'unknown'), COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
+            "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            "GROUP BY COALESCE(q.language, 'unknown')"
         ).fetchall()
     return {
         "total": total, "up": up, "down": down,
@@ -263,7 +263,8 @@ def save_report(report_id: str, watch_id: str, topic: str, language: str,
             "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
-            "markdown=excluded.markdown, citation_count=excluded.citation_count",
+            "markdown=excluded.markdown, citation_count=excluded.citation_count, "
+            "created_at=excluded.created_at",
             (report_id, watch_id, topic, language, markdown, citation_count, created_at),
         )
         _conn.commit()

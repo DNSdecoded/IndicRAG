@@ -167,7 +167,8 @@ def test_ingest_from_url_rejects_unresolvable_input(client):
 
 
 def test_ingest_from_url_accepts_direct_url(client):
-    resp = client.post("/ingest/from-url", json={"url": "http://example.com/paper.pdf"})
+    with patch("download_utils.download_pdf", return_value="/tmp/fake.pdf"):
+        resp = client.post("/ingest/from-url", json={"url": "http://example.com/paper.pdf"})
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "pending"

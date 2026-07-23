@@ -17,6 +17,7 @@ from agent.tool_executor import execute_arxiv_search, execute_open_access_search
 from cache_refresh import _post_ingest_refresh
 from download_utils import download_pdf as _download_pdf
 from ingest import ingest_pdf
+from routes.ingest import _bibtex_safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ def run_watch(watch_id: str) -> dict:
             if path:
                 try:
                     n_chunks, title = ingest_pdf(
-                        path, paper_id=arxiv_id,
+                        path, paper_id=_bibtex_safe_id(arxiv_id),
                         metadata={"title": p.get("title", ""), "source": p.get("source", "")},
                     )
                 finally:

@@ -489,7 +489,7 @@ VERSION = "2.3.0-dev"
 # ============================================================================
 # Chat / Session
 # ============================================================================
-CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "10"))
+CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "20"))
 SESSION_MAX_AGE_HOURS = int(os.getenv("SESSION_MAX_AGE_HOURS", "24"))
 
 # ============================================================================
