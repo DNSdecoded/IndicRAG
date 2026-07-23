@@ -6,7 +6,7 @@ that BGE-M3 / ChromaDB are never initialised during tests.
 """
 import pytest
 from contextlib import asynccontextmanager
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 @asynccontextmanager
@@ -208,6 +208,68 @@ def test_quality_returns_error_when_absent(client, tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json() == {"error": "No eval report available"}
+
+
+# ---------------------------------------------------------------------------
+# GET /corpus/map
+# ---------------------------------------------------------------------------
+
+def test_kmeans_separates_two_clear_clusters():
+    import numpy as np
+    from routes.management import _kmeans
+
+    X = np.array([
+        [0.0, 0.0], [0.1, 0.0], [0.0, 0.1],
+        [10.0, 10.0], [10.1, 10.0], [10.0, 10.1],
+    ], dtype=np.float32)
+    labels = _kmeans(X, k=2)
+
+    assert labels[0] == labels[1] == labels[2]
+    assert labels[3] == labels[4] == labels[5]
+    assert labels[0] != labels[3]
+
+
+def test_kmeans_k_greater_than_n_does_not_crash():
+    import numpy as np
+    from routes.management import _kmeans
+
+    X = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]], dtype=np.float32)
+    labels = _kmeans(X, k=10)
+    assert len(labels) == 3
+    assert len(set(labels.tolist())) <= 3
+
+
+def test_corpus_map_returns_clusters_and_timeline(client):
+    metadatas = [
+        {"title": "Paper A", "year": "2020"}, {"title": "Paper A", "year": "2020"},
+        {"title": "Paper B", "year": "2021"},
+        {"title": "Paper C", "year": "2021"}, {"title": "Paper C", "year": "2021"},
+    ]
+    embeddings = [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1], [10.0, 10.0], [10.1, 10.0]]
+    fake_collection = MagicMock()
+    with patch("vector_store.get_or_create_collection", return_value=fake_collection), \
+         patch("vector_store._chroma_call", return_value={"embeddings": embeddings, "metadatas": metadatas}):
+        resp = client.get("/corpus/map")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["clusters"]) >= 1
+    total_chunks = sum(c["chunk_count"] for c in body["clusters"])
+    assert total_chunks == 5
+    # 5 chunks but only 3 distinct papers -> at least one cluster must dedupe
+    # a repeated title down to a smaller paper_count than its raw chunk_count.
+    assert any(c["chunk_count"] > c["paper_count"] for c in body["clusters"])
+    years = {t["year"]: t["count"] for t in body["timeline"]}
+    assert years == {"2020": 2, "2021": 3}
+
+
+def test_corpus_map_empty_collection(client):
+    with patch("vector_store.get_or_create_collection", return_value=MagicMock()), \
+         patch("vector_store._chroma_call", return_value={"embeddings": [], "metadatas": []}):
+        resp = client.get("/corpus/map")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"clusters": [], "timeline": []}
 
 
 # ---------------------------------------------------------------------------

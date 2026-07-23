@@ -982,6 +982,7 @@
         <button class="sfooter-btn" onclick="showReportModal()">📄 Lit Review</button>
         <button class="sfooter-btn" onclick="showHealthModal()">🩺 Ingestion Health</button>
         <button class="sfooter-btn" onclick="showCompareModal()">🔀 Compare Papers</button>
+        <button class="sfooter-btn" onclick="showMapModal()">🗺 Library Map</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('papers')">🗑 Delete All Papers</button>
         <button class="sfooter-btn danger" onclick="showPurgeModal('database')">⚠ Clear Vector Database</button>
     </div>
@@ -1173,6 +1174,18 @@
         <div id="compareTableWrap" style="margin-top:.8rem;max-height:55vh;overflow:auto"></div>
         <div class="modal-actions">
             <button class="modal-btn" onclick="hideCompareModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="mapOverlay">
+    <div class="modal" style="max-width:720px">
+        <h3>🗺 Library Map</h3>
+        <p>Topic clusters and publication-year coverage across your ingested corpus.</p>
+        <div id="mapBody" style="margin-top:.8rem;max-height:60vh;overflow-y:auto"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" onclick="loadCorpusMap()">Refresh</button>
+            <button class="modal-btn" onclick="hideMapModal()">Close</button>
         </div>
     </div>
 </div>
@@ -2116,6 +2129,50 @@ function renderCompareTable(paperIds, dimensions, matrix){
     }).join('');
     const header=paperIds.map(pid=>`<th style="padding:.5rem .6rem;border:1px solid var(--border);text-align:left;font-size:.8rem">${esc(pid)}</th>`).join('');
     tableWrap.innerHTML=`<table style="border-collapse:collapse;width:100%"><thead><tr><th style="padding:.5rem .6rem;border:1px solid var(--border)"></th>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ── CORPUS MAP ─────────────────────────────────────────────────
+function showMapModal(){ document.getElementById('mapOverlay').classList.add('active'); loadCorpusMap(); }
+function hideMapModal(){ document.getElementById('mapOverlay').classList.remove('active'); }
+
+async function loadCorpusMap(){
+    const body=document.getElementById('mapBody');
+    body.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">Loading…</div>';
+    try{
+        const r=await fetch(`${API}/corpus/map`,{headers:authHeaders()});
+        const d=await r.json();
+        if(!r.ok) throw new Error(formatError(d)||'Failed to load corpus map');
+        if(!d.clusters.length){ body.innerHTML='<div style="color:var(--text-3);font-size:.82rem;padding:.5rem 0">No papers ingested yet.</div>'; return; }
+
+        const years=d.timeline.filter(t=>t.year!=='unknown');
+        const maxCount=Math.max(1,...d.timeline.map(t=>t.count));
+        const timelineHtml=d.timeline.length?`
+            <div style="font-weight:600;font-size:.82rem;color:var(--text-1);margin-bottom:.4rem">Publication years</div>
+            <div style="display:flex;align-items:flex-end;gap:.35rem;height:90px;margin-bottom:1rem">
+                ${d.timeline.map(t=>`
+                    <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0" title="${esc(t.year)}: ${t.count} chunks">
+                        <div style="width:100%;background:var(--primary);border-radius:3px 3px 0 0;height:${Math.max(4,t.count/maxCount*70)}px"></div>
+                        <div style="font-size:.65rem;color:var(--text-3);margin-top:.25rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${esc(t.year)}</div>
+                    </div>`).join('')}
+            </div>` : '';
+
+        const gapNote=years.length>=2 ? (()=>{
+            const nums=[...new Set(years.map(t=>parseInt(t.year)).filter(n=>!isNaN(n)))].sort((a,b)=>a-b);
+            const gaps=[];
+            for(let i=1;i<nums.length;i++){ if(nums[i]-nums[i-1]>1) gaps.push(`${nums[i-1]}–${nums[i]}`); }
+            return gaps.length ? `<div style="font-size:.75rem;color:var(--text-3);margin-bottom:1rem">⚠ Coverage gap: no papers between ${gaps.join(', ')}</div>` : '';
+        })() : '';
+
+        const clustersHtml=`
+            <div style="font-weight:600;font-size:.82rem;color:var(--text-1);margin-bottom:.4rem">Topic clusters</div>
+            ${d.clusters.map(c=>`
+                <div style="border:1px solid var(--border);border-radius:8px;padding:.55rem .7rem;margin-bottom:.45rem">
+                    <div style="font-size:.82rem;font-weight:600;color:var(--text-1)">Cluster ${c.id} — ${c.paper_count} paper${c.paper_count===1?'':'s'} (${c.year_range})</div>
+                    <div style="font-size:.75rem;color:var(--text-3);margin-top:.2rem">${c.sample_titles.map(esc).join(' · ') || 'Untitled'}</div>
+                </div>`).join('')}`;
+
+        body.innerHTML = timelineHtml + gapNote + clustersHtml;
+    }catch(e){ body.innerHTML=`<div style="color:#ef4444;font-size:.82rem;padding:.5rem 0">${esc(e.message)}</div>`; }
 }
 
 async function generateReport(){

@@ -1,5 +1,6 @@
 """Routes: /search, /papers, /papers/{id}, /purge/*, /stats, /cache/*."""
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -9,6 +10,7 @@ import re
 import threading
 import time
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
@@ -444,6 +446,79 @@ async def get_quality_metrics(authenticated: bool = Depends(verify_api_key)):
     if _EVAL_REPORT_PATH.exists():
         return json.loads(_EVAL_REPORT_PATH.read_text(encoding="utf-8"))
     return {"error": "No eval report available"}
+
+
+def _kmeans(X: np.ndarray, k: int, iters: int = 20, seed: int = 42) -> np.ndarray:
+    """Minimal Lloyd's-algorithm k-means; returns a cluster label per row.
+
+    # ponytail: no k-means++ init, no empty-cluster reseeding -- fine for a
+    # corpus-overview feature (approximate topic grouping, not precision
+    # clustering). Pull in scikit-learn if this ever needs real convergence
+    # guarantees; not worth the dependency for "roughly group my papers".
+    """
+    rng = np.random.default_rng(seed)
+    n = X.shape[0]
+    k = min(k, n)
+    centroids = X[rng.choice(n, size=k, replace=False)].copy()
+    labels = np.zeros(n, dtype=int)
+    x_sq = (X ** 2).sum(axis=1)
+    for _ in range(iters):
+        c_sq = (centroids ** 2).sum(axis=1)
+        dists = x_sq[:, None] + c_sq[None, :] - 2 * X @ centroids.T
+        new_labels = dists.argmin(axis=1)
+        if np.array_equal(new_labels, labels):
+            break
+        labels = new_labels
+        for i in range(k):
+            mask = labels == i
+            if mask.any():
+                centroids[i] = X[mask].mean(axis=0)
+    return labels
+
+
+@router.get("/corpus/map", tags=["Corpus"])
+async def corpus_map(authenticated: bool = Depends(verify_api_key)):
+    """Topic clusters + publication-year timeline, so hundreds of ingested
+    papers become a browsable overview instead of just a chunk count."""
+    import vector_store
+
+    collection = await run_in_threadpool(vector_store.get_or_create_collection)
+    got = await run_in_threadpool(vector_store._chroma_call, collection.get, include=["embeddings", "metadatas"])
+    embeddings = got.get("embeddings")
+    metadatas = got.get("metadatas") or []
+
+    if embeddings is None or len(embeddings) == 0:
+        return {"clusters": [], "timeline": []}
+
+    X = np.asarray(embeddings, dtype=np.float32)
+    n_clusters = min(10, len(X) // 3 + 1)
+    labels = await run_in_threadpool(_kmeans, X, n_clusters)
+
+    clusters = []
+    for i in range(int(labels.max()) + 1):
+        mask = labels == i
+        cluster_metas = [m for m, keep in zip(metadatas, mask) if keep]
+        titles, years, seen_titles = [], [], []
+        for m in cluster_metas:
+            title = (m or {}).get("title", "Unknown")
+            titles.append(title)
+            if title not in seen_titles:
+                seen_titles.append(title)
+            year = (m or {}).get("year")
+            if year:
+                years.append(year)
+        clusters.append({
+            "id": i,
+            "chunk_count": int(mask.sum()),
+            "paper_count": len(seen_titles),
+            "sample_titles": seen_titles[:3],
+            "year_range": f"{min(years)}-{max(years)}" if years else "unknown",
+        })
+
+    year_counts = Counter((m or {}).get("year") or "unknown" for m in metadatas)
+    timeline = [{"year": y, "count": c} for y, c in sorted(year_counts.items())]
+
+    return {"clusters": clusters, "timeline": timeline}
 
 
 @router.get("/stats", tags=["Management"])
