@@ -811,3 +811,78 @@ def test_tool_executor_tags_and_interleaves():
     assert all("retriever" in c for c in ctxs), "every passage must be tagged with its tool"
     first12 = ctxs[:12]
     assert sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval") == 3
+
+
+# ── Task 2.6: Agent-invocable watches & reports ────────────────────
+
+def test_create_watch_and_generate_report_declared():
+    from agent.tool_declarations import FUNCTION_DECLARATIONS
+    names = {d.name for d in FUNCTION_DECLARATIONS}
+    assert "create_watch" in names
+    assert "generate_report" in names
+
+
+def test_execute_create_watch_persists_watch():
+    from agent import tool_executor
+    import persistence
+    saved = {}
+    with patch.object(persistence, "save_watch", lambda w: saved.update(w)):
+        res = tool_executor.execute_create_watch("terahertz antennas", cadence="daily", language="hi")
+    assert res["status"] == "created"
+    assert saved["topic"] == "terahertz antennas"
+    assert saved["cadence"] == "daily"
+    assert saved["language"] == "hi"
+    assert saved["next_run"] is not None  # scheduled to auto-run
+    assert res["watch_id"] == saved["id"]
+
+
+def test_execute_create_watch_bad_cadence_falls_back_to_weekly():
+    from agent import tool_executor
+    import persistence
+    saved = {}
+    with patch.object(persistence, "save_watch", lambda w: saved.update(w)):
+        tool_executor.execute_create_watch("x", cadence="hourly")
+    assert saved["cadence"] == "weekly"
+
+
+def test_execute_generate_report_returns_markdown():
+    from agent import tool_executor
+    fake = {"markdown": "# Review [1]", "citation_count": 1, "sections": ["intro"]}
+    with patch("report_runner.run_report", return_value=fake):
+        res = tool_executor.execute_generate_report("antennas", language="en")
+    assert res["status"] == "completed"
+    assert res["markdown"] == "# Review [1]"
+    assert res["citation_count"] == 1
+    assert res["section_count"] == 1
+
+
+def test_execute_generate_report_handles_failure():
+    from agent import tool_executor
+    with patch("report_runner.run_report", side_effect=RuntimeError("boom")):
+        res = tool_executor.execute_generate_report("antennas")
+    assert res["status"] == "error"
+    assert "boom" in res["message"]
+
+
+def test_dispatch_gated_by_config_flags():
+    import config
+    from agent.tool_executor import TOOL_DISPATCH
+    assert "create_watch" in TOOL_DISPATCH
+    assert "generate_report" in TOOL_DISPATCH
+    with patch.object(config, "WATCH_ENABLE", False):
+        r = TOOL_DISPATCH["create_watch"]({"topic": "x"})
+    assert r["status"] == "disabled"
+    with patch.object(config, "REPORT_ENABLE", False):
+        r = TOOL_DISPATCH["generate_report"]({"topic": "x"})
+    assert r["status"] == "disabled"
+
+
+def test_dispatch_create_watch_enabled(tmp_path):
+    import config, persistence
+    from agent.tool_executor import TOOL_DISPATCH
+    saved = {}
+    with patch.object(config, "WATCH_ENABLE", True), \
+         patch.object(persistence, "save_watch", lambda w: saved.update(w)):
+        r = TOOL_DISPATCH["create_watch"]({"topic": "graphene", "cadence": "monthly"})
+    assert r["status"] == "created"
+    assert saved["cadence"] == "monthly"

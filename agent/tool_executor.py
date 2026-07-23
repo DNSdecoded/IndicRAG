@@ -593,6 +593,49 @@ def execute_open_access_search(
                           "title": "No results", "section": "none"}]}
 
 
+_WATCH_CADENCES = {"daily": 1, "weekly": 7, "monthly": 30}  # days until first auto-run
+
+
+def execute_create_watch(topic: str, cadence: str = "weekly", language: str = "en") -> dict:
+    """Create a scheduled topic watch. Returns watch_id + confirmation."""
+    import uuid
+    from datetime import datetime, timezone, timedelta
+    import persistence
+
+    if cadence not in _WATCH_CADENCES:
+        cadence = "weekly"
+    now = datetime.now(timezone.utc)
+    watch_id = str(uuid.uuid4())
+    watch = {
+        "id": watch_id, "user_id": "agent", "topic": topic, "language": language,
+        "cadence": cadence, "seen_ids": [], "latest_digest": None,
+        "next_run": (now + timedelta(days=_WATCH_CADENCES[cadence])).isoformat(),
+        "last_run": None, "created_at": now.isoformat(),
+    }
+    persistence.save_watch(watch)
+    logger.info(f"[Agent] created watch {watch_id} topic={topic!r} cadence={cadence}")
+    return {
+        "watch_id": watch_id, "status": "created", "topic": topic, "cadence": cadence,
+        "message": f"Watch created for '{topic}'. It will run {cadence} and collect new papers.",
+    }
+
+
+def execute_generate_report(topic: str, language: str = "en") -> dict:
+    """Generate a literature-review report from the corpus. Returns markdown."""
+    try:
+        from report_runner import run_report
+        result = run_report(topic, language)
+        return {
+            "status": "completed", "topic": topic,
+            "markdown": result["markdown"],
+            "citation_count": result["citation_count"],
+            "section_count": len(result.get("sections", [])),
+        }
+    except Exception as e:
+        logger.error(f"[Agent] generate_report failed for {topic!r}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 TOOL_DISPATCH = {
     "indicrag_retrieval": lambda args: execute_indicrag(
         args["query"], args.get("expand_query", False),
@@ -612,5 +655,13 @@ TOOL_DISPATCH = {
     "open_access_search": lambda args: execute_open_access_search(
         args["query"], args.get("max_results", 5),
         args.get("year_range", ""), args.get("open_access_only", True)
+    ),
+    "create_watch": lambda args: (
+        execute_create_watch(args["topic"], args.get("cadence", "weekly"), args.get("language", "en"))
+        if config.WATCH_ENABLE else {"status": "disabled", "message": "Watches are not enabled."}
+    ),
+    "generate_report": lambda args: (
+        execute_generate_report(args["topic"], args.get("language", "en"))
+        if config.REPORT_ENABLE else {"status": "disabled", "message": "Reports are not enabled."}
     ),
 }

@@ -162,6 +162,54 @@ FUNCTION_DECLARATIONS = [
             "required": ["query"],
         },
     ),
+    types.FunctionDeclaration(
+        name="create_watch",
+        description=(
+            "Create a scheduled topic watch that periodically searches for new papers "
+            "on a topic, ingests them, and builds a digest. Use when the user says "
+            "'keep me updated on X', 'monitor Y', or 'watch for new papers about Z'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Topic to watch (e.g. 'transformer antenna optimization').",
+                },
+                "cadence": {
+                    "type": "string",
+                    "description": "How often to check: 'daily', 'weekly', or 'monthly'. Default 'weekly'.",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Language for the digest (default 'en').",
+                },
+            },
+            "required": ["topic"],
+        },
+    ),
+    types.FunctionDeclaration(
+        name="generate_report",
+        description=(
+            "Generate a structured literature-review report on a topic from the indexed "
+            "corpus. Use when the user asks for a 'review', 'report', 'survey', or "
+            "'summary of the literature'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "Topic for the literature review.",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Language for the report (default 'en').",
+                },
+            },
+            "required": ["topic"],
+        },
+    ),
 ]
 
 TOOLS = types.Tool(function_declarations=FUNCTION_DECLARATIONS)

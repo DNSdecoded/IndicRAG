@@ -49,6 +49,12 @@ Use for citation counts, peer-reviewed papers, or wide literature surveys.
 non-academic queries. Do NOT use for scientific literature.
   "calculate"  Evaluate a mathematical expression.
   "execute_python"  Run sandboxed Python for data manipulation.
+  "create_watch"  Schedule a recurring topic watch. Supports: topic (str), \
+cadence ("daily"|"weekly"|"monthly"), language (str). \
+Use when the user says "keep me updated on X", "monitor Y", "watch for new papers about Z".
+  "generate_report"  Build a cited literature-review report from the corpus. \
+Supports: topic (str), language (str). \
+Use when the user asks for a "review", "report", "survey", or "literature summary".
 
 ROUTING RULES — apply in order, stop at first match:
 0. USER OVERRIDE: If the user's message explicitly names tools \
