@@ -356,3 +356,24 @@ def test_rate_limit_headers_present(client):
 
         # Verify that we did hit the rate limit (at least on the 31st request)
         assert rate_limit_exceeded, "Expected to hit rate limit after 31 requests"
+
+
+# ---------------------------------------------------------------------------
+# GET /graph  (Task 3.3 — knowledge/citation graph)
+# ---------------------------------------------------------------------------
+
+def test_graph_returns_all_edges(client):
+    fake = [{"source": "A", "target": "B", "type": "co_citation", "score": 2.0}]
+    with patch("persistence.get_all_edges", return_value=fake):
+        resp = client.get("/graph")
+    assert resp.status_code == 200
+    assert resp.json()["edges"] == fake
+
+
+def test_graph_filters_by_paper_id(client):
+    fake = [{"source": "A", "target": "B", "type": "co_citation", "score": 2.0, "metadata": {}}]
+    with patch("persistence.get_paper_edges", return_value=fake) as m:
+        resp = client.get("/graph", params={"paper_id": "A"})
+    assert resp.status_code == 200
+    m.assert_called_once_with("A")
+    assert resp.json()["edges"] == fake

@@ -46,6 +46,14 @@ def answer_generator_node(state: AgentState) -> dict:
             if cons:
                 prompt += contradiction.contradiction_instruction(cons)
                 logger.info(f"[AnswerGenerator] {len(cons)} contradiction(s) flagged")
+                # Persist to the knowledge graph (Task 3.3). Best-effort.
+                try:
+                    import persistence
+                    persistence.save_graph_edges([
+                        (c["a_title"], c["b_title"], "contradiction", c["score"],
+                         {"context": "auto-detected"}) for c in cons])
+                except Exception as e:
+                    logger.warning(f"[Graph] contradiction persist failed: {e}")
         except Exception as e:
             logger.warning(f"[AnswerGenerator] contradiction check failed: {e}")
 

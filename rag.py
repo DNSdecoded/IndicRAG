@@ -732,6 +732,34 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
         return {"claims": [], "confidence": 0.0}
 
 
+def extract_co_citations(citations: List[Dict]) -> List[tuple]:
+    """Distinct-title pairs among papers actually cited in one answer.
+
+    Uses the resolved `citations` (papers the answer referenced), not all
+    retrieved chunks — retrieval returns top-k, but only the cited papers are a
+    real co-citation signal. Undirected pairs; caller persists them.
+    """
+    titles = []
+    for c in citations:
+        t = ((c or {}).get("title") or "").strip()
+        if t and t not in titles:
+            titles.append(t)
+    return [(titles[i], titles[j])
+            for i in range(len(titles)) for j in range(i + 1, len(titles))]
+
+
+def _persist_co_citations(citations: List[Dict]) -> None:
+    """Best-effort: record co-citation edges. Never breaks answering."""
+    try:
+        pairs = extract_co_citations(citations)
+        if pairs:
+            import persistence
+            persistence.save_graph_edges(
+                [(a, b, "co_citation", 1.0, None) for a, b in pairs])
+    except Exception as e:
+        logger.warning(f"[Graph] co-citation persist failed: {e}")
+
+
 def answer_question_strategy_a(
     user_query: str,
     top_k: int = None,
@@ -804,6 +832,7 @@ def answer_question_strategy_a(
     
     # Extract citations using robust parser
     citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
+    _persist_co_citations(citations)
 
     result = {
         'answer': answer,
@@ -894,6 +923,7 @@ def answer_question_strategy_b(
     
     # Extract citations from ENGLISH answer (before translation) using robust parser
     citations = extract_citations(english_answer, context_data['metadatas'], context_data.get('chunks'))
+    _persist_co_citations(citations)
     
     # Translate answer to target language if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):

@@ -45,6 +45,14 @@ _conn.execute(
     "CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, watch_id TEXT, topic TEXT, "
     "language TEXT, markdown TEXT, citation_count INTEGER, created_at TEXT)"
 )
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS graph_edges ("
+    "source_paper TEXT, target_paper TEXT, edge_type TEXT, "
+    "score REAL, metadata TEXT, created_at TEXT, "
+    "PRIMARY KEY (source_paper, target_paper, edge_type))"
+)
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_source ON graph_edges(source_paper)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_target ON graph_edges(target_paper)")
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -296,3 +304,55 @@ def list_reports(watch_id: str | None = None) -> list[dict]:
             ).fetchall()
     return [{"id": r[0], "watch_id": r[1], "topic": r[2], "language": r[3],
              "citation_count": r[4], "created_at": r[5]} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Knowledge/citation graph (Task 3.3). Edges are undirected — endpoints
+# normalize to source<=target so (A,B) and (B,A) dedupe to one row. Repeated
+# detections of the same pair accumulate score (co-citation frequency /
+# contradiction evidence) via the composite-PK upsert, so the table stays
+# bounded no matter how many queries run.
+# ---------------------------------------------------------------------------
+def save_graph_edges(edges: list) -> None:
+    """Batch upsert edges: list of (source, target, edge_type, score, metadata_dict).
+
+    One lock + commit for the whole batch (a query co-cites up to ~C(k,2) pairs).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for source, target, edge_type, score, metadata in edges:
+        s, t = sorted((source, target))  # undirected: normalize ordering
+        rows.append((s, t, edge_type, score, json.dumps(metadata or {}), now))
+    with _db_lock:
+        _conn.executemany(
+            "INSERT INTO graph_edges (source_paper, target_paper, edge_type, score, metadata, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(source_paper, target_paper, edge_type) DO UPDATE SET "
+            "score = score + excluded.score, created_at = excluded.created_at",
+            rows,
+        )
+        _conn.commit()
+
+
+def save_graph_edge(source: str, target: str, edge_type: str,
+                    score: float, metadata: dict = None) -> None:
+    save_graph_edges([(source, target, edge_type, score, metadata)])
+
+
+def get_all_edges() -> list[dict]:
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT source_paper, target_paper, edge_type, score FROM graph_edges"
+        ).fetchall()
+    return [{"source": r[0], "target": r[1], "type": r[2], "score": r[3]} for r in rows]
+
+
+def get_paper_edges(paper_id: str) -> list[dict]:
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT source_paper, target_paper, edge_type, score, metadata "
+            "FROM graph_edges WHERE source_paper = ? OR target_paper = ?",
+            (paper_id, paper_id),
+        ).fetchall()
+    return [{"source": r[0], "target": r[1], "type": r[2], "score": r[3],
+             "metadata": json.loads(r[4])} for r in rows]

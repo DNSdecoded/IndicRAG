@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import config
 import lang_utils
+import persistence
 import rag
 from deps import verify_api_key, verify_admin_key
 
@@ -519,6 +520,14 @@ async def corpus_map(authenticated: bool = Depends(verify_api_key)):
     timeline = [{"year": y, "count": c} for y, c in sorted(year_counts.items())]
 
     return {"clusters": clusters, "timeline": timeline}
+
+
+@router.get("/graph", tags=["Graph"])
+async def get_graph(paper_id: str = None, authenticated: bool = Depends(verify_api_key)):
+    """Knowledge graph edges (co-citation + contradiction). All edges, or one paper's."""
+    if paper_id:
+        return {"edges": persistence.get_paper_edges(paper_id)}
+    return {"edges": persistence.get_all_edges()}
 
 
 @router.get("/stats", tags=["Management"])
