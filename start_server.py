@@ -72,7 +72,7 @@ def check_auth_config(production=True):
         logger.warning("  All endpoints (including DELETE /purge/*) accept anonymous requests.")
         logger.warning("  Set API_KEYS (and ADMIN_API_KEY) in .env before exposing publicly.")
     elif not os.getenv('ADMIN_API_KEY'):
-        logger.warning("⚠ ADMIN_API_KEY not set — destructive /purge/* routes fall back to API_KEYS.")
+        logger.warning("⚠ ADMIN_API_KEY not set — destructive /purge/* routes are disabled (403).")
     else:
         logger.info("✓ Endpoint auth configured (API_KEYS + ADMIN_API_KEY)")
     return True

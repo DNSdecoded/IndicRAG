@@ -44,9 +44,12 @@ downloads BGE-M3, the reranker and the NLI model, so the healthcheck allows a
 
 #### Query Endpoint
 
+`API_KEYS` is set in production, so every example below sends `X-API-Key`.
+
 ```bash
 # English query
 curl -X POST "http://localhost:8080/query" \
+  -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{
     "question": "What is the treatment for diabetes?",
@@ -56,6 +59,7 @@ curl -X POST "http://localhost:8080/query" \
 
 # Hindi query
 curl -X POST "http://localhost:8080/query" \
+  -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{
     "question": "मधुमेह का इलाज क्या है?",
@@ -66,13 +70,13 @@ curl -X POST "http://localhost:8080/query" \
 #### Health Check
 
 ```bash
-curl http://localhost:8080/health
+curl -H "X-API-Key: key1" http://localhost:8080/health
 ```
 
 #### Statistics
 
 ```bash
-curl http://localhost:8080/stats
+curl -H "X-API-Key: key1" http://localhost:8080/stats
 ```
 
 ---

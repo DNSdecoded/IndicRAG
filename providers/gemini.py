@@ -75,7 +75,10 @@ class GeminiBackend(LLMBackend):
     # remembered per model, so a new model generation doesn't need a hardcoded
     # list here — omitting thinking_config is the closest thing to "no thinking"
     # those models accept.
+    # Class-level on purpose (the learning is about the model, not the instance),
+    # so concurrent requests must not race on the check-then-add.
     _zero_budget_rejected: set = set()
+    _zero_budget_lock = threading.Lock()
 
     @staticmethod
     def _has_zero_thinking_budget(gen_config) -> bool:
@@ -106,9 +109,11 @@ class GeminiBackend(LLMBackend):
 
     def _prep_config(self, client, model, gen_config):
         call_config = self._with_cache(client, model, gen_config)
+        with self._zero_budget_lock:
+            known_rejected = model in self._zero_budget_rejected
         drop_thinking = (
             not self.supports_thinking(model)
-            or (model in self._zero_budget_rejected and self._has_zero_thinking_budget(call_config))
+            or (known_rejected and self._has_zero_thinking_budget(call_config))
         )
         if drop_thinking and getattr(call_config, "thinking_config", None) is not None:
             call_config = call_config.model_copy(update={"thinking_config": None})
@@ -120,12 +125,14 @@ class GeminiBackend(LLMBackend):
         genuine bad request and must keep propagating."""
         if not (self._has_zero_thinking_budget(gen_config) and self._is_invalid_argument(exc)):
             return False
-        if model not in self._zero_budget_rejected:
+        with self._zero_budget_lock:
+            first_time = model not in self._zero_budget_rejected
+            self._zero_budget_rejected.add(model)
+        if first_time:
             logger.warning(
                 "Model %s rejects thinking_budget=0; retrying without thinking_config "
                 "and omitting it for this model from now on.", model,
             )
-            self._zero_budget_rejected.add(model)
         return True
 
     # ── single-client calls (dispatch/failover lives in llm_client) ─────

@@ -461,7 +461,7 @@ Key settings (all overridable via environment variables):
 | `ENABLE_USER_PREFS` | `false` | Enable `/prefs` user preferences |
 | `SESSION_MAX_AGE_HOURS` | `24` | Max session age before eviction (hours) |
 | `CHAT_HISTORY_MAX_TURNS` | `20` | Max conversation turns per session |
-| `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints |
+| `ADMIN_API_KEY` | (none) | Required for `/purge/*` endpoints — fail-closed: with no value set, those routes return 403 for everyone, and an ordinary `API_KEYS` entry never authorizes them |
 | `API_KEYS` | (none) | Comma-separated keys for request auth (each key = isolated user) |
 | `CORS_ORIGINS` | localhost | Comma-separated allowed origins |
 | `LLM_CACHE_SIZE` / `LLM_CACHE_TTL` | `128` / `600` | LLM response cache |

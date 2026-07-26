@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 import logging
 import re as _re
+import threading
 import time
 import uuid
 
@@ -27,7 +28,7 @@ router = APIRouter()
 # as "not existing" before either ingests it.  This lock + registry ensures each
 # paper_id is reserved atomically before download/ingest begins.
 # ---------------------------------------------------------------------------
-_ingest_lock = __import__("threading").Lock()
+_ingest_lock = threading.Lock()
 _inflight_paper_ids: set = set()
 
 # Block the genuinely dangerous characters: null bytes, shell metacharacters.

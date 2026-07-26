@@ -15,7 +15,7 @@ import config
 import persistence
 import rag
 from agent.nodes.finalizer import citation_coverage
-from deps import STATIC_DIR, limiter, verify_api_key, _jobs, _jobs_lock, _update_job
+from deps import STATIC_DIR, limiter, verify_api_key, current_owner, _jobs, _jobs_lock, _update_job
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -366,6 +366,7 @@ async def compare_papers_endpoint(
     body: CompareRequest,
     background_tasks: BackgroundTasks,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """Generate a papers x dimensions comparison table across the corpus.
 
@@ -377,6 +378,10 @@ async def compare_papers_endpoint(
             "job_id": job_id, "status": "pending",
             "submitted_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None, "dimensions": None, "matrix": None, "error": None,
+            # Fingerprint of the submitting key: _jobs is global, so without this
+            # any authenticated caller who guesses a job_id reads someone else's
+            # comparison results. None when auth is off (single-tenant).
+            "owner": owner,
         }
     background_tasks.add_task(_run_compare_job, job_id, body.paper_ids, body.dimensions, body.model)
     return CompareJobResponse(
@@ -386,9 +391,12 @@ async def compare_papers_endpoint(
 
 
 @router.get("/compare/status/{job_id}", tags=["Comparison"])
-async def get_compare_status(job_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_compare_status(job_id: str, authenticated: bool = Depends(verify_api_key),
+                             owner: Optional[str] = Depends(current_owner)):
     with _jobs_lock:
         job = _jobs.get(job_id)
-    if job is None:
+    # 404 rather than 403 on an ownership mismatch — a 403 would confirm the
+    # job_id exists.
+    if job is None or (job.get("owner") is not None and job["owner"] != owner):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job '{job_id}' not found.")
     return job

@@ -6,6 +6,7 @@ waiter has to recover without deregistering another thread's in-flight entry.
 """
 
 import threading
+import time
 from unittest.mock import patch
 
 import numpy as np
@@ -53,11 +54,27 @@ def test_waiter_recovers_when_owner_fails():
     attempts = []
     lock = threading.Lock()
 
+    # Without this handshake the owner can fail before any other thread reaches
+    # the in-flight event, so the test would pass without ever exercising the
+    # recovery path. Count arrivals on the event and hold the owner until two
+    # waiters are actually parked on it.
+    waiters_parked = threading.Event()
+    waiter_count = [0]
+
+    class CountingEvent(threading.Event):
+        def wait(self, timeout=None):
+            with lock:
+                waiter_count[0] += 1
+                if waiter_count[0] >= 2:
+                    waiters_parked.set()
+            return super().wait(timeout)
+
     def flaky_embed_texts(texts, **kwargs):
         with lock:
             attempts.append(1)
             first = len(attempts) == 1
         if first:
+            assert waiters_parked.wait(timeout=10), "waiters never reached the in-flight event"
             raise RuntimeError("owner encode failed")
         return np.full((1, 4), 7.0, dtype=np.float32)
 
@@ -69,13 +86,28 @@ def test_waiter_recovers_when_owner_fails():
         except Exception as e:            # the owner surfaces its own failure
             errors.append(e)
 
-    with patch.object(embeddings, "embed_texts", side_effect=flaky_embed_texts):
-        threads = [threading.Thread(target=call) for _ in range(3)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+    with patch.object(embeddings, "embed_texts", side_effect=flaky_embed_texts), \
+            patch.object(threading, "Event", CountingEvent):
+        owner = threading.Thread(target=call)
+        owner.start()
+        # Wait until the owner has registered, so the other two are guaranteed
+        # to take the waiter branch rather than racing to own the compute.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with embeddings._in_flight_lock:
+                if "flaky query" in embeddings._in_flight:
+                    break
+            time.sleep(0.005)
+        else:
+            raise AssertionError("owner never registered an in-flight entry")
 
+        waiters = [threading.Thread(target=call) for _ in range(2)]
+        for t in waiters:
+            t.start()
+        for t in [owner, *waiters]:
+            t.join(timeout=15)
+
+    assert waiter_count[0] >= 2, "recovery path was not exercised"
     assert len(errors) <= 1, "only the owning thread may propagate the failure"
     assert values, "waiters must recover with a computed embedding"
     with embeddings._in_flight_lock:
