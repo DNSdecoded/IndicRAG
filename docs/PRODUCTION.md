@@ -348,7 +348,14 @@ tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/
 
 # Backup papers
 tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/
+
+# Backup user state — sessions, chat history, feedback, watches, saved reports.
+# Use sqlite3 .backup, not cp: the DB is in WAL mode.
+sqlite3 sessions.db ".backup 'sessions_$(date +%Y%m%d).db'"
 ```
+
+Rollback procedure and the 2.4.0 `ADMIN_API_KEY` upgrade step are in
+[DEPLOYMENT.md](DEPLOYMENT.md#-rollback).
 
 ### Restore Data
 

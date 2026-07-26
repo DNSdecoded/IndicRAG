@@ -333,13 +333,68 @@ python start_server.py
 
 ### Backup Data
 
-```bash
-# Backup vector database
-tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/  # Linux/Mac
+Three things need backing up. `sessions.db` is the one people forget — it holds
+**all** user state (sessions, chat history, feedback, watches, saved reports,
+job records). Losing it loses everything except the corpus.
 
-# Backup papers
-tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/
+```bash
+# Stop the server first, or at least accept a slightly stale snapshot: the DB
+# runs in WAL mode, so the -wal/-shm sidecars matter.
+tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/     # vector store
+tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/        # source PDFs
+sqlite3 sessions.db ".backup 'sessions_$(date +%Y%m%d).db'"  # user state
 ```
+
+`sqlite3 .backup` is safe against a running server; a plain `cp` of
+`sessions.db` without its `-wal` file can produce a torn snapshot.
+
+---
+
+## ⏪ Rollback
+
+Take the backups above **before** deploying. Then:
+
+```bash
+# 1. Put the previous release back
+git checkout v2.3.0        # or the tag/commit you were running
+pip install -r requirements.txt
+
+# 2. Restore state captured before the upgrade
+tar -xzf chroma_backup_YYYYMMDD.tar.gz
+cp sessions_YYYYMMDD.db sessions.db
+
+# 3. Restart
+python start_server.py
+```
+
+**What rolls back cleanly and what doesn't:**
+
+- **Vector store and papers** — restore from the tarballs above, no caveats.
+- **`sessions.db`** — schema changes are additive (`CREATE TABLE IF NOT EXISTS`,
+  no `ALTER`), so a newer database keeps working on an older release; the older
+  code simply ignores tables it doesn't know about. Rows written by the newer
+  release into new tables (e.g. `reports`, `query_log`) are invisible to it.
+  There is no schema version marker, so verify this yourself before relying on
+  it across a release that adds columns rather than tables.
+- **Configuration** — `.env` is not versioned. Keep a copy alongside the
+  backups; a rollback that keeps a newer `.env` can start the old code with
+  variables it doesn't understand.
+
+### Upgrading to 2.4.0
+
+One breaking change: **`/purge/*` is now fail-closed.** It previously accepted
+any key in `API_KEYS` when `ADMIN_API_KEY` was unset, and accepted anonymous
+requests when `API_KEYS` was empty. Both are gone.
+
+Before deploying 2.4.0, set a dedicated admin key:
+
+```bash
+ADMIN_API_KEY=a-separate-long-random-string
+```
+
+Without it, every `/purge/*` request returns
+`403 ADMIN_KEY_NOT_CONFIGURED` — including automation that used to purge with an
+ordinary user key.
 
 ---
 
