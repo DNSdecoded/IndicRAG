@@ -32,13 +32,17 @@ The pipeline doesn't hardcode language-specific logic. Instead:
 - Embeddings handle all languages uniformly
 - Prompts adapt based on detected language
 
-### 3. Offline-First
+### 3. Local-First Retrieval
 
-Can run completely offline:
-- Local embedding model (sentence-transformers)
+Everything except generation runs locally:
+- Local embedding model (sentence-transformers, `BAAI/bge-m3`)
 - Local vector store (ChromaDB)
-- Local LLM (Ollama)
+- Local NLI model for faithfulness and contradiction checks
 - Optional: Local translation (IndicTrans2)
+
+Generation itself is remote. The shipped backends are Gemini and OpenRouter
+(`providers/gemini.py`, `providers/openrouter.py`), dispatched by `llm_client.py`.
+A local LLM would mean adding a third `LLMBackend` implementation.
 
 ---
 
@@ -275,11 +279,9 @@ Answer in हिंदी using the context.
 - Inconsistent formatting across languages
 - Requires multilingual LLM (limits model choice)
 
-**Best LLMs for Strategy A:**
-- Gemma-2-9B-IT (good Hindi/Bengali support)
-- Aya-23-8B (optimized for Indic languages)
-- GPT-4 (best quality but expensive)
-- Mistral-7B-Instruct (decent multilingual)
+**Models for Strategy A:** the default `gemini-3.6-flash` handles all supported
+Indic languages directly. Any multilingual entry in `LLM_SELECTABLE_MODELS` works;
+English-only models will degrade here.
 
 ### Strategy B: English Reasoning + Translation
 
@@ -309,11 +311,9 @@ Translate to Hindi (IndicTrans2)
 - Potential translation errors
 - May lose nuance in translation
 
-**Best LLMs for Strategy B:**
-- GPT-4 (best reasoning)
-- Claude-3 (good scientific understanding)
-- Llama-3-70B (strong open-source option)
-- Mixtral-8x7B (good quality/speed trade-off)
+**Models for Strategy B:** any model in `LLM_SELECTABLE_MODELS`, including
+English-only ones — the LLM only ever sees English. Reasoning-strength models
+pay off most here.
 
 ### When to Use Each
 
@@ -374,38 +374,75 @@ with Pool(4) as p:
 # 1. Reduce top_k
 retrieve_context(query, top_k=5)  # vs top_k=10
 
-# 2. Use faster LLM
-# Gemma-2-9B: ~2s per response
-# GPT-4: ~5-10s per response
+# 2. Pick a faster model from LLM_SELECTABLE_MODELS
+#    (gemini-*-flash is the fast path; large reasoning models cost seconds)
 
-# 3. Cache embeddings
-# Embedding model is cached after first load
+# 3. Caching (see below) — a repeat retrieval is effectively free
 
 # 4. Parallel translation (Strategy B)
 # Translate query while retrieving context
 ```
 
+### Caching and Filtering
+
+**Retrieval cache** (`cache.retrieval_cache`, TTL + LRU) keys on the query and
+retrieval parameters. It applies only to *unscoped* retrievals: a request that
+passes an explicit `collection` or a metadata `filter_dict` bypasses the cache
+entirely, and that decision is made *before* the collection is materialized.
+Entries are deep-copied on both write and read so a caller mutating a result
+cannot corrupt the cached copy. Repeat queries drop from seconds to
+sub-millisecond; `GET /cache/stats` exposes hit rates.
+
+**LLM cache** keys include the effective system instruction, so two calls that
+differ only in system prompt do not collide.
+
+**Tag filtering** is a Python post-filter, not a Chroma `where` clause: tags are
+persisted as a single comma-joined metadata string, which Chroma cannot match
+per-element. Because filtering happens after retrieval, a tagged search widens
+its fetch to `top_k * TAGS_OVERFETCH` (capped at `TAGS_OVERFETCH_MAX`) and
+truncates back to `top_k` afterwards. Without the over-fetch a tag query
+returns nothing whenever the tagged chunks fall outside the first `top_k`.
+
+### LLM Dispatch and Failover
+
+`llm_client.generate_with_failover` builds an ordered attempt chain: requested
+`(provider, model)` → same-provider fallback → cross-provider fallback → a
+guaranteed Gemini backstop. Each `(provider, model)` pair has its own circuit
+breaker, so one model's 429 does not disable the others.
+
+The cross-provider fallback model must be *shaped* for its provider. A bare
+Gemini model name handed to OpenRouter is silently rewritten to
+`google/<model>` — which routes the "cross-vendor" fallback straight back to the
+vendor that just failed. `_fallback_model_for` therefore selects the first
+`/`-shaped slug in `LLM_SELECTABLE_MODELS`; keep at least one such slug in that
+list.
+
+Some Gemini models reject `thinking_config` with `thinking_budget=0` and return
+`400 INVALID_ARGUMENT`. `GeminiBackend` records the rejection per model and
+retries once without `thinking_config`; streaming only retries if nothing has
+been emitted yet.
+
 ### Memory Usage
 
 **Components:**
-1. Embedding model: ~2GB RAM
-2. Translation models: ~5GB RAM (Strategy B)
-3. LLM: Varies (Gemma-2-9B: ~18GB, GPT-4: API call)
-4. ChromaDB: ~100MB per 10k chunks
+1. Embedding model (`BAAI/bge-m3`): ~2GB RAM
+2. Reranker + NLI models: ~2GB RAM
+3. Translation models: ~5GB RAM (Strategy B)
+4. LLM: remote (API call), no local RAM
+5. ChromaDB: ~100MB per 10k chunks
 
 **Total RAM required:**
-- Strategy A (local): ~20-25GB (with local LLM)
-- Strategy A (API): ~2-3GB
-- Strategy B (local): ~25-30GB
-- Strategy B (API): ~7-8GB
+- Strategy A: ~4-5GB
+- Strategy B: ~9-10GB
 
 **Optimization:**
 ```python
 # 1. Use smaller embedding model
-EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"  # 384 dim vs 768
+EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"  # 384 dim vs 1024
 
-# 2. Quantize LLM (if local)
-# Use GGUF quantized models with Ollama
+# 2. Disable optional rerank layers
+USE_COLBERT_RERANK = False
+USE_RERANKER = False
 
 # 3. Unload translation models when not in use
 _en_to_indic_model = None  # Free memory
