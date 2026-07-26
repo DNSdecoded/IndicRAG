@@ -17,6 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 import config
+import persistence
 from deps import verify_api_key, _jobs, _jobs_lock, _update_job
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,19 @@ def _run_report_job(job_id: str, topic: str, language: str):
     _update_job(job_id, status="running")
     try:
         result = report_runner.run_report(topic, language, progress_cb=_make_progress_cb(job_id))
+        completed_at = datetime.now(timezone.utc).isoformat()
         _update_job(
             job_id,
             status="success",
             sections=result["sections"],
             citation_count=result["citation_count"],
             markdown=result["markdown"],
-            completed_at=datetime.now(timezone.utc).isoformat(),
+            completed_at=completed_at,
+        )
+        persistence.save_report(
+            report_id=job_id, watch_id="", topic=topic, language=language,
+            markdown=result["markdown"], citation_count=result["citation_count"],
+            created_at=completed_at,
         )
         logger.info(f"[Report] job {job_id} finished ({len(result['sections'])} sections)")
     except Exception as e:
@@ -135,3 +142,22 @@ async def download_report(job_id: str, authenticated: bool = Depends(verify_api_
         content=job["markdown"], media_type="text/markdown",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/reports", tags=["Report"])
+async def list_persisted_reports(watch_id: str = None, authenticated: bool = Depends(verify_api_key)):
+    """List durably-stored reports (survives restart), newest first.
+
+    Distinct from GET /report/status/{job_id}: that's the in-memory job store
+    for a report still being generated; this is the persisted artifact,
+    including watch-owned living reviews that get regenerated in place.
+    """
+    return persistence.list_reports(watch_id)
+
+
+@router.get("/reports/{report_id}", tags=["Report"])
+async def get_persisted_report(report_id: str, authenticated: bool = Depends(verify_api_key)):
+    report = persistence.get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Report '{report_id}' not found.")
+    return report

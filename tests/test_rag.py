@@ -1,5 +1,77 @@
 """Unit tests for rag.py — citation parsing, prompt building, context formatting."""
 
+from unittest.mock import patch
+
+
+def test_run_faithfulness_returns_mean_confidence():
+    from rag import _run_faithfulness
+
+    claims = [
+        {"claim": "a", "support": 0.9, "grounded": True},
+        {"claim": "b", "support": 0.3, "grounded": False},
+    ]
+    with patch("verify.check_claims", return_value=claims):
+        result = _run_faithfulness("answer text", ["chunk"], [{"title": "P"}])
+
+    assert result["claims"] == claims
+    assert result["confidence"] == 0.6
+
+
+def test_run_faithfulness_zero_confidence_when_no_claims():
+    from rag import _run_faithfulness
+
+    with patch("verify.check_claims", return_value=[]):
+        result = _run_faithfulness("answer text", ["chunk"], [{"title": "P"}])
+
+    assert result == {"claims": [], "confidence": 0.0}
+
+
+def test_compare_papers_builds_matrix():
+    """compare_papers must scope retrieval per paper and ask one extraction
+    per dimension, keyed matrix[paper_id][dimension]."""
+    from rag import compare_papers
+
+    scoped_by_paper = {
+        "p1": {"chunks": ["p1 text"], "metadatas": [{"paper_id": "p1"}],
+               "formatted_context": "[1] Paper One - body:\np1 text\n", "chunks_used": 1},
+        "p2": {"chunks": ["p2 text"], "metadatas": [{"paper_id": "p2"}],
+               "formatted_context": "[1] Paper Two - body:\np2 text\n", "chunks_used": 1},
+    }
+
+    def fake_retrieve_scoped(filter_dict, collection):
+        pid = filter_dict["paper_id"]["$in"][0]
+        return scoped_by_paper[pid]
+
+    def fake_llm_generate(prompt, max_tokens=None, model=None):
+        # Echo back which paper/dimension the prompt was built for, so the
+        # test can assert the matrix cell actually came from the right call.
+        return f"answer for {prompt.splitlines()[-1]}"
+
+    with patch("rag._retrieve_scoped", side_effect=fake_retrieve_scoped), \
+         patch("rag.llm_generate", side_effect=fake_llm_generate), \
+         patch("vector_store.get_or_create_collection", return_value=object()):
+        result = compare_papers(["p1", "p2"], ["methodology", "dataset"])
+
+    assert result["dimensions"] == ["methodology", "dataset"]
+    assert set(result["matrix"].keys()) == {"p1", "p2"}
+    assert "p1 text" in result["matrix"]["p1"]["methodology"]
+    assert "p2 text" in result["matrix"]["p2"]["dataset"]
+
+
+def test_compare_papers_missing_paper_marks_na_without_llm_call():
+    """A paper_id with no chunks in the corpus must not burn an LLM call per
+    dimension — every cell for it is N/A."""
+    from rag import compare_papers
+
+    with patch("rag._retrieve_scoped", return_value={"chunks": [], "metadatas": [],
+                                                       "formatted_context": "", "chunks_used": 0}), \
+         patch("rag.llm_generate") as mock_llm, \
+         patch("vector_store.get_or_create_collection", return_value=object()):
+        result = compare_papers(["missing_paper"], ["methodology"])
+
+    assert result["matrix"]["missing_paper"]["methodology"] == "N/A — paper not found in corpus"
+    mock_llm.assert_not_called()
+
 
 def test_extract_citations_cite_format():
     from rag import extract_citations
@@ -47,6 +119,86 @@ def test_build_paper_filter_none_when_empty():
     assert build_paper_filter(None) is None
     assert build_paper_filter([]) is None
     assert build_paper_filter(["", "   "]) is None
+
+
+def test_build_tags_filter_parses_comma_separated():
+    from routes.query import build_tags_filter
+    import rag
+
+    assert build_tags_filter("transformer, efficiency") == {
+        rag._TAGS_SENTINEL: ["transformer", "efficiency"]
+    }
+
+
+def test_build_tags_filter_none_when_blank():
+    from routes.query import build_tags_filter
+
+    assert build_tags_filter(None) is None
+    assert build_tags_filter("") is None
+    assert build_tags_filter("  ,  ") is None
+
+
+def test_combine_filters_ands_multiple_present():
+    from routes.query import combine_filters
+
+    assert combine_filters({"paper_id": {"$in": ["p1"]}}, {"tags": {"$in": ["t1"]}}) == {
+        "$and": [{"paper_id": {"$in": ["p1"]}}, {"tags": {"$in": ["t1"]}}]
+    }
+    assert combine_filters({"paper_id": {"$in": ["p1"]}}, None) == {"paper_id": {"$in": ["p1"]}}
+    assert combine_filters(None, None) is None
+
+
+def test_extract_tags_post_filter_sentinel_only():
+    from rag import _extract_tags_post_filter, _TAGS_SENTINEL
+
+    chroma_safe, tags = _extract_tags_post_filter({_TAGS_SENTINEL: ["a", "b"]})
+    assert chroma_safe is None
+    assert tags == ["a", "b"]
+
+
+def test_extract_tags_post_filter_combined_with_and():
+    """paper_id must resurface as a top-level key after extraction, so the
+    paper-scoped retrieval branch (`'paper_id' in filter_dict`) still fires."""
+    from rag import _extract_tags_post_filter, _TAGS_SENTINEL
+
+    combined = {"$and": [{"paper_id": {"$in": ["p1"]}}, {_TAGS_SENTINEL: ["a"]}]}
+    chroma_safe, tags = _extract_tags_post_filter(combined)
+    assert chroma_safe == {"paper_id": {"$in": ["p1"]}}
+    assert tags == ["a"]
+
+
+def test_extract_tags_post_filter_no_sentinel_passthrough():
+    from rag import _extract_tags_post_filter
+
+    original = {"year": {"$gte": "2020"}}
+    chroma_safe, tags = _extract_tags_post_filter(original)
+    assert chroma_safe == original
+    assert tags is None
+
+
+def test_apply_tags_post_filter_matches_multi_tag_comma_joined_paper():
+    """The actual regression this card exists to fix: PATCH /papers stores tags
+    as one unsplit string (e.g. 'transformer,efficiency'), so a paper tagged with
+    2+ tags must still match a filter for just one of them."""
+    from rag import _apply_tags_post_filter
+
+    results = {
+        "chunks": ["c1", "c2"],
+        "metadatas": [{"tags": "transformer,efficiency"}, {"tags": "unrelated"}],
+        "distances": [0.1, 0.2],
+    }
+    filtered = _apply_tags_post_filter(results, ["transformer"])
+    assert filtered["chunks"] == ["c1"]
+    assert filtered["metadatas"] == [{"tags": "transformer,efficiency"}]
+    assert filtered["distances"] == [0.1]
+
+
+def test_apply_tags_post_filter_no_match_returns_empty():
+    from rag import _apply_tags_post_filter
+
+    results = {"chunks": ["c1"], "metadatas": [{"tags": "unrelated"}], "distances": [0.1]}
+    filtered = _apply_tags_post_filter(results, ["transformer"])
+    assert filtered["chunks"] == []
 
 
 class _ScopedFakeCollection:
@@ -143,6 +295,158 @@ def test_extract_citations_comma_separated():
     assert result[0]["title"] == "Paper A"
     assert result[1]["number"] == "2"
     assert result[1]["title"] == "Paper B"
+
+
+def _fake_search_results(n_untagged: int, n_tagged: int, tag: str = "thz"):
+    """Dense results where the tagged chunks rank last — the starvation shape."""
+    docs = [f"untagged {i}" for i in range(n_untagged)] + [f"tagged {i}" for i in range(n_tagged)]
+    metas = ([{"title": f"U{i}", "section": "body"} for i in range(n_untagged)]
+             + [{"title": f"T{i}", "section": "body", "tags": f"{tag},review"} for i in range(n_tagged)])
+    return {
+        "ids": [f"id{i}" for i in range(len(docs))],
+        "documents": docs,
+        "metadatas": metas,
+        "distances": [0.1 * (i + 1) for i in range(len(docs))],
+    }
+
+
+def test_tags_filter_overfetches_so_low_ranked_tagged_chunks_survive():
+    """Regression: the tags post-filter runs after retrieval, so fetching exactly
+    top_k returned zero results whenever tagged papers ranked below the cut."""
+    import config
+    import rag
+
+    captured = {}
+
+    def fake_search(query_embedding, top_k, filter_dict, collection):
+        captured["top_k"] = top_k
+        return _fake_search_results(n_untagged=12, n_tagged=1)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        result = rag.retrieve_context(
+            "q", top_k=5, filter_dict={rag._TAGS_SENTINEL: ["thz"]}
+        )
+
+    assert captured["top_k"] > 5, "must widen the fetch when a tags post-filter is active"
+    assert result["chunks_used"] == 1
+    assert result["chunks"] == ["tagged 0"]
+
+
+def test_tags_filter_result_never_exceeds_requested_top_k():
+    import config
+    import rag
+
+    with patch("vector_store.search", return_value=_fake_search_results(0, 9)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        result = rag.retrieve_context("q", top_k=3, filter_dict={rag._TAGS_SENTINEL: ["thz"]})
+
+    assert len(result["chunks"]) == 3
+    assert len(result["metadatas"]) == 3
+    assert len(result["distances"]) == 3
+
+
+def test_untagged_query_fetch_width_unchanged():
+    """No tags → the fetch width must stay exactly top_k (no extra Chroma work)."""
+    import config
+    import rag
+
+    captured = {}
+
+    def fake_search(query_embedding, top_k, filter_dict, collection):
+        captured["top_k"] = top_k
+        return _fake_search_results(n_untagged=4, n_tagged=0)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("q", top_k=5, filter_dict={"year": {"$gte": "2020"}})
+
+    assert captured["top_k"] == 5
+
+
+def test_retrieval_cache_actually_stores_and_hits():
+    """Regression: the store step re-tested `collection is None` after the local
+    had already been assigned a collection, so nothing was ever cached and every
+    repeat query paid a full embed + search + rerank."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    searches = []
+
+    def fake_search(**kwargs):
+        searches.append(1)
+        return _fake_search_results(3, 0)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("repeat me", top_k=3)
+        rag.retrieve_context("repeat me", top_k=3)
+
+    assert len(searches) == 1, "second identical query must be served from the cache"
+    assert retrieval_cache.stats["size"] == 1
+    retrieval_cache.invalidate()
+
+
+def test_retrieval_cache_not_used_for_explicit_collection_or_filter():
+    """Scoped/filtered lookups must stay uncached (they key off caller state)."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    with patch("vector_store.search", side_effect=lambda **kw: _fake_search_results(3, 0)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("q", top_k=3, filter_dict={"year": {"$gte": "2020"}})
+        rag.retrieve_context("q", top_k=3, collection=object())
+
+    assert retrieval_cache.stats["size"] == 0
+    retrieval_cache.invalidate()
+
+
+def test_retrieval_cache_hit_returns_independent_lists():
+    """A caller trimming the returned lists must not corrupt the cached entry."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    # side_effect (not return_value): a shared mock dict would let the first
+    # caller's mutation come back through the mock itself, hiding the real
+    # question — whether the *cache* handed out an aliased list.
+    with patch("vector_store.search", side_effect=lambda **kw: _fake_search_results(4, 0)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        first = rag.retrieve_context("cache probe", top_k=4)
+        del first["chunks"][:]                      # hostile caller
+        second = rag.retrieve_context("cache probe", top_k=4)
+
+    assert len(second["chunks"]) == 4, "cache entry was mutated by a previous caller"
+    retrieval_cache.invalidate()
 
 
 def test_extract_citations_comma_no_spaces():

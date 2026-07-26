@@ -168,6 +168,13 @@ DEFAULT_TOP_K = 15  # dense + BM25 fusion, then rerank narrow
 MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
 MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
 
+# Tags are applied as a Python-side post-filter (ChromaDB can't match one tag
+# inside the stored comma-joined string), so a plain top-k fetch returns zero
+# results whenever the tagged papers rank below the cut. Over-fetch first, then
+# filter, then narrow back to top_k. TAGS_OVERFETCH_MAX bounds the widened fetch.
+TAGS_OVERFETCH = int(os.getenv("TAGS_OVERFETCH", "10"))
+TAGS_OVERFETCH_MAX = int(os.getenv("TAGS_OVERFETCH_MAX", "300"))
+
 # Agentic mode gathers passages from up to 4 tool calls, so the 12-chunk cap can
 # truncate formula/equation chunks off the tail before the LLM sees them. The
 # agent answer generator uses a wider cap (Gemini's window has the room).
@@ -271,10 +278,10 @@ AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.5-flash")  # Gemini model
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.6-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
-# gemini-3.5-flash already does IMPLICIT caching for free; explicit caching adds
+# gemini-3.6-flash already does IMPLICIT caching for free; explicit caching adds
 # guaranteed reuse but is billed per token-hour of storage — so it's OFF by default.
 # Enable only if your system prompts clear the model's min-token cache floor and you
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
@@ -311,7 +318,7 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(
     "LLM_SELECTABLE_MODELS",
-    "gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+    "gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
 # How long the enriched OpenRouter /models catalog is cached (seconds).
@@ -489,7 +496,7 @@ VERSION = "2.3.0-dev"
 # ============================================================================
 # Chat / Session
 # ============================================================================
-CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "10"))
+CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "20"))
 SESSION_MAX_AGE_HOURS = int(os.getenv("SESSION_MAX_AGE_HOURS", "24"))
 
 # ============================================================================

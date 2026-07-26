@@ -1,19 +1,24 @@
-"""Route: /agent/query."""
+"""Route: /agent/query, /agent/stream."""
 
 from datetime import datetime, timezone
 from typing import List, Optional
 import asyncio
+import json
 import logging
 import threading
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import config
+import persistence
 import rag
 from agent.state import AgentState
+from agent.nodes.finalizer import citation_coverage
 from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,7 @@ class AgentQueryResponse(BaseModel):
     timestamp: str
     answer_confidence: Optional[float] = None
     abstained: bool = False
+    query_id: str = ""
 
 
 @router.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
@@ -197,6 +203,19 @@ async def agent_query(
     # Order the panel by citation number so [1],[2],... read in sequence.
     sources.sort(key=lambda s: s.number)
 
+    query_id = str(uuid.uuid4())
+    try:
+        persistence.log_query(
+            query_id=query_id, question=body.question, answer=result["final_answer"],
+            mode=f"agent_{body.strategy}", model=body.model or "default",
+            language=result.get("detected_language", "en"),
+            confidence=result.get("answer_confidence") or 0.0,
+            coverage=citation_coverage(result["final_answer"]),
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception:
+        logger.warning("Failed to log query for feedback correlation", exc_info=True)
+
     return AgentQueryResponse(
         answer=result["final_answer"],
         session_id=session_id,
@@ -208,4 +227,143 @@ async def agent_query(
         timestamp=datetime.now(timezone.utc).isoformat(),
         answer_confidence=result.get("answer_confidence"),
         abstained=result.get("abstained", False),
+        query_id=query_id,
     )
+
+
+@router.post("/agent/stream", tags=["Agent"])
+@limiter.limit("10/minute")
+async def agent_stream(
+    request: Request,
+    body: AgentQueryRequest,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Stream agentic query results as Server-Sent Events.
+
+    Runs the full agent pipeline, then streams the final answer in chunks
+    along with metadata events for sources, tool calls, and timing.
+    """
+    start_time = time.time()
+    session_id, messages = _get_or_create_session(body.session_id)
+
+    initial_state = AgentState(
+        original_query=body.question,
+        detected_language="",
+        query_plan=[],
+        tool_calls_requested=[],
+        retrieved_contexts=[],
+        draft_answer=None,
+        final_answer=None,
+        reflexion_count=0,
+        reflexion_history=[],
+        tool_calls_log=[],
+        conversation_history=list(messages),
+        session_id=session_id,
+        strategy=body.strategy,
+        start_time=time.monotonic(),
+        requested_model=body.model,
+        requested_provider=body.provider,
+    )
+
+    async def _run_and_stream():
+        # --- Phase 1: run the agent pipeline ---
+        thinking_msg = json.dumps({"type": "thinking", "text": "Running agent pipeline…"})
+        yield f"data: {thinking_msg}\n\n"
+
+        try:
+            result = await asyncio.wait_for(
+                run_in_threadpool(_get_agent_graph().invoke, initial_state),
+                timeout=float(config.AGENT_TIMEOUT),
+            )
+        except asyncio.TimeoutError:
+            err = json.dumps({"type": "error", "message": "Agent pipeline timed out."})
+            yield f"data: {err}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        except Exception as e:
+            err = json.dumps({"type": "error", "message": str(e)[:200]})
+            yield f"data: {err}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        processing_time = time.time() - start_time
+        _append_session_messages(session_id, body.question, result["final_answer"])
+
+        # --- Phase 2: stream tool calls as thinking events ---
+        for tc in result.get("tool_calls_log", []):
+            tool_msg = json.dumps({
+                "type": "thinking",
+                "text": f"Tool: {tc.get('tool', '?')} ({tc.get('latency_ms', 0):.0f}ms)",
+            })
+            yield f"data: {tool_msg}\n\n"
+
+        # --- Phase 3: stream the final answer in chunks ---
+        final_answer = result["final_answer"] or ""
+        chunk_size = 80  # characters per SSE chunk
+        for i in range(0, len(final_answer), chunk_size):
+            chunk = final_answer[i:i + chunk_size]
+            yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+
+        # --- Phase 4: build sources list ---
+        all_contexts = result.get("retrieved_contexts", [])
+        cited_titles: set = set()
+        title_to_num: dict = {}
+        try:
+            metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+                     for c in all_contexts]
+            for num, meta in rag.citation_number_map(metas).items():
+                title_to_num[(meta.get("title") or "Unknown").strip()] = num
+            for cit in rag.extract_citations(final_answer, metas):
+                cited_titles.add(cit["title"].strip())
+        except Exception:
+            pass
+
+        seen_titles: set = set()
+        sources = []
+        for ctx in all_contexts:
+            title = ctx.get("title", "").strip()
+            if not title or title in seen_titles or title in ("Unknown", "No results"):
+                continue
+            if cited_titles and title not in cited_titles:
+                continue
+            seen_titles.add(title)
+            sources.append({
+                "number": title_to_num.get(title, len(sources) + 1),
+                "title": title,
+                "source": ctx.get("source", ""),
+                "section": ctx.get("section", ""),
+                "pdf_url": ctx.get("pdf_url", ""),
+                "year": ctx.get("year", ""),
+                "authors": ctx.get("authors", ""),
+            })
+        sources.sort(key=lambda s: s["number"])
+
+        # --- Phase 5: done event with full metadata ---
+        query_id = str(uuid.uuid4())
+        try:
+            persistence.log_query(
+                query_id=query_id, question=body.question, answer=final_answer,
+                mode=f"agent_{body.strategy}", model=body.model or "default",
+                language=result.get("detected_language", "en"),
+                confidence=result.get("answer_confidence") or 0.0,
+                coverage=citation_coverage(final_answer),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception:
+            pass
+
+        done_payload = {
+            "type": "done",
+            "citations": sources,
+            "language": result.get("detected_language", "en"),
+            "session_id": session_id,
+            "query_id": query_id,
+            "processing_time": processing_time,
+            "model": body.model or "default",
+            "reflexion_iterations": result.get("reflexion_count", 0),
+            "tool_calls": result.get("tool_calls_log", []),
+        }
+        yield f"data: {json.dumps(done_payload)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_run_and_stream(), media_type="text/event-stream")

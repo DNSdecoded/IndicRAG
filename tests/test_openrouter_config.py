@@ -10,7 +10,7 @@ def test_provider_defaults(monkeypatch):
     assert config.LLM_PROVIDER == "gemini"
     assert config.LLM_FALLBACK_PROVIDER == "openrouter"
     assert config.OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
-    assert config.LLM_SELECTABLE_MODELS[0] == "gemini-3.5-flash"
+    assert config.LLM_SELECTABLE_MODELS[0] == "gemini-3.6-flash"
     assert config.MODELS_CACHE_TTL == 3600
 
 

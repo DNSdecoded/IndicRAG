@@ -7,6 +7,7 @@ and the per-query regression gate.
 from evaluate import (
     ndcg_at_k, recall_at_k, precision_at_k,
     citation_grounding, evaluate, jaccard, make_grounding_scorer,
+    write_history_snapshot,
 )
 
 
@@ -85,6 +86,16 @@ def test_per_query_overall_present():
     res = {"results": [{"query_id": "1", "retrieved_papers": ["a"], "answer_claims": []}]}
     m = evaluate(j, res, 5)
     assert "overall" in m["per_query"][0]
+
+
+def test_write_history_snapshot_creates_timestamped_file():
+    import json as _json
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = write_history_snapshot({"overall": 0.9}, history_dir=d)
+        assert path.exists()
+        assert path.name.endswith("_eval_report.json")
+        assert _json.loads(path.read_text())["overall"] == 0.9
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from typing import Optional
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 import config
@@ -46,6 +46,22 @@ async def submit_feedback(
         datetime.now(timezone.utc).isoformat(),
     )
     return FeedbackResponse(status="recorded", feedback_id=feedback_id)
+
+
+@router.get("/feedback", tags=["Feedback"])
+async def list_feedback(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Return feedback entries joined with their query context, newest first."""
+    return persistence.get_feedback_with_context(limit, offset)
+
+
+@router.get("/feedback/stats", tags=["Feedback"])
+async def get_feedback_stats(authenticated: bool = Depends(verify_api_key)):
+    """Aggregate feedback totals and per-language approval rates."""
+    return persistence.feedback_stats()
 
 
 class PrefsRequest(BaseModel):

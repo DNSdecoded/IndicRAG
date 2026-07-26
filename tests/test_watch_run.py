@@ -110,6 +110,92 @@ def test_no_new_papers_keeps_prior_digest(monkeypatch):
     assert persistence.get_watch("w1")["latest_digest"] == "OLD"  # unchanged
 
 
+def test_pdf_ingest_triggers_cache_refresh(monkeypatch):
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.001")])
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == [1]  # BM25/cache must be invalidated so the paper is searchable
+
+
+def test_corpus_duplicate_does_not_trigger_cache_refresh(monkeypatch):
+    _save("w1")
+    # ingest_pdf returns 0 chunks → duplicate/unchanged in corpus, nothing indexed
+    _patch(monkeypatch, [_hit("2401.001")], ingest=lambda *a, **k: (0, "Dup"))
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == []  # duplicate content, nothing new to make searchable
+
+
+def test_abstract_only_does_not_trigger_cache_refresh(monkeypatch):
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.003", pdf=False)])
+    calls = []
+    monkeypatch.setattr(watch_runner, "_post_ingest_refresh", lambda: calls.append(1))
+
+    watch_runner.run_watch("w1")
+
+    assert calls == []  # nothing was actually indexed, no refresh needed
+
+
+def test_owned_report_regenerated_when_new_papers_ingested(monkeypatch):
+    """A watch with report_id set owns a 'living review': every time it
+    actually indexes a new paper, the report regenerates in place under
+    the same report_id (no confirmation button a user would forget to click)."""
+    import persistence as persistence_module
+
+    _save("w1", report_id="rep-1")
+    _patch(monkeypatch, [_hit("2401.001")])  # has a pdf_url -> real ingest, indexed=True
+
+    saved = []
+    monkeypatch.setattr(
+        "report_runner.run_report",
+        lambda topic, language: {"markdown": "regenerated [1]", "citation_count": 1,
+                                  "sections": ["s"], "topic": topic, "language": language},
+    )
+    monkeypatch.setattr(persistence_module, "save_report",
+                        lambda **kw: saved.append(kw))
+
+    watch_runner.run_watch("w1")
+
+    assert len(saved) == 1
+    assert saved[0]["report_id"] == "rep-1"
+    assert saved[0]["markdown"] == "regenerated [1]"
+
+
+def test_owned_report_not_regenerated_when_nothing_indexed(monkeypatch):
+    import persistence as persistence_module
+
+    _save("w1", report_id="rep-1")
+    _patch(monkeypatch, [_hit("2401.003", pdf=False)])  # abstract-only, indexed=False
+
+    saved = []
+    monkeypatch.setattr("report_runner.run_report", lambda *a, **k: {"markdown": "x", "citation_count": 0})
+    monkeypatch.setattr(persistence_module, "save_report", lambda **kw: saved.append(kw))
+
+    watch_runner.run_watch("w1")
+
+    assert saved == []
+
+
+def test_watch_without_report_id_never_calls_run_report(monkeypatch):
+    _save("w1")  # no report_id
+    _patch(monkeypatch, [_hit("2401.001")])
+
+    with_call = []
+    monkeypatch.setattr("report_runner.run_report", lambda *a, **k: with_call.append(1) or {"markdown": "", "citation_count": 0})
+
+    watch_runner.run_watch("w1")
+
+    assert with_call == []
+
+
 def test_run_due_watches_runs_each_due_and_survives_failures(monkeypatch):
     ran = []
     monkeypatch.setattr(watch_runner.persistence, "due_watches",

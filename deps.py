@@ -8,6 +8,7 @@ so routers can share them without importing api_server and creating a cycle.
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+import hashlib
 import hmac
 import os
 import threading
@@ -92,16 +93,35 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
 
 
 async def verify_admin_key(api_key: str = Security(API_KEY_HEADER)):
-    """Verify admin API key for destructive operations."""
-    if _admin_key:
-        if not _key_matches(api_key, _admin_key):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Admin API key required for destructive operations",
-                        "code": "ADMIN_KEY_REQUIRED"}
-            )
-        return True
-    return await verify_api_key(api_key)
+    """Verify admin API key for destructive operations.
+
+    Fail-closed: this used to fall back to `verify_api_key`, which meant any
+    ordinary user key authorized /purge/* in multi-user mode, and that nothing
+    at all was required when API_KEYS was unset (ALLOW_UNAUTHENTICATED). A
+    dedicated ADMIN_API_KEY is now mandatory for destructive routes.
+    """
+    if not _admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Destructive operations are disabled: set ADMIN_API_KEY to enable them",
+                    "code": "ADMIN_KEY_NOT_CONFIGURED"}
+        )
+    if not _key_matches(api_key, _admin_key):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Admin API key required for destructive operations",
+                    "code": "ADMIN_KEY_REQUIRED"}
+        )
+    return True
+
+
+async def current_owner(api_key: str = Security(API_KEY_HEADER)) -> Optional[str]:
+    """Non-reversible fingerprint of the caller's API key, used to scope job
+    results to the submitter. None when auth is disabled — single-tenant, so
+    there is nothing to scope against."""
+    if VALID_API_KEYS is None or not api_key:
+        return None
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------

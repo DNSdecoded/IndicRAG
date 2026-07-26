@@ -70,6 +70,26 @@ class GeminiBackend(LLMBackend):
     def supports_thinking(self, model: str) -> bool:
         return "gemma" not in model.lower()
 
+    # Models that reject thinking_budget=0 outright (gemini-3.6-flash returns
+    # 400 INVALID_ARGUMENT; gemini-3.5-flash accepts it). Learned at runtime and
+    # remembered per model, so a new model generation doesn't need a hardcoded
+    # list here — omitting thinking_config is the closest thing to "no thinking"
+    # those models accept.
+    # Class-level on purpose (the learning is about the model, not the instance),
+    # so concurrent requests must not race on the check-then-add.
+    _zero_budget_rejected: set = set()
+    _zero_budget_lock = threading.Lock()
+
+    @staticmethod
+    def _has_zero_thinking_budget(gen_config) -> bool:
+        tc = getattr(gen_config, "thinking_config", None)
+        return tc is not None and getattr(tc, "thinking_budget", None) == 0
+
+    @staticmethod
+    def _is_invalid_argument(exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        return status == 400 or "INVALID_ARGUMENT" in str(exc)
+
     def _with_cache(self, client, model: str, gen_config):
         try:
             sys_inst = getattr(gen_config, "system_instruction", None)
@@ -89,26 +109,68 @@ class GeminiBackend(LLMBackend):
 
     def _prep_config(self, client, model, gen_config):
         call_config = self._with_cache(client, model, gen_config)
-        if not self.supports_thinking(model) and getattr(call_config, "thinking_config", None) is not None:
+        with self._zero_budget_lock:
+            known_rejected = model in self._zero_budget_rejected
+        drop_thinking = (
+            not self.supports_thinking(model)
+            or (known_rejected and self._has_zero_thinking_budget(call_config))
+        )
+        if drop_thinking and getattr(call_config, "thinking_config", None) is not None:
             call_config = call_config.model_copy(update={"thinking_config": None})
         return call_config
+
+    def _remember_zero_budget_rejection(self, model: str, gen_config, exc: Exception) -> bool:
+        """True if `exc` is this model refusing thinking_budget=0, so the caller
+        can retry once without the field. Narrow on purpose: any other 400 is a
+        genuine bad request and must keep propagating."""
+        if not (self._has_zero_thinking_budget(gen_config) and self._is_invalid_argument(exc)):
+            return False
+        with self._zero_budget_lock:
+            first_time = model not in self._zero_budget_rejected
+            self._zero_budget_rejected.add(model)
+        if first_time:
+            logger.warning(
+                "Model %s rejects thinking_budget=0; retrying without thinking_config "
+                "and omitting it for this model from now on.", model,
+            )
+        return True
 
     # ── single-client calls (dispatch/failover lives in llm_client) ─────
     def generate(self, model: str, contents, gen_config, client=None):
         client = client or self.pool[self.next_client_idx()]
         call_config = self._prep_config(client, model, gen_config)
-        return client.models.generate_content(model=model, contents=contents, config=call_config)
+        try:
+            return client.models.generate_content(model=model, contents=contents, config=call_config)
+        except Exception as exc:
+            if not self._remember_zero_budget_rejection(model, call_config, exc):
+                raise
+            retry_config = call_config.model_copy(update={"thinking_config": None})
+            return client.models.generate_content(model=model, contents=contents, config=retry_config)
 
     def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
         client = client or self.pool[self.next_client_idx()]
         call_config = self._prep_config(client, model, gen_config)
         emitted = False
-        for chunk in client.models.generate_content_stream(model=model, contents=contents, config=call_config):
-            try:
-                if chunk.text:
-                    emitted = True
-                    yield chunk.text
-            except (ValueError, AttributeError) as exc:
-                logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+
+        def _iter(cfg):
+            nonlocal emitted
+            for chunk in client.models.generate_content_stream(model=model, contents=contents, config=cfg):
+                try:
+                    if chunk.text:
+                        emitted = True
+                        yield chunk.text
+                except (ValueError, AttributeError) as exc:
+                    logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+
+        try:
+            yield from _iter(call_config)
+        except Exception as exc:
+            # A zero-budget rejection is refused before any token is produced, so
+            # retrying the stream here is safe. Once text has been emitted the
+            # error is something else and must propagate.
+            if emitted or not self._remember_zero_budget_rejection(model, call_config, exc):
+                raise
+            yield from _iter(call_config.model_copy(update={"thinking_config": None}))
+
         if not emitted:
             raise RuntimeError("No text generated from Gemini stream")

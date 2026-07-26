@@ -5,7 +5,7 @@ Thank you for your interest in contributing to IndicRAG! This project aims to ma
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.11+ (`start_server.py` hard-fails below this)
 - Git
 - Basic understanding of RAG systems and NLP
 
@@ -34,13 +34,14 @@ Thank you for your interest in contributing to IndicRAG! This project aims to ma
 4. **Configure environment variables**
    ```bash
    cp .env.example .env
-   # Edit .env with your API keys (Groq, etc.)
+   # Set LLM_API_KEYS (Gemini) and, for `vendor/model` slugs, OPENROUTER_API_KEY.
+   # Set API_KEYS too — production mode refuses to start without endpoint auth.
    ```
 
 5. **Verify installation**
    ```bash
-   python test_pipeline.py
-   python example_query.py
+   pytest tests/ -m "not integration and not network"
+   python start_server.py --dev        # http://localhost:8080
    ```
 
 ## 🛠️ Development Workflow
@@ -62,19 +63,24 @@ git checkout -b feature/your-feature-name
 
 ### 3. Test Thoroughly
 ```bash
-# Run test pipeline
-python test_pipeline.py
+# Full suite, minus anything that needs the network or a live index
+pytest tests/ -m "not integration and not network"
 
-# Test with different languages
-python example_query.py --lang hi  # Hindi
-python example_query.py --lang bn  # Bengali
-python example_query.py --lang ta  # Tamil
+# A single module while iterating
+pytest tests/test_rag.py -q
 
-# Test API endpoints (if running locally)
-curl -X POST http://localhost:8000/api/query \
+# Interactive multilingual check
+python examples/example_query.py
+
+# Test the API (server running locally)
+curl -X POST http://localhost:8080/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "आर्टिफिशियल इंटेलिजेंस क्या है?", "language": "hi"}'
+  -d '{"question": "आर्टिफिशियल इंटेलिजेंस क्या है?", "strategy": "A"}'
 ```
+
+Tests live in `tests/` and share fixtures via `tests/conftest.py`, which points
+the vector store at a temp directory — don't run two pytest processes against
+the same checkout at once, they collide on that DB file.
 
 ### 4. Commit Your Changes
 ```bash
@@ -100,11 +106,12 @@ git commit -m "feat: add Tamil language support with Indic tokenizer"
 - **Bug Fixes**: Fix any reported issues, especially language-specific edge cases
 
 ### 🚀 Medium Priority
-- **Advanced Reranking**: Implement cross-encoder models for better result ranking
-- **Citation Extraction**: Automatically extract and format citations from research papers
-- **Query Expansion**: Add query reformulation for better retrieval
 - **Code-Switching Support**: Handle mixed language queries (e.g., Hinglish)
 - **Document Preprocessing**: Better handling of scientific notation, equations, tables
+
+_Already shipped, don't re-open:_ cross-encoder reranking (`rerank.py`,
+`colbert_rerank.py`), citation export (BibTeX/Markdown), and query
+expansion/decomposition (HyDE + `agent/nodes/query_planner.py`).
 
 ### 💡 Nice to Have
 - **Additional Formats**: Support for HTML, EPUB, XML documents
@@ -144,8 +151,10 @@ def translate_query(query: str, target_lang: str) -> str:
 ```
 
 ### Documentation
-- Update `README.md` when adding user-facing features
-- Update `ARCHITECTURE.md` for system design changes
+- Update `README.md` when adding user-facing features (it carries the endpoint
+  table and the config table — both are expected to match the code)
+- Update `docs/ARCHITECTURE.md` for system design changes
+- Update `.env.example` whenever you add a config variable
 - Add examples in `examples/` directory
 - Document API changes in docstrings
 - Include language-specific considerations
@@ -155,7 +164,8 @@ def translate_query(query: str, target_lang: str) -> str:
 - Verify both English and Indic script queries
 - Check edge cases (empty queries, special characters, code-switching)
 - Test with different document types (PDF, TXT, scientific papers)
-- Verify Docker/API deployments work
+- Verify Docker/API deployments work (`docker compose up -d`, then
+  `curl "http://localhost:8080/health?deep=true"`)
 
 ### Language Support Checklist
 When adding a new language:
@@ -186,7 +196,7 @@ When reporting issues, please include:
 - **Impact**: Who benefits and how
 
 ### For Questions
-- **Check Documentation**: Review README.md and ARCHITECTURE.md first
+- **Check Documentation**: Review `README.md` and `docs/ARCHITECTURE.md` first
 - **Search Issues**: See if already asked/answered
 - **Be Specific**: Include context and what you've tried
 
@@ -199,7 +209,7 @@ When reporting issues, please include:
 
 ## 📄 License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the [MIT License](../LICENSE).
 
 ---
 

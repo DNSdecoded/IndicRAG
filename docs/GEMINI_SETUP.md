@@ -1,10 +1,19 @@
-# Google Gemini API Setup Guide
+# LLM Provider Setup Guide
+
+IndicRAG dispatches generation through `llm_client.py`, which supports two
+backends:
+
+- **Gemini** (`providers/gemini.py`) — any bare model name, e.g. `gemini-3.6-flash`
+- **OpenRouter** (`providers/openrouter.py`) — any `vendor/model` slug, e.g. `anthropic/claude-haiku`
+
+Everything else in the pipeline (embeddings, vector store, reranking, NLI
+verification) runs locally. Only generation is remote.
 
 ## 🚀 Quick Setup (5 minutes)
 
 ### Step 1: Get Your Gemini API Key (2 min)
 
-1. Go to **[Google AI Studio](https://makersuite.google.com/app/apikey)**
+1. Go to **[Google AI Studio](https://aistudio.google.com/app/apikey)**
 2. Sign in with your Google account
 3. Click **"Get API Key"** or **"Create API Key"**
 4. Copy your API key (starts with `AIza...`)
@@ -15,25 +24,34 @@
 
 1. Copy the example file:
    ```bash
-   copy .env.example .env
+   cp .env.example .env      # copy .env.example .env  on Windows
    ```
 
 2. Edit `.env` and add your API key:
    ```
-   LLM_API_KEY=AIzaSyYourActualAPIKeyHere
-   LLM_MODEL_NAME=gemini-3.5-flash
+   LLM_API_KEYS=AIzaSyYourActualAPIKeyHere
+   LLM_MODEL_NAME=gemini-3.6-flash
+   ```
+
+   `LLM_API_KEYS` takes a comma-separated list and load-balances across the
+   keys, which is the simplest way to raise the free-tier ceiling. The older
+   singular `LLM_API_KEY` is still read as a fallback.
+
+   For OpenRouter models, also set:
+   ```
+   OPENROUTER_API_KEY=sk-or-...
    ```
 
 **Option B: Using environment variable**
 
 Windows:
 ```bash
-set LLM_API_KEY=AIzaSyYourActualAPIKeyHere
+set LLM_API_KEYS=AIzaSyYourActualAPIKeyHere
 ```
 
 Linux/Mac:
 ```bash
-export LLM_API_KEY=AIzaSyYourActualAPIKeyHere
+export LLM_API_KEYS=AIzaSyYourActualAPIKeyHere
 ```
 
 ### Step 3: Install Gemini Package (1 min)
@@ -50,69 +68,70 @@ pip install -r requirements.txt
 ### Step 4: Test the Setup (1 min)
 
 ```bash
-python -c "
-from google import genai, os
-client = genai.Client(api_key=os.getenv('LLM_API_KEY'))
-response = client.models.generate_content(model='gemini-2.0-flash', contents='Hello!')
-print(response.text)
-"
+python -c "import rag, config; print(rag.llm_generate('Say hello', model=config.LLM_MODEL_NAME))"
 ```
 
 If this prints a response, you're all set! ✅
 
 ---
 
-## 📊 Gemini Model Options
+## 📊 Choosing a Model
 
-### gemini-3.5-flash (Recommended)
-- **Speed**: ⚡ Very fast
-- **Cost**: 💰 Most affordable
-- **Quality**: ✅ Good for most use cases
-- **Best for**: Production use, high volume queries
+Model choice is not hard-coded. Two settings control it:
 
-### gemini-1.5-pro
-- **Speed**: 🐌 Slower
-- **Cost**: 💰💰 More expensive
-- **Quality**: ⭐ Higher quality, better reasoning
-- **Best for**: Complex scientific questions, highest accuracy
+| Setting | Meaning |
+|---|---|
+| `LLM_MODEL_NAME` | Default model used when a request doesn't name one |
+| `LLM_SELECTABLE_MODELS` | Comma-separated dropdown exposed to the UI (`GET /models`); **first entry is the default** |
 
-### gemini-pro (Legacy)
-- **Speed**: ⚡ Fast
-- **Cost**: 💰 Affordable
-- **Quality**: ✅ Good
-- **Note**: Older model, use 1.5-flash instead
+Routing rule: a **bare name** (`gemini-3.6-flash`) goes to Gemini; anything
+containing a **`/`** (`anthropic/claude-haiku`) goes to OpenRouter.
+
+**Keep at least one `/` slug in `LLM_SELECTABLE_MODELS`.** Cross-vendor
+failover picks the first slug in that list, and OpenRouter silently rewrites a
+bare Gemini name to `google/<model>` — so a list with no slug would fail back
+onto the same vendor that just failed.
+
+Rough guidance rather than a fixed list, since model names change often:
+
+- **Flash-class** models: fastest and cheapest, good default for high volume.
+- **Pro-class** models: better reasoning on multi-paper synthesis, several times
+  the cost and latency.
+- **Non-Gemini via OpenRouter**: useful as a genuinely independent failover leg.
+
+### Thinking budget
+
+Gemini "thinking" models accept `thinking_budget`: `0` disables it, `-1` lets
+the model decide, a positive integer caps it. Some models reject
+`thinking_budget=0` with a 400 — `providers/gemini.py` detects that and retries
+once without `thinking_config` (streaming only retries if nothing was emitted
+yet).
 
 ---
 
-## 💰 Pricing (as of Nov 2024)
+## 💰 Pricing
 
-### gemini-3.5-flash
-- **Input**: $0.075 per 1M tokens
-- **Output**: $0.30 per 1M tokens
-- **Free tier**: 15 requests/minute, 1M tokens/day
+Prices change too often to pin here. Check:
 
-### gemini-1.5-pro
-- **Input**: $1.25 per 1M tokens
-- **Output**: $5.00 per 1M tokens
-- **Free tier**: 2 requests/minute, 50 requests/day
+- Gemini — https://ai.google.dev/pricing (also lists free-tier RPM/TPD limits)
+- OpenRouter — https://openrouter.ai/models
 
-**Typical query cost** (with 5 chunks):
-- gemini-3.5-flash: ~$0.0001 per query
-- gemini-1.5-pro: ~$0.002 per query
+Per-query cost scales with retrieved context, so `top_k` and
+`AGENT_MAX_CONTEXT_CHUNKS` are the main levers. The agentic pipeline costs
+several times a classic query because it makes multiple LLM turns.
 
 ---
 
 ## 🔧 Configuration Options
 
-Edit `config.py` or set environment variables:
+Set these in `.env` (defaults live in `config.py`):
 
-```python
-# Model selection
-LLM_MODEL_NAME = "gemini-3.5-flash"  # or "gemini-1.5-pro"
+```bash
+LLM_MODEL_NAME=gemini-3.6-flash
+LLM_SELECTABLE_MODELS=gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku
 
-# Generation parameters
-LLM_MAX_TOKENS = 2048  # Maximum response length
-LLM_TEMPERATURE = 0.3  # Lower = more factual, Higher = more creative
+LLM_MAX_TOKENS=2048    # Maximum response length
+LLM_TEMPERATURE=0.3    # Lower = more factual, higher = more creative
 ```
 
 ---
@@ -120,8 +139,8 @@ LLM_TEMPERATURE = 0.3  # Lower = more factual, Higher = more creative
 ## 🐛 Troubleshooting
 
 ### "API key not configured"
-- Make sure you've set `LLM_API_KEY` in `.env` or environment variable
-- Check that `.env` file is in the project root (`d:/RAG/`)
+- Make sure you've set `LLM_API_KEYS` (or `LLM_API_KEY`) in `.env` or the environment
+- Check that `.env` sits in the repo root, next to `start_server.py`
 - Verify the API key starts with `AIza`
 
 ### "API key not valid"
@@ -130,9 +149,16 @@ LLM_TEMPERATURE = 0.3  # Lower = more factual, Higher = more creative
 - Try generating a new API key
 
 ### "Quota exceeded"
-- You've hit the free tier limit
-- Wait for the quota to reset (daily/per minute)
-- Or upgrade to paid tier in Google Cloud Console
+- You've hit the free-tier limit
+- Wait for the quota to reset (per minute / daily)
+- Add more keys to `LLM_API_KEYS` — requests are load-balanced across them
+- Or upgrade to a paid tier
+
+### Requests keep landing on the wrong vendor
+`llm_client` tries, in order: the requested `(provider, model)`, a
+same-provider fallback, a cross-provider fallback, then a guaranteed Gemini
+backstop. A `(provider, model)` pair that keeps failing is tripped by a circuit
+breaker and skipped until it resets. Check the logs for the attempt chain.
 
 ### "Prompt was blocked"
 - Gemini has safety filters that may block certain content
@@ -151,39 +177,32 @@ pip install google-genai
 Test your setup:
 
 ```bash
-# Test 1: Check API key is set
-python -c "import config; print('API Key configured:', bool(config.LLM_API_KEY))"
+# Test 1: Check a key is loaded
+python -c "import config; print('Keys configured:', len(config.LLM_API_KEY_POOL))"
 
-# Test 2: Test Gemini connection
-# Test 2: Test Gemini connection
-python -c "
-from google import genai
-import config
-client = genai.Client(api_key=config.LLM_API_KEY)
-response = client.models.generate_content(model=config.LLM_MODEL_NAME, contents='Say hello')
-print(response.text)
-"
+# Test 2: Test generation through the real dispatch path
+python -c "import rag, config; print(rag.llm_generate('Say hello', model=config.LLM_MODEL_NAME))"
 
-# Test 3: Test RAG pipeline (requires ingested documents)
-python test_pipeline.py
+# Test 3: Run the provider/dispatch tests
+pytest tests/test_llm_client_dispatch.py tests/test_providers_gemini.py -q
 ```
 
 ---
 
 ## 🎯 Next Steps
 
-Once Gemini is configured:
+Once your provider is configured:
 
-1. **Add PDFs** to `papers/` directory
-2. **Ingest documents**: `python example_ingest.py`
-3. **Run queries**: `python example_query.py`
+1. **Add PDFs** to `papers/`, or upload from the web UI's Library view
+2. **Ingest documents**: `python ingest.py papers/`
+3. **Run queries**: open http://localhost:8080, or `python examples/example_query.py`
 
 ---
 
 ## 📚 Additional Resources
 
 - **Gemini API Docs**: https://ai.google.dev/docs
-- **Get API Key**: https://makersuite.google.com/app/apikey
+- **Get API Key**: https://aistudio.google.com/app/apikey
 - **Pricing**: https://ai.google.dev/pricing
 - **Safety Settings**: https://ai.google.dev/docs/safety_setting_gemini
 

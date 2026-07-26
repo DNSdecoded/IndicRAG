@@ -4,18 +4,24 @@
 
 ### 1. Install Dependencies
 ```bash
-cd d:/RAG
+git clone https://github.com/DNSdecoded/IndicRAG.git
+cd IndicRAG
 pip install -r requirements.txt
 ```
 
-### 2. Configure API Key
+### 2. Configure API Keys
 
 ```bash
 # Copy example
-copy .env.example .env
+cp .env.example .env        # copy .env.example .env  on Windows
+```
 
-# Edit .env and add your Gemini API key
-# Get key from: https://makersuite.google.com/app/apikey
+Set at minimum:
+
+```bash
+LLM_API_KEYS=your-gemini-api-key   # get one at https://aistudio.google.com/app/apikey
+API_KEYS=a-long-random-string      # endpoint auth — production mode refuses to start without it
+ADMIN_API_KEY=another-random-string  # guards the destructive /purge/* routes
 ```
 
 ### 3. Start Server
@@ -24,7 +30,8 @@ copy .env.example .env
 python start_server.py
 ```
 
-**Done!** Access at http://localhost:8080
+**Done!** Web UI at http://localhost:8080, interactive API docs at
+http://localhost:8080/api/docs
 
 ---
 
@@ -63,6 +70,23 @@ Start-Process python -ArgumentList "start_server.py" -WindowStyle Hidden
 
 # Or create a scheduled task for auto-start
 ```
+
+---
+
+### Docker
+
+`Dockerfile` and `docker-compose.yml` ship with the repo (service name
+`indicrag`, port 8080, non-root user, `models/` + `chroma_db/` + `papers/`
+bind-mounted so they survive rebuilds):
+
+```bash
+cp .env.example .env    # fill in LLM_API_KEYS + API_KEYS first
+docker compose up -d
+docker compose logs -f
+```
+
+First boot downloads BGE-M3, the reranker and the NLI model, so the healthcheck
+has a 120s `start_period`.
 
 ---
 
@@ -124,20 +148,30 @@ Edit `.env` file:
 
 ```bash
 # Required
-LLM_API_KEY=your-gemini-api-key-here
+LLM_API_KEYS=key1,key2          # comma-separated; load balanced. LLM_API_KEY also accepted
+API_KEYS=client-key-1,client-key-2   # endpoint auth (see below)
 
 # Optional
-LLM_MODEL_NAME=gemini-3.5-flash    # or gemini-2.5-pro
-LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
+LLM_MODEL_NAME=gemini-3.6-flash
+OPENROUTER_API_KEY=sk-or-...    # only needed for `vendor/model` slugs
+ADMIN_API_KEY=admin-only-key    # guards DELETE /purge/*
+LOG_LEVEL=INFO                  # DEBUG, INFO, WARNING, ERROR
 ```
 
-### API Authentication (Optional)
+The full annotated list lives in `.env.example`; defaults are in `config.py`.
 
-Enable API key authentication:
+### API Authentication
+
+The server binds `0.0.0.0`. Without `API_KEYS`, every endpoint — including the
+destructive `/purge/*` routes — accepts anonymous requests, so
+`start_server.py` **refuses to start in production mode** until `API_KEYS` is
+set. On a private host you can opt out with `ALLOW_UNAUTHENTICATED=1`;
+`--dev` mode only warns.
 
 ```bash
 # In .env, add:
 API_KEYS=key1,key2,key3
+ADMIN_API_KEY=separate-admin-key
 ```
 
 Then use in requests:
@@ -150,9 +184,12 @@ curl -H "X-API-Key: key1" http://localhost:8080/query ...
 ## 📊 Performance
 
 ### Expected Performance
-- **Query Time**: 2-5 seconds
-- **Concurrent Users**: 10-20 (single instance)
-- **Cost**: ~$0.0001 per query (Gemini 2.5 Flash)
+- **Query Time**: 2-5 seconds for the classic pipeline; the agentic pipeline is
+  slower (multiple LLM turns plus tool calls)
+- **Concurrent Users**: 10-20 (single instance, `workers=1`)
+- **Cost**: depends on the model selected per request — check current
+  per-token pricing at https://ai.google.dev/pricing and
+  https://openrouter.ai/models
 
 ### Scaling
 
@@ -194,8 +231,16 @@ curl http://localhost:8080/health
 # Expected response
 {
   "status": "healthy",
+  "timestamp": "...",
+  "version": "...",
   "gemini_configured": true
 }
+
+# Component-level checks (ChromaDB, embeddings, reranker)
+curl "http://localhost:8080/health?deep=true"
+
+# Deep ingest-path health (store, embeddings, disk)
+curl http://localhost:8080/ingest/health
 ```
 
 ### Logs
@@ -248,12 +293,14 @@ type .env  # Windows
 
 ### Out of Memory
 
-```bash
-# Use smaller model
-LLM_MODEL_NAME=gemini-3.5-flash
+The LLM runs remotely, so RAM goes to the local models. Trim them in `.env`:
 
-# Or increase server memory
+```bash
+USE_COLBERT_RERANK=false   # drops the ColBERT MaxSim pass
+USE_RERANKER=false         # drops the cross-encoder (~2GB)
 ```
+
+Or increase server memory.
 
 ### ChromaDB Errors
 
@@ -286,13 +333,68 @@ python start_server.py
 
 ### Backup Data
 
-```bash
-# Backup vector database
-tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/  # Linux/Mac
+Three things need backing up. `sessions.db` is the one people forget — it holds
+**all** user state (sessions, chat history, feedback, watches, saved reports,
+job records). Losing it loses everything except the corpus.
 
-# Backup papers
-tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/
+```bash
+# Stop the server first, or at least accept a slightly stale snapshot: the DB
+# runs in WAL mode, so the -wal/-shm sidecars matter.
+tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/     # vector store
+tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/        # source PDFs
+sqlite3 sessions.db ".backup 'sessions_$(date +%Y%m%d).db'"  # user state
 ```
+
+`sqlite3 .backup` is safe against a running server; a plain `cp` of
+`sessions.db` without its `-wal` file can produce a torn snapshot.
+
+---
+
+## ⏪ Rollback
+
+Take the backups above **before** deploying. Then:
+
+```bash
+# 1. Put the previous release back
+git checkout v2.3.0        # or the tag/commit you were running
+pip install -r requirements.txt
+
+# 2. Restore state captured before the upgrade
+tar -xzf chroma_backup_YYYYMMDD.tar.gz
+cp sessions_YYYYMMDD.db sessions.db
+
+# 3. Restart
+python start_server.py
+```
+
+**What rolls back cleanly and what doesn't:**
+
+- **Vector store and papers** — restore from the tarballs above, no caveats.
+- **`sessions.db`** — schema changes are additive (`CREATE TABLE IF NOT EXISTS`,
+  no `ALTER`), so a newer database keeps working on an older release; the older
+  code simply ignores tables it doesn't know about. Rows written by the newer
+  release into new tables (e.g. `reports`, `query_log`) are invisible to it.
+  There is no schema version marker, so verify this yourself before relying on
+  it across a release that adds columns rather than tables.
+- **Configuration** — `.env` is not versioned. Keep a copy alongside the
+  backups; a rollback that keeps a newer `.env` can start the old code with
+  variables it doesn't understand.
+
+### Upgrading to 2.4.0
+
+One breaking change: **`/purge/*` is now fail-closed.** It previously accepted
+any key in `API_KEYS` when `ADMIN_API_KEY` was unset, and accepted anonymous
+requests when `API_KEYS` was empty. Both are gone.
+
+Before deploying 2.4.0, set a dedicated admin key:
+
+```bash
+ADMIN_API_KEY=a-separate-long-random-string
+```
+
+Without it, every `/purge/*` request returns
+`403 ADMIN_KEY_NOT_CONFIGURED` — including automation that used to purge with an
+ordinary user key.
 
 ---
 

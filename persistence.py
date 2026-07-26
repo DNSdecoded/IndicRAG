@@ -35,6 +35,16 @@ _conn.execute(
     "CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, user_id TEXT, data TEXT, "
     "next_run TEXT, last_run TEXT, created_at TEXT)"
 )
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS query_log ("
+    "query_id TEXT PRIMARY KEY, question TEXT, answer TEXT, mode TEXT, "
+    "model TEXT, language TEXT, confidence REAL, coverage REAL, "
+    "created_at TEXT)"
+)
+_conn.execute(
+    "CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, watch_id TEXT, topic TEXT, "
+    "language TEXT, markdown TEXT, citation_count INTEGER, created_at TEXT)"
+)
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -106,6 +116,61 @@ def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, cr
             (feedback_id, query_id, rating, comment, created_at),
         )
         _conn.commit()
+
+
+def log_query(query_id: str, question: str, answer: str, mode: str,
+              model: str, language: str, confidence: float, coverage: float,
+              created_at: str) -> None:
+    """Persist a query/answer record so feedback can be correlated with it."""
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO query_log "
+            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(query_id) DO UPDATE SET "
+            "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
+            (query_id, question, answer, mode, model, language, confidence, coverage, created_at),
+        )
+        _conn.commit()
+
+
+_FEEDBACK_CONTEXT_COLUMNS = [
+    "id", "query_id", "rating", "comment", "created_at",
+    "question", "answer", "mode", "model", "language", "confidence", "coverage",
+]
+
+
+def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Return feedback joined with its query context, newest first."""
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT f.id, f.query_id, f.rating, f.comment, f.created_at, "
+            "q.question, q.answer, q.mode, q.model, q.language, q.confidence, q.coverage "
+            "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            "ORDER BY f.created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    return [
+        dict(zip(_FEEDBACK_CONTEXT_COLUMNS, r))
+        for r in rows
+    ]
+
+
+def feedback_stats() -> dict:
+    """Aggregate feedback totals and per-language approval rate."""
+    with _db_lock:
+        total = _conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+        up = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='up'").fetchone()[0]
+        down = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='down'").fetchone()[0]
+        by_lang = _conn.execute(
+            "SELECT COALESCE(q.language, 'unknown'), COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
+            "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            "GROUP BY COALESCE(q.language, 'unknown')"
+        ).fetchall()
+    return {
+        "total": total, "up": up, "down": down,
+        "by_language": {r[0]: {"count": r[1], "approval_rate": round(r[2], 3)} for r in by_lang},
+    }
 
 
 def get_prefs(user_id: str) -> dict:
@@ -182,3 +247,53 @@ def delete_watch(watch_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
         _conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Literature-review reports — a durable artifact, unlike the generic job store
+# (deps._jobs) which prunes completed entries after 24h. A watch-owned "living
+# review" needs to survive indefinitely and be regenerated in place.
+# ---------------------------------------------------------------------------
+def save_report(report_id: str, watch_id: str, topic: str, language: str,
+                markdown: str, citation_count: int, created_at: str) -> None:
+    """Insert or update a report. Re-saving the same report_id overwrites in place
+    (that's how a watch-owned living review gets regenerated)."""
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
+            "markdown=excluded.markdown, citation_count=excluded.citation_count, "
+            "created_at=excluded.created_at",
+            (report_id, watch_id, topic, language, markdown, citation_count, created_at),
+        )
+        _conn.commit()
+
+
+def get_report(report_id: str) -> dict | None:
+    with _db_lock:
+        row = _conn.execute(
+            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at "
+            "FROM reports WHERE id = ?", (report_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "watch_id": row[1], "topic": row[2], "language": row[3],
+            "markdown": row[4], "citation_count": row[5], "created_at": row[6]}
+
+
+def list_reports(watch_id: str | None = None) -> list[dict]:
+    """Summary rows (no markdown body) — newest first, or scoped to one watch."""
+    with _db_lock:
+        if watch_id:
+            rows = _conn.execute(
+                "SELECT id, watch_id, topic, language, citation_count, created_at "
+                "FROM reports WHERE watch_id = ? ORDER BY created_at DESC", (watch_id,),
+            ).fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT id, watch_id, topic, language, citation_count, created_at "
+                "FROM reports ORDER BY created_at DESC",
+            ).fetchall()
+    return [{"id": r[0], "watch_id": r[1], "topic": r[2], "language": r[3],
+             "citation_count": r[4], "created_at": r[5]} for r in rows]

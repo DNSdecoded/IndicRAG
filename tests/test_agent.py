@@ -279,6 +279,54 @@ def test_answer_generator_prepends_history():
         assert result["draft_answer"] == "answer"
 
 
+def test_answer_generator_honours_requested_model():
+    """The answer node must use the user's selected model, not the config default.
+
+    Regression: it hardcoded config.LLM_MODEL_NAME while every other node read
+    state, so /agent/* answered with the default model but reported the picked one.
+    """
+    mock_resp = MagicMock()
+    mock_resp.text = "answer"
+    with patch("rag.format_context", return_value=("ctx", 1)), \
+         patch("rag.build_prompt", return_value="base prompt"), \
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
+        from agent.nodes.answer_generator import answer_generator_node
+
+        state = {
+            "retrieved_contexts": [{"text": "t", "title": "T", "section": "body"}],
+            "original_query": "q",
+            "detected_language": "en",
+            "strategy": "A",
+            "conversation_history": [],
+            "requested_model": "meta-llama/llama-3.3-70b-instruct",
+            "requested_provider": "openrouter",
+        }
+        answer_generator_node(state)
+        assert mock_gen.call_args[0][0] == "meta-llama/llama-3.3-70b-instruct"
+        assert mock_gen.call_args.kwargs["provider"] == "openrouter"
+
+
+def test_answer_generator_defaults_model_when_unset():
+    mock_resp = MagicMock()
+    mock_resp.text = "answer"
+    with patch("rag.format_context", return_value=("ctx", 1)), \
+         patch("rag.build_prompt", return_value="base prompt"), \
+         patch("rag.generate_with_failover", return_value=mock_resp) as mock_gen:
+        from agent.nodes.answer_generator import answer_generator_node
+        import config as _config
+
+        state = {
+            "retrieved_contexts": [{"text": "t", "title": "T", "section": "body"}],
+            "original_query": "q",
+            "detected_language": "en",
+            "strategy": "A",
+            "conversation_history": [],
+        }
+        answer_generator_node(state)
+        assert mock_gen.call_args[0][0] == _config.LLM_MODEL_NAME
+        assert mock_gen.call_args.kwargs["provider"] is None
+
+
 def test_answer_generator_no_history_unchanged():
     mock_resp = MagicMock()
     mock_resp.text = "answer"
@@ -688,6 +736,42 @@ def test_indicrag_year_range_passed_as_filter():
 
     _, kwargs = rc.call_args
     assert kwargs["filter_dict"] == {"year": {"$gte": "2020"}}
+
+
+def test_indicrag_tags_passed_as_post_filter_sentinel():
+    """execute_indicrag must forward tags as a rag post-filter sentinel, not a ChromaDB $in
+    clause — PATCH /papers stores tags as one unsplit string, so $in would never match."""
+    import agent.tool_executor as te
+    import rag
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", tags="transformer, efficiency")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {rag._TAGS_SENTINEL: ["transformer", "efficiency"]}
+
+
+def test_indicrag_tags_and_year_combined_with_and():
+    import agent.tool_executor as te
+    import rag
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", year_from=2020, tags="transformer")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] == {
+        "$and": [{"year": {"$gte": "2020"}}, {rag._TAGS_SENTINEL: ["transformer"]}]
+    }
+
+
+def test_indicrag_blank_tags_no_filter():
+    import agent.tool_executor as te
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("deep learning antennas", tags="  ,  ")
+
+    _, kwargs = rc.call_args
+    assert kwargs["filter_dict"] is None
 
 
 def test_reflexion_time_budget_finalises_draft():

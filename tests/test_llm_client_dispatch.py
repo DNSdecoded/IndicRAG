@@ -53,3 +53,27 @@ def test_cross_provider_failover(monkeypatch):
     llm_client._circuit_breaker.clear()
     out = llm_client.generate_with_failover("gemini-3.5-flash", "q", object())
     assert out == "OR_RESP"
+
+
+def test_openrouter_fallback_model_is_an_openrouter_slug(monkeypatch):
+    """Regression: the allowlist is Gemini-first, so LLM_SELECTABLE_MODELS[0] fed
+    OpenRouter a bare Gemini name. OpenRouter rewrites that to google/<model>,
+    sending the cross-vendor fallback back to the vendor that just failed."""
+    monkeypatch.setattr(llm_client._config, "LLM_SELECTABLE_MODELS",
+                        ["gemini-3.6-flash", "gemini-3.5-flash", "openai/gpt-oss-20b:free"])
+    assert llm_client._fallback_model_for("openrouter") == "openai/gpt-oss-20b:free"
+    assert llm_client._fallback_model_for("gemini") == llm_client._config.LLM_MODEL_NAME
+
+
+def test_openrouter_fallback_falls_back_to_default_when_allowlist_has_no_slug(monkeypatch):
+    monkeypatch.setattr(llm_client._config, "LLM_SELECTABLE_MODELS", ["gemini-3.6-flash"])
+    assert llm_client._fallback_model_for("openrouter") == llm_client._config.LLM_MODEL_NAME
+
+
+def test_attempt_chain_ends_on_a_real_openrouter_model(monkeypatch):
+    monkeypatch.setattr(llm_client._config, "LLM_SELECTABLE_MODELS",
+                        ["gemini-3.6-flash", "openai/gpt-oss-20b:free"])
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
+    attempts = llm_client._attempts("gemini-3.6-flash", "gemini")
+    assert ("openrouter", "openai/gpt-oss-20b:free") in attempts
+    assert not any(p == "openrouter" and "/" not in m for p, m in attempts)

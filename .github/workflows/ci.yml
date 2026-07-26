@@ -27,6 +27,12 @@ jobs:
         run: ruff check .
       - name: Unit tests (no network / no live server)
         # Heavy model downloads and API keys aren't available in CI, so restrict
-        # to the unit markers. The eval-harness gate (roadmap 1.2) is added once
-        # the real eval set exists.
+        # to the unit markers.
         run: pytest -q -m "not integration and not network"
+      - name: Eval gate
+        # --grounding-judge jaccard (the default) is CI-safe: it scores the
+        # already-committed answers_and_citations.json, no LLM/API key needed.
+        # Threshold set below the current measured overall (0.94) so it fails
+        # on a real regression without being toothless.
+        working-directory: docs/Eval
+        run: python evaluate.py --ci --threshold 0.85

@@ -4,41 +4,52 @@
 
 ### Prerequisites
 - Docker and Docker Compose installed
-- Google Gemini API key ([Get one here](https://makersuite.google.com/app/apikey))
+- Google Gemini API key ([Get one here](https://aistudio.google.com/app/apikey))
 
 ### Deploy with Docker
 
 ```bash
-# 1. Clone/download the repository
-cd d:/RAG
+# 1. Clone the repository
+git clone https://github.com/DNSdecoded/IndicRAG.git
+cd IndicRAG
 
-# 2. Set your API key
-echo "LLM_API_KEY=your-gemini-api-key-here" > .env
+# 2. Set your keys
+cp .env.example .env
+#    LLM_API_KEYS=...   (Gemini)
+#    API_KEYS=...       (endpoint auth — required in production mode)
+#    ADMIN_API_KEY=...  (guards DELETE /purge/*)
 
 # 3. Build and start
-docker-compose up -d
+docker compose up -d
 
 # 4. Check status
-docker-compose logs -f
+docker compose logs -f
 ```
 
-**API will be available at:** `http://localhost:8000`
+The compose service is named `indicrag` and publishes `8080:8080`. First boot
+downloads BGE-M3, the reranker and the NLI model, so the healthcheck allows a
+120s `start_period`.
+
+**API will be available at:** `http://localhost:8080`
 
 ---
 
 ## 📚 API Documentation
 
 ### Interactive Docs
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: http://localhost:8080/api/docs
+- **ReDoc**: http://localhost:8080/api/redoc
 
 ### Example Requests
 
 #### Query Endpoint
 
+`API_KEYS` is set in production, so every example below sends `X-API-Key`.
+
 ```bash
 # English query
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:8080/query" \
+  -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{
     "question": "What is the treatment for diabetes?",
@@ -47,7 +58,8 @@ curl -X POST "http://localhost:8000/query" \
   }'
 
 # Hindi query
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:8080/query" \
+  -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{
     "question": "मधुमेह का इलाज क्या है?",
@@ -58,22 +70,25 @@ curl -X POST "http://localhost:8000/query" \
 #### Health Check
 
 ```bash
-curl http://localhost:8000/health
+curl -H "X-API-Key: key1" http://localhost:8080/health
 ```
 
 #### Statistics
 
 ```bash
-curl http://localhost:8000/stats
+curl -H "X-API-Key: key1" http://localhost:8080/stats
 ```
 
 ---
 
 ## 🔐 Security
 
-### API Key Authentication (Optional)
+### API Key Authentication (required in production)
 
-Enable authentication by setting API keys:
+The server binds `0.0.0.0`. Without `API_KEYS` every endpoint — including the
+destructive `/purge/*` routes — accepts anonymous requests, so
+`start_server.py` refuses to boot in production mode until it is set
+(`ALLOW_UNAUTHENTICATED=1` opts out on a private host; `--dev` only warns).
 
 ```bash
 # In .env file
@@ -83,7 +98,7 @@ API_KEYS=key1,key2,key3
 Then include the key in requests:
 
 ```bash
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:8080/query" \
   -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{"question": "...", "strategy": "A"}'
@@ -93,13 +108,17 @@ curl -X POST "http://localhost:8000/query" \
 
 ```bash
 # Required
-LLM_API_KEY=your-gemini-api-key
+LLM_API_KEYS=key1,key2          # comma-separated, load balanced (LLM_API_KEY also read)
+API_KEYS=comma,separated,keys   # endpoint auth
 
 # Optional
-LLM_MODEL_NAME=gemini-3.5-flash
+LLM_MODEL_NAME=gemini-3.6-flash
+OPENROUTER_API_KEY=sk-or-...    # only for `vendor/model` slugs
+ADMIN_API_KEY=admin-only-key
 LOG_LEVEL=INFO
-API_KEYS=comma,separated,keys
 ```
+
+`.env.example` documents the full set; defaults live in `config.py`.
 
 ---
 
@@ -113,16 +132,23 @@ Place PDF files in the `papers/` directory:
 # Copy PDFs to papers directory
 cp /path/to/papers/*.pdf ./papers/
 
-# Ingest via API
-curl -X POST "http://localhost:8000/ingest" \
+# Ingest via API (paths resolve inside papers/)
+curl -X POST "http://localhost:8080/ingest" \
+  -H "X-API-Key: key1" \
   -H "Content-Type: application/json" \
   -d '{"pdf_path": "your-paper.pdf"}'
+
+# Or ingest everything in papers/ as a background job
+curl -X POST "http://localhost:8080/ingest/all" -H "X-API-Key: key1"
 ```
+
+Or upload straight from the web UI's **Library** view, which also supports
+ingesting a PDF by URL (`POST /ingest/from-url`).
 
 ### Or use CLI:
 
 ```bash
-docker-compose exec rag-api python ingest.py
+docker compose exec indicrag python ingest.py papers/
 ```
 
 ---
@@ -135,28 +161,35 @@ Edit `docker-compose.yml` to customize:
 
 ```yaml
 services:
-  rag-api:
+  indicrag:
     ports:
-      - "8000:8000"  # Change port here
-    environment:
-      - LOG_LEVEL=DEBUG  # DEBUG, INFO, WARNING, ERROR
+      - "8080:8080"  # Change the host side here
+    env_file:
+      - .env
     volumes:
-      - ./papers:/app/papers
-      - ./chroma_db:/app/chroma_db
       - ./models:/app/models
+      - ./chroma_db:/app/chroma_db
+      - ./papers:/app/papers
 ```
+
+The container runs as UID 10001, so the bind-mounted `models/`, `chroma_db/`
+and `papers/` directories must be writable by that UID on the host
+(`chown -R 10001 models chroma_db papers`).
 
 ### Model Selection
 
-Choose Gemini model in `.env`:
+`LLM_MODEL_NAME` sets the default. `LLM_SELECTABLE_MODELS` is the
+comma-separated dropdown offered to the UI — its first entry is the default,
+and it must keep at least one `vendor/model` slug, because cross-vendor
+failover picks the first slug in that list.
 
 ```bash
-# Fast and cheap (recommended)
-LLM_MODEL_NAME=gemini-3.5-flash
-
-# Higher quality
-LLM_MODEL_NAME=gemini-2.5-pro
+LLM_MODEL_NAME=gemini-3.6-flash
+LLM_SELECTABLE_MODELS=gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku
 ```
+
+A bare name routes to Gemini; anything containing `/` routes to OpenRouter and
+requires `OPENROUTER_API_KEY`.
 
 ---
 
@@ -166,25 +199,28 @@ LLM_MODEL_NAME=gemini-2.5-pro
 
 ```bash
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # View specific service logs
-docker-compose logs -f rag-api
+docker compose logs -f indicrag
 ```
 
 ### Health Monitoring
 
 ```bash
 # Check health
-curl http://localhost:8000/health
+curl http://localhost:8080/health
 
 # Expected response
 {
   "status": "healthy",
-  "timestamp": "2024-11-22T08:00:00",
-  "version": "1.0.0",
+  "timestamp": "2026-01-01T00:00:00",
+  "version": "...",
   "gemini_configured": true
 }
+
+# Component-level checks (ChromaDB, embeddings, reranker)
+curl "http://localhost:8080/health?deep=true"
 ```
 
 ### Metrics
@@ -192,7 +228,7 @@ curl http://localhost:8000/health
 Access statistics:
 
 ```bash
-curl http://localhost:8000/stats
+curl http://localhost:8080/stats
 ```
 
 ---
@@ -203,7 +239,7 @@ curl http://localhost:8000/stats
 
 ```bash
 # Check logs
-docker-compose logs
+docker compose logs
 
 # Rebuild containers
 docker-compose down
@@ -227,8 +263,9 @@ docker-compose restart
 # Increase Docker memory limit
 # Docker Desktop: Settings → Resources → Memory
 
-# Or use smaller models
-LLM_MODEL_NAME=gemini-3.5-flash
+# Or shed local models — the LLM is remote, the RAM goes to these
+USE_COLBERT_RERANK=false
+USE_RERANKER=false
 ```
 
 ### ChromaDB errors
@@ -283,7 +320,7 @@ az container create \
   --name multilingual-rag \
   --image myregistry.azurecr.io/multilingual-rag:latest \
   --dns-name-label multilingual-rag \
-  --ports 8000 \
+  --ports 8080 \
   --environment-variables LLM_API_KEY=your-key
 ```
 
@@ -311,7 +348,14 @@ tar -czf chroma_backup_$(date +%Y%m%d).tar.gz chroma_db/
 
 # Backup papers
 tar -czf papers_backup_$(date +%Y%m%d).tar.gz papers/
+
+# Backup user state — sessions, chat history, feedback, watches, saved reports.
+# Use sqlite3 .backup, not cp: the DB is in WAL mode.
+sqlite3 sessions.db ".backup 'sessions_$(date +%Y%m%d).db'"
 ```
+
+Rollback procedure and the 2.4.0 `ADMIN_API_KEY` upgrade step are in
+[DEPLOYMENT.md](DEPLOYMENT.md#-rollback).
 
 ### Restore Data
 
@@ -334,7 +378,7 @@ Use a load balancer with multiple instances:
 ```yaml
 # docker-compose-scaled.yml
 services:
-  rag-api:
+  indicrag:
     deploy:
       replicas: 3
 ```
@@ -343,7 +387,7 @@ services:
 
 ```yaml
 services:
-  rag-api:
+  indicrag:
     deploy:
       resources:
         limits:
@@ -358,15 +402,20 @@ services:
 
 ## 💰 Cost Optimization
 
-### Gemini API Costs
+### LLM API Costs
 
-- **gemini-3.5-flash**: ~$0.0001 per query
-- **gemini-2.5-pro**: ~$0.002 per query
+Per-query cost depends entirely on the selected model and context size. Check
+current per-token pricing at https://ai.google.dev/pricing (Gemini) and
+https://openrouter.ai/models (everything else). Flash-class models are the
+cheap default; the agentic pipeline costs several times a classic query because
+it makes multiple LLM turns.
+
+Cut cost by keeping the LLM cache enabled and lowering `top_k` /
+`AGENT_MAX_CONTEXT_CHUNKS`.
 
 **Monitor usage:**
 ```bash
-# Check logs for API calls
-docker-compose logs | grep "Generating answer"
+docker compose logs | grep "Generating answer"
 ```
 
 ### Infrastructure Costs
@@ -399,12 +448,13 @@ docker-compose logs | grep "Generating answer"
 1. **"API key not configured"**: Check `.env` file exists and has correct key
 2. **"ChromaDB not found"**: Run `docker-compose down && docker-compose up -d`
 3. **"No documents found"**: Ingest PDFs using `/ingest` endpoint or CLI
-4. **"Out of memory"**: Use `gemini-3.5-flash` model, increase Docker memory
+4. **"Out of memory"**: disable `USE_RERANKER` / `USE_COLBERT_RERANK`, or increase Docker memory
+5. **Server exits with "API_KEYS not set"**: set `API_KEYS` in `.env`, or `ALLOW_UNAUTHENTICATED=1` on a private host
 
 ### Getting Help
 
-- Check logs: `docker-compose logs -f`
-- Review documentation: `/docs` endpoint
+- Check logs: `docker compose logs -f`
+- Review documentation: `/api/docs` endpoint
 - Check health: `/health` endpoint
 
 ---

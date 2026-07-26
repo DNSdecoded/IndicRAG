@@ -145,6 +145,79 @@ def _hyde_embedding(user_query: str):
     return embeddings.embed_query(user_query)
 
 
+_TAGS_SENTINEL = "$tags_post_filter"
+
+
+def _extract_tags_post_filter(filter_dict: Optional[Dict]) -> tuple:
+    """Pull a tags post-filter out of an opaque filter_dict blob, if present.
+
+    Tags can't be a ChromaDB `where` clause: PATCH /papers stores the tags
+    string verbatim (unsplit), so a native $in match against split tag names
+    never equals the stored comma-joined value — it would silently return
+    zero results for any paper tagged with more than one tag. Instead, tags
+    travel inside filter_dict as a reserved sentinel key and are applied as
+    a Python-side post-filter in retrieve_context, while paper_id/year
+    clauses still go to ChromaDB as before.
+
+    Returns (chromadb_safe_filter_dict_or_None, tag_list_or_None).
+    """
+    if not filter_dict:
+        return filter_dict, None
+    if _TAGS_SENTINEL in filter_dict:
+        return None, filter_dict[_TAGS_SENTINEL]
+    if "$and" in filter_dict:
+        tags = None
+        remaining = []
+        for clause in filter_dict["$and"]:
+            if _TAGS_SENTINEL in clause:
+                tags = clause[_TAGS_SENTINEL]
+            else:
+                remaining.append(clause)
+        if tags is not None:
+            if not remaining:
+                return None, tags
+            return (remaining[0] if len(remaining) == 1 else {"$and": remaining}), tags
+    return filter_dict, None
+
+
+_TAGS_POST_FILTER_KEYS = ("ids", "chunks", "documents", "metadatas", "distances")
+
+
+def _copy_retrieval_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Shallow-copy a retrieval result and its parallel lists.
+
+    The chunk strings and metadata dicts inside are still shared — callers read
+    those — but the lists themselves are per-caller, so slicing or reordering a
+    returned result can't mutate the cached entry.
+    """
+    copied = dict(result)
+    for key in _TAGS_POST_FILTER_KEYS:
+        value = copied.get(key)
+        if isinstance(value, list):
+            copied[key] = list(value)
+    return copied
+
+
+def _apply_tags_post_filter(results: Dict[str, list], tags: list) -> Dict[str, list]:
+    """Keep only results whose stored `tags` metadata shares at least one tag.
+
+    Only touches the parallel list-valued keys (chunks/metadatas/distances/...);
+    any other key (formatted_context, chunks_used, ...) passes through unchanged.
+    """
+    wanted = {t.strip() for t in tags if t.strip()}
+    if not wanted:
+        return results
+    keep = [
+        i for i, meta in enumerate(results.get("metadatas", []))
+        if wanted & {t.strip() for t in (meta or {}).get("tags", "").split(",") if t.strip()}
+    ]
+    filtered = dict(results)
+    for key in _TAGS_POST_FILTER_KEYS:
+        if key in filtered:
+            filtered[key] = [filtered[key][i] for i in keep]
+    return filtered
+
+
 def retrieve_context(
     user_query: str,
     top_k: int = None,
@@ -178,41 +251,69 @@ def retrieve_context(
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
     cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
                          config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde)
-    if collection is None and filter_dict is None:
+    # Decide cacheability BEFORE `collection` is materialized below — the store
+    # step used to re-test `collection is None`, which is never true by then, so
+    # nothing was ever cached and every repeat query re-embedded and re-searched.
+    cacheable = collection is None and filter_dict is None
+    if cacheable:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
             logger.debug("[Retrieval cache hit]")
-            return cached
+            # Hand out a copy: the cached entry is shared by every subsequent
+            # hit, so a caller that trims/sorts the returned lists in place
+            # would corrupt the cache for everyone else.
+            return _copy_retrieval_result(cached)
 
     if collection is None:
         collection = vector_store.get_or_create_collection()
+
+    # Tags can't go to ChromaDB as a native where-clause (see _extract_tags_post_filter).
+    # chroma_filter_dict is the ChromaDB-safe remainder; `filter_dict` itself is left
+    # untouched since the cache-bypass checks below key off "was any filter requested".
+    chroma_filter_dict, tags_post_filter = _extract_tags_post_filter(filter_dict)
 
     # Paper-scoped queries → exhaustive retrieval (all chunks of the selected
     # papers in document order), not top-k similarity. This is what makes
     # "reconstruct everything in this paper" work: the LLM sees the whole paper
     # instead of a semantic sample that can miss equations/hyperparameters.
-    if filter_dict and 'paper_id' in filter_dict:
-        return _retrieve_scoped(filter_dict, collection)
+    if chroma_filter_dict and 'paper_id' in chroma_filter_dict:
+        scoped = _retrieve_scoped(chroma_filter_dict, collection)
+        if tags_post_filter and scoped["chunks"]:
+            filtered = _apply_tags_post_filter(scoped, tags_post_filter)
+            formatted_context, chunks_used = format_context(
+                chunks=filtered["chunks"], metadatas=filtered["metadatas"])
+            filtered["formatted_context"] = formatted_context
+            filtered["chunks_used"] = chunks_used
+            return filtered
+        return scoped
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
     query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
-    
+
+    # A tags post-filter runs AFTER retrieval, so fetching exactly top_k returns
+    # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
+    # doc in a 13-doc corpus, top_k=5 → 0 results). Widen the fetch when tags are
+    # active and narrow back to top_k once the filter has been applied.
+    search_k = top_k
+    if tags_post_filter:
+        search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+
     # Search vector store (dense)
     results = vector_store.search(
         query_embedding=query_embedding,
-        top_k=top_k,
-        filter_dict=filter_dict,
+        top_k=search_k,
+        filter_dict=chroma_filter_dict,
         collection=collection
     )
 
     # Hybrid: fuse dense results with BM25 lexical search
-    if config.USE_HYBRID_SEARCH and results['documents'] and not filter_dict:
+    if config.USE_HYBRID_SEARCH and results['documents'] and not chroma_filter_dict:
         try:
             import bm25_search
             bm25_idx = bm25_search.get_or_build_index(collection)
             if bm25_idx is not None:
-                sparse_ids, _ = bm25_idx.search(user_query, top_k=top_k)
+                sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
                 fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
                 id_to_doc = dict(zip(results['ids'], results['documents']))
                 id_to_meta = dict(zip(results['ids'], results['metadatas']))
@@ -226,13 +327,20 @@ def retrieve_context(
                         id_to_meta[eid] = emeta
                         id_to_dist[eid] = 1.0
                 results = {
-                    'ids': [i for i in fused_ids if i in id_to_doc][:top_k],
-                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:top_k],
-                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:top_k],
-                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:top_k],
+                    'ids': [i for i in fused_ids if i in id_to_doc][:search_k],
+                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:search_k],
+                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:search_k],
+                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:search_k],
                 }
         except Exception as e:
             logger.debug(f"Hybrid search skipped: {e}")
+
+    if tags_post_filter:
+        results = _apply_tags_post_filter(results, tags_post_filter)
+        # Back down to the caller's budget now that the filter has run.
+        for key in _TAGS_POST_FILTER_KEYS:
+            if key in results:
+                results[key] = results[key][:top_k]
 
     # Check if search returned results
     if not results['documents']:
@@ -276,8 +384,10 @@ def retrieve_context(
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
-    if collection is None and filter_dict is None:
-        retrieval_cache.put(cache_key, result)
+    if cacheable:
+        # Store a copy, not the object being returned — otherwise the very first
+        # caller still holds a handle on the cached lists.
+        retrieval_cache.put(cache_key, _copy_retrieval_result(result))
     return result
 
 
@@ -293,7 +403,7 @@ def format_context(chunks: List[str], metadatas: List[Dict],
         max_length: Override for max total chars (default config.MAX_CONTEXT_LENGTH)
 
     Returns:
-        Formatted context string with citations
+        (formatted context string with citations, number of chunks kept)
     """
     if max_chunks is None:
         max_chunks = config.MAX_CONTEXT_CHUNKS
@@ -371,6 +481,35 @@ def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
     }
 
 
+def compare_papers(paper_ids: List[str], dimensions: List[str], model: str = None) -> Dict[str, Any]:
+    """Build a papers x dimensions comparison matrix.
+
+    Reuses the paper-scoped exhaustive retrieval (_retrieve_scoped) to see the
+    whole paper per row, then asks one grounded extraction per dimension.
+    Returns {"dimensions": [...], "matrix": {paper_id: {dimension: text}}}.
+    """
+    collection = vector_store.get_or_create_collection()
+
+    matrix: Dict[str, Dict[str, str]] = {}
+    for paper_id in paper_ids:
+        scoped = _retrieve_scoped({"paper_id": {"$in": [paper_id]}}, collection)
+        context = scoped["formatted_context"]
+        matrix[paper_id] = {}
+        if not context:
+            for dim in dimensions:
+                matrix[paper_id][dim] = "N/A — paper not found in corpus"
+            continue
+        for dim in dimensions:
+            prompt = (
+                f"Based ONLY on the following paper text, extract the information about: {dim}\n"
+                f"If the paper does not address this dimension, say 'N/A'.\n"
+                f"Be concise — 1-3 sentences. Cite with [1] if possible.\n\n{context}"
+            )
+            matrix[paper_id][dim] = llm_generate(prompt, max_tokens=300, model=model)
+
+    return {"dimensions": dimensions, "matrix": matrix}
+
+
 def build_prompt(
     user_query: str,
     context: str,
@@ -431,8 +570,11 @@ def llm_generate(prompt: str, max_tokens: int = None,
     target_model = model or config.LLM_MODEL_NAME
 
     from cache import llm_cache, make_key
-    # Include model and provider so different models/providers never share a cached answer.
-    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider)
+    # Include model and provider so different models/providers never share a
+    # cached answer, and the system instruction so a caller that overrides it
+    # doesn't collide with the default-prompt entry for the same user prompt.
+    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider,
+                         system_instruction or config.SYSTEM_PROMPT)
     cached = llm_cache.get(cache_key)
     if cached is not None:
         logger.debug("[LLM cache hit]")
@@ -607,11 +749,14 @@ def safe_extract_text(response) -> str:
     return ""
 
 
-def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> List[dict]:
+def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> dict:
     """Run faithfulness verification if configured; log warnings for ungrounded claims.
 
     metadatas (aligned with chunks) lets each [N] resolve to the right paper's
     chunk(s), since citations are numbered per-paper, not per-chunk.
+
+    Returns {"claims": [...], "confidence": float} — confidence is the mean
+    per-claim support score, surfaced to callers as answer_confidence.
     """
     try:
         import verify
@@ -619,10 +764,11 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
-        return results
+        confidence = sum(r["support"] for r in results) / len(results) if results else 0.0
+        return {"claims": results, "confidence": round(confidence, 4)}
     except Exception as e:
         logger.warning(f"Faithfulness check failed: {e}", exc_info=True)
-        return []
+        return {"claims": [], "confidence": 0.0}
 
 
 def answer_question_strategy_a(
@@ -705,8 +851,10 @@ def answer_question_strategy_a(
         'chunks_used': context_data['chunks_used'],
         'citations': citations
     }
-    result['faithfulness'] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         answer, context_data.get('chunks', []), context_data.get('metadatas', []))
+    result['faithfulness'] = faith_result["claims"]
+    result['answer_confidence'] = faith_result["confidence"]
     return result
 
 
@@ -801,8 +949,10 @@ def answer_question_strategy_b(
         'citations': citations,
         'english_answer': english_answer
     }
-    result['faithfulness'] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
+    result['faithfulness'] = faith_result["claims"]
+    result['answer_confidence'] = faith_result["confidence"]
     return result
 
 
@@ -914,8 +1064,12 @@ def answer_with_history(
             i += 1
     history_str = "\n\n".join(history_lines)
 
+    # Strategy B answers in English, so the question must reach the model in
+    # English too — prepare_chat_for_stream already does this, and /chat vs
+    # /chat/stream must not build different prompts for the same request.
+    prompt_query = retrieval_query if strategy == "B" else user_query
     prompt = build_prompt(
-        user_query=user_query,
+        user_query=prompt_query,
         context=context_data["formatted_context"],
         target_lang=detected_lang,
         strategy=strategy,
@@ -943,8 +1097,10 @@ def answer_with_history(
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
-    result["faithfulness"] = _run_faithfulness(
+    faith_result = _run_faithfulness(
         english_answer, context_data.get("chunks", []), context_data.get("metadatas", []))
+    result["faithfulness"] = faith_result["claims"]
+    result["answer_confidence"] = faith_result["confidence"]
     return result
 
 

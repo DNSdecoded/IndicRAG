@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 import logging
 import re as _re
 import threading
@@ -15,31 +15,26 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import config
+from agent.tool_executor import execute_arxiv_search, execute_open_access_search
+from cache_refresh import _post_ingest_refresh
 from deps import limiter, verify_api_key, _jobs, _jobs_lock, _update_job
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Process-wide collision lock for concurrent URL-ingest jobs.
+# Two _run_batch_url_ingest jobs running concurrently could each see a paper_id
+# as "not existing" before either ingests it.  This lock + registry ensures each
+# paper_id is reserved atomically before download/ingest begins.
+# ---------------------------------------------------------------------------
+_ingest_lock = threading.Lock()
+_inflight_paper_ids: set = set()
+
 # Block the genuinely dangerous characters: null bytes, shell metacharacters.
 # We rely on the is_absolute() + relative_to() checks for traversal; the regex
 # only needs to reject characters that can't appear in safe filenames.
 _UNSAFE_CHARS_RE = _re.compile(r'[\x00\|;&`$<>"\'\!\*\?\{\}\[\]\\~]')
-
-
-def _post_ingest_refresh():
-    """Rebuild BM25 index (async) and invalidate retrieval/tool caches after an ingest."""
-    try:
-        import bm25_search
-        bm25_search.invalidate()
-        threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
-    except Exception:
-        pass
-    try:
-        from cache import retrieval_cache, tool_cache
-        retrieval_cache.invalidate()
-        tool_cache.invalidate()
-    except Exception:
-        logger.warning("Failed to invalidate caches after ingestion", exc_info=True)
 
 
 def _resolve_papers_path(rel_path: str) -> Path:
@@ -138,6 +133,32 @@ class UploadResponse(BaseModel):
     filename: str
     size_bytes: int
     message: str
+
+
+@router.get("/ingest/health", tags=["Ingest"])
+async def ingest_health(authenticated: bool = Depends(verify_api_key)):
+    """Per-paper indexed chunk counts, so a corrupted/failed PDF (0 chunks)
+    doesn't silently vanish from the corpus without anyone noticing."""
+    import vector_store
+    chunk_counts = await run_in_threadpool(vector_store.get_paper_chunk_counts)
+
+    papers = []
+    for pdf_file in sorted(config.PAPERS_DIR.glob("*.pdf")):
+        paper_id = pdf_file.stem
+        chunks = chunk_counts.get(paper_id, 0)
+        papers.append({
+            "paper_id": paper_id,
+            "filename": pdf_file.name,
+            "chunks": chunks,
+            "status": "indexed" if chunks > 0 else "failed",
+        })
+
+    return {
+        "paper_count": len(papers),
+        "chunk_count": sum(p["chunks"] for p in papers),
+        "failed_count": sum(1 for p in papers if p["status"] == "failed"),
+        "papers": papers,
+    }
 
 
 @router.post("/ingest", response_model=IngestResponse, tags=["Management"])
@@ -428,6 +449,215 @@ async def reindex_document(
         paper_id=body.paper_id,
         title=title,
         processing_time=time.time() - start_time,
+    )
+
+
+class IngestURLRequest(BaseModel):
+    """Frictionless ingestion: arXiv ID, DOI, direct PDF URL, or a reading list
+    (newline-separated mix of any of the above)."""
+    url: Optional[str] = Field(None, description="Direct PDF URL.")
+    arxiv_id: Optional[str] = Field(None, description="arXiv ID, e.g. '2301.07041'.")
+    doi: Optional[str] = Field(None, description="DOI, resolved via open-access search.")
+    reading_list: Optional[str] = Field(
+        None, description="Newline-separated arXiv IDs, DOIs, and/or direct URLs."
+    )
+
+
+def _resolve_one(item: str) -> Optional[dict]:
+    """Resolve a single arXiv ID, DOI, or URL to a downloadable {url, id, title}."""
+    item = item.strip()
+    if not item:
+        return None
+    if item.startswith("http"):
+        return {"url": item, "id": item, "title": ""}
+    if item.startswith("10.") or "doi.org" in item:
+        result = execute_open_access_search(item, max_results=1)
+        passages = result.get("passages", [])
+        if passages and passages[0].get("pdf_url"):
+            return {"url": passages[0]["pdf_url"], "id": item, "title": passages[0].get("title", "")}
+        return None
+    # Assume arXiv ID
+    result = execute_arxiv_search(item, max_results=1, arxiv_id=item)
+    passages = result.get("passages", [])
+    if passages and passages[0].get("pdf_url"):
+        return {"url": passages[0]["pdf_url"], "id": item, "title": passages[0].get("title", "")}
+    return None
+
+
+def _resolve_urls_to_ingest(
+    url: str = None, arxiv_id: str = None, doi: str = None, reading_list: str = None,
+) -> List[dict]:
+    """Resolve any combination of url/arxiv_id/doi/reading_list into a flat,
+    order-preserving list of {url, id, title} dicts ready for download_pdf()."""
+    resolved: List[dict] = []
+
+    if arxiv_id:
+        # arxiv_id is a bare ID, not free text — resolve directly via id_list.
+        result = execute_arxiv_search(arxiv_id.strip(), max_results=1, arxiv_id=arxiv_id.strip())
+        passages = result.get("passages", [])
+        if passages and passages[0].get("pdf_url"):
+            resolved.append({"url": passages[0]["pdf_url"], "id": arxiv_id.strip(),
+                              "title": passages[0].get("title", "")})
+
+    if doi:
+        result = execute_open_access_search(doi.strip(), max_results=1)
+        passages = result.get("passages", [])
+        if passages and passages[0].get("pdf_url"):
+            resolved.append({"url": passages[0]["pdf_url"], "id": doi.strip(),
+                              "title": passages[0].get("title", "")})
+
+    if url:
+        resolved.append({"url": url.strip(), "id": url.strip(), "title": ""})
+
+    if reading_list:
+        for line in reading_list.strip().split("\n"):
+            item = _resolve_one(line)
+            if item:
+                resolved.append(item)
+
+    return resolved
+
+
+def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
+    """Background worker: download → ingest → refresh caches for each resolved URL.
+
+    Skips any item whose sanitized paper_id already exists in the corpus or is
+    currently being ingested by another concurrent job.  The in-flight registry
+    (_inflight_paper_ids) is checked-and-reserved atomically under _ingest_lock
+    before download begins, preventing two overlapping jobs from ingesting the
+    same paper_id (which would silently overwrite another paper's chunks).
+    """
+    import ingest as ingest_module
+    import vector_store
+
+    from download_utils import download_pdf
+
+    start_time = time.time()
+    _update_job(job_id, status="running")
+    progress_cb = _make_progress_cb(job_id)
+    collection = vector_store.get_or_create_collection()
+    got = vector_store._chroma_call(collection.get, include=["metadatas"])
+    existing_paper_ids = {
+        (m or {}).get("paper_id", "") for m in got.get("metadatas", [])
+    } - {""}
+    successful = failed = chunks_ingested = 0
+    for i, item in enumerate(urls_to_ingest):
+        progress_cb(i, len(urls_to_ingest), f"Downloading {item['id']}")
+        paper_id = _bibtex_safe_id(item["id"])
+        if paper_id in existing_paper_ids:
+            logger.warning(f"Skipping {item['id']}: paper_id '{paper_id}' already exists")
+            failed += 1
+            continue
+        # Atomically reserve: prevents a concurrent job from ingesting the same paper_id
+        with _ingest_lock:
+            if paper_id in _inflight_paper_ids:
+                logger.warning(f"Skipping {item['id']}: paper_id '{paper_id}' is being ingested by another job")
+                failed += 1
+                continue
+            _inflight_paper_ids.add(paper_id)
+        path = download_pdf(item["url"])
+        if not path:
+            with _ingest_lock:
+                _inflight_paper_ids.discard(paper_id)
+            failed += 1
+            continue
+        # Save a permanent copy to the papers directory
+        saved_path = None
+        try:
+            import shutil
+            title = item.get("title", "")
+            if title:
+                safe_name = _re.sub(r'[<>:"/\\|?*]', '_', title)[:120].strip(' ._')
+            else:
+                safe_name = paper_id
+            if not safe_name.endswith('.pdf'):
+                safe_name += '.pdf'
+            dest = config.PAPERS_DIR / safe_name
+            shutil.copy2(path, dest)
+            saved_path = dest
+            logger.info(f"[Ingest] Saved paper to {dest} (paper_id={paper_id})")
+        except Exception as e:
+            logger.warning(f"[Ingest] Failed to save paper to disk: {e}", exc_info=True)
+            # Fallback: save with paper_id as filename
+            try:
+                import shutil
+                fallback = config.PAPERS_DIR / (paper_id + ".pdf")
+                shutil.copy2(path, fallback)
+                saved_path = fallback
+                logger.info(f"[Ingest] Saved paper (fallback) to {fallback}")
+            except Exception as e2:
+                logger.warning(f"[Ingest] Fallback save also failed: {e2}", exc_info=True)
+        try:
+            ingest_path = str(saved_path) if saved_path else path
+            logger.info(f"[Ingest] Ingesting from {ingest_path} with paper_id={paper_id}")
+            n_chunks, _ = ingest_module.ingest_pdf(
+                ingest_path, paper_id=paper_id,
+                metadata={"title": item.get("title", "")},
+            )
+            chunks_ingested += n_chunks
+            successful += 1
+            existing_paper_ids.add(paper_id)
+            logger.info(f"[Ingest] Successfully ingested {n_chunks} chunks for paper_id={paper_id}")
+        except Exception as e:
+            logger.warning(f"[Ingest] Ingest failed for {item['id']}: {e}", exc_info=True)
+            failed += 1
+        finally:
+            with _ingest_lock:
+                _inflight_paper_ids.discard(paper_id)
+            try:
+                Path(path).unlink()
+            except OSError:
+                pass
+
+    if successful:
+        _post_ingest_refresh()
+
+    status_value = "partial" if failed and successful else ("failed" if failed else "success")
+    _update_job(
+        job_id, status=status_value, total_files=len(urls_to_ingest),
+        successful=successful, failed=failed, chunks_ingested=chunks_ingested,
+        processing_time=time.time() - start_time,
+        completed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    logger.info(f"URL ingest job {job_id} finished: {status_value}")
+
+
+def _bibtex_safe_id(raw_id: str) -> str:
+    """arXiv IDs/DOIs/URLs can contain '/', '.', ':' — none of which are safe as a
+    ChromaDB paper_id used in file-adjacent contexts. Keep it short and filesystem-safe."""
+    return _re.sub(r"[^A-Za-z0-9_-]", "_", raw_id)[:100] or "paper"
+
+
+@router.post("/ingest/from-url", response_model=IngestJobResponse, status_code=202, tags=["Ingest"])
+@limiter.limit("5/minute")
+async def ingest_from_url(
+    request: Request,
+    body: IngestURLRequest,
+    background_tasks: BackgroundTasks,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """Ingest paper(s) by arXiv ID, DOI, direct PDF URL, or a reading list of any mix."""
+    urls_to_ingest = await run_in_threadpool(
+        _resolve_urls_to_ingest, body.url, body.arxiv_id, body.doi, body.reading_list
+    )
+    if not urls_to_ingest:
+        raise HTTPException(status_code=400, detail="Could not resolve any URLs from the provided input")
+
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id, "status": "pending",
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": None, "total_files": len(urls_to_ingest),
+            "successful": None, "failed": None, "chunks_ingested": None,
+            "processing_time": None, "error": None,
+            "progress_current": 0, "progress_total": len(urls_to_ingest),
+            "progress_message": "Queued",
+        }
+    background_tasks.add_task(_run_batch_url_ingest, job_id, urls_to_ingest)
+    return IngestJobResponse(
+        job_id=job_id, status="pending",
+        message=f"Resolved {len(urls_to_ingest)} paper(s). Poll /ingest/status/{{job_id}} for progress.",
     )
 
 

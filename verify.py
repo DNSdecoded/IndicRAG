@@ -41,29 +41,32 @@ _CITE_ONLY_RE = re.compile(r'^(\[(?:\d+|NOT FOUND[^\]]*)\]\s*)+$')
 
 
 def _paper_chunk_map(chunks: List[str], metadatas):
-    """Map each per-paper citation number → the list of chunk texts for that paper.
+    """Map each per-paper citation number → list of (original_index, chunk_text) for that paper.
 
     Citations are numbered per DISTINCT paper (first-seen title order), matching
     rag.citation_number_map / format_context — several chunks of one paper share
     one [N]. Indexing chunks[N-1] directly is wrong whenever a paper contributes
     more than one chunk (BUG: faithfulness scored claims against the wrong chunk).
 
+    Returns tuples (original_idx, chunk_text) so callers can recover the true
+    position in the original chunks/metadatas arrays.
+
     When metadatas is None (or absent), fall back to treating each chunk as its
-    own paper, i.e. [N] → chunks[N-1] — the historical behaviour, still correct
-    for callers where every retrieved chunk is a distinct document.
+    own paper, i.e. [N] → [(N-1, chunks[N-1])] — the historical behaviour, still
+    correct for callers where every retrieved chunk is a distinct document.
     """
     if not metadatas:
-        return {i + 1: [c] for i, c in enumerate(chunks)}
+        return {i + 1: [(i, c)] for i, c in enumerate(chunks)}
 
     num_to_chunks: dict = {}
     title_to_num: dict = {}
-    for chunk, meta in zip(chunks, metadatas):
+    for idx, (chunk, meta) in enumerate(zip(chunks, metadatas)):
         title = ((meta or {}).get('title') or 'Unknown').strip() or 'Unknown'
         num = title_to_num.get(title)
         if num is None:
             num = len(title_to_num) + 1
             title_to_num[title] = num
-        num_to_chunks.setdefault(num, []).append(chunk)
+        num_to_chunks.setdefault(num, []).append((idx, chunk))
     return num_to_chunks
 
 
@@ -106,13 +109,26 @@ def check_claims(answer: str, chunks: List[str], metadatas=None) -> List[dict]:
         clean_sent = re.sub(r'\[(?:\d+|NOT FOUND[^\]]*)\]', '', sent).strip()
         if not clean_sent:
             continue
-        pairs = [(chunk, clean_sent) for chunk in cited_chunks]
+        # cited_chunks holds (original_index, chunk_text) pairs from
+        # _paper_chunk_map. The NLI model takes plain strings as the premise —
+        # passing the tuple raises "Unsupported input type: tuple" and takes the
+        # whole faithfulness check down. The index is what lets
+        # supporting_chunk_index point back into the caller's chunks array.
+        chunk_indices = [idx for idx, _ in cited_chunks]
+        chunk_texts = [text for _, text in cited_chunks]
+        pairs = [(chunk, clean_sent) for chunk in chunk_texts]
         raw = np.atleast_2d(model.predict(pairs))  # (n, num_labels) NLI logits
         # softmax → probabilities; entailment column depends on the model
         # (config.NLI_ENTAILMENT_INDEX), since label order differs across NLI models.
         e = np.exp(raw - raw.max(axis=1, keepdims=True))
         probs = e / e.sum(axis=1, keepdims=True)
-        score = float(probs[:, config.NLI_ENTAILMENT_INDEX].max())
-        results.append({"claim": sent, "support": score,
-                        "grounded": score >= config.FAITHFULNESS_THRESHOLD})
+        entail_probs = probs[:, config.NLI_ENTAILMENT_INDEX]
+        best_idx = int(entail_probs.argmax())
+        score = float(entail_probs[best_idx])
+        results.append({
+            "claim": sent, "support": score,
+            "grounded": score >= config.FAITHFULNESS_THRESHOLD,
+            "supporting_chunk": chunk_texts[best_idx][:500],  # truncate for payload size
+            "supporting_chunk_index": chunk_indices[best_idx],
+        })
     return results

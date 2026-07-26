@@ -5,10 +5,11 @@ This document has two parts. The first section contains **automatically computed
 To reproduce or update the computed metrics:
 
 ```bash
+cd docs/Eval
 python evaluate.py --k 4 --output eval_report.json
 ```
 
-Edit `relevance_judgments.json` to update ground-truth relevance labels. Edit `answers_and_citations.json` to add new query results.
+Edit `docs/Eval/relevance_judgments.json` to update ground-truth relevance labels. Edit `docs/Eval/answers_and_citations.json` to add new query results.
 
 ---
 

@@ -42,6 +42,140 @@ def test_health_returns_healthy(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /papers
+# ---------------------------------------------------------------------------
+
+def test_list_papers_includes_paper_id(client, tmp_path, monkeypatch):
+    """paper_id (the value /compare, /ingest/reindex, etc. actually need) must
+    be in the response — filename alone doesn't tell the UI what to send."""
+    (tmp_path / "smith_2020_transformer.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    resp = client.get("/papers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["paper_id"] == "smith_2020_transformer"
+    assert body[0]["filename"] == "smith_2020_transformer.pdf"
+
+
+# ---------------------------------------------------------------------------
+# POST /compare
+# ---------------------------------------------------------------------------
+
+def test_compare_rejects_single_paper(client):
+    resp = client.post("/compare", json={"paper_ids": ["p1"], "dimensions": ["methodology"]})
+    assert resp.status_code == 422
+
+
+def test_compare_runs_job_and_status_returns_matrix(client):
+    fake_matrix = {"dimensions": ["methodology"], "matrix": {"p1": {"methodology": "x"}, "p2": {"methodology": "y"}}}
+    with patch("rag.compare_papers", return_value=fake_matrix) as mock_compare:
+        resp = client.post("/compare", json={"paper_ids": ["p1", "p2"], "dimensions": ["methodology"]})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+
+        status_resp = client.get(f"/compare/status/{job_id}")
+
+    mock_compare.assert_called_once_with(["p1", "p2"], ["methodology"], None)
+    assert status_resp.status_code == 200
+    body = status_resp.json()
+    assert body["status"] == "success"
+    assert body["matrix"] == fake_matrix["matrix"]
+
+
+def test_compare_status_404_for_unknown_job(client):
+    resp = client.get("/compare/status/does-not-exist")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /chat — paper_ids + tags filter combination
+# ---------------------------------------------------------------------------
+
+def test_chat_combines_paper_and_tags_filter(client):
+    """routes/chat.py must reach rag.answer_with_history with the same
+    combine_filters(paper_filter, tags_filter) wiring routes/query.py uses."""
+    import rag
+
+    with patch("rag.answer_with_history") as mock_chat:
+        mock_chat.return_value = {
+            "answer": "Test answer", "language": "en", "language_name": "English",
+            "chunks_used": 1, "citations": [],
+        }
+        resp = client.post("/chat", json={
+            "message": "What is IndicRAG?",
+            "paper_ids": ["p1"],
+            "tags": "transformer, efficiency",
+        })
+
+    assert resp.status_code == 200
+    _, kwargs = mock_chat.call_args
+    assert kwargs["filter_dict"] == {
+        "$and": [
+            {"paper_id": {"$in": ["p1"]}},
+            {rag._TAGS_SENTINEL: ["transformer", "efficiency"]},
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /ingest/health
+# ---------------------------------------------------------------------------
+
+def test_ingest_health_reports_indexed_and_failed_papers(client, tmp_path, monkeypatch):
+    """A PDF with 0 indexed chunks (extraction failed, corrupted figure, etc.)
+    must show up as failed rather than silently vanishing from the count."""
+    (tmp_path / "good_paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "failed_paper.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    with patch("vector_store.get_paper_chunk_counts", return_value={"good_paper": 5}):
+        resp = client.get("/ingest/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["paper_count"] == 2
+    assert body["chunk_count"] == 5
+    assert body["failed_count"] == 1
+    by_id = {p["paper_id"]: p for p in body["papers"]}
+    assert by_id["good_paper"]["status"] == "indexed"
+    assert by_id["good_paper"]["chunks"] == 5
+    assert by_id["failed_paper"]["status"] == "failed"
+    assert by_id["failed_paper"]["chunks"] == 0
+
+
+def test_ingest_health_empty_papers_dir(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("config.PAPERS_DIR", tmp_path)
+
+    with patch("vector_store.get_paper_chunk_counts", return_value={}):
+        resp = client.get("/ingest/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"paper_count": 0, "chunk_count": 0, "failed_count": 0, "papers": []}
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/from-url
+# ---------------------------------------------------------------------------
+
+def test_ingest_from_url_rejects_unresolvable_input(client):
+    resp = client.post("/ingest/from-url", json={})
+    assert resp.status_code == 400
+
+
+def test_ingest_from_url_accepts_direct_url(client):
+    with patch("download_utils.download_pdf", return_value="/tmp/fake.pdf"):
+        resp = client.post("/ingest/from-url", json={"url": "http://example.com/paper.pdf"})
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["job_id"]
+
+
+# ---------------------------------------------------------------------------
 # DELETE /papers/{paper_id}
 # ---------------------------------------------------------------------------
 
@@ -50,6 +184,31 @@ def test_delete_paper_not_found(client):
     with patch("vector_store.delete_by_paper_id", return_value=0):
         resp = client.delete("/papers/nonexistent-id")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /quality
+# ---------------------------------------------------------------------------
+
+def test_quality_returns_report_when_present(client, tmp_path, monkeypatch):
+    report = {"overall": 0.94, "num_queries": 3}
+    report_path = tmp_path / "eval_report.json"
+    report_path.write_text(__import__("json").dumps(report), encoding="utf-8")
+    monkeypatch.setattr("routes.management._EVAL_REPORT_PATH", report_path)
+
+    resp = client.get("/quality")
+
+    assert resp.status_code == 200
+    assert resp.json() == report
+
+
+def test_quality_returns_error_when_absent(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("routes.management._EVAL_REPORT_PATH", tmp_path / "does_not_exist.json")
+
+    resp = client.get("/quality")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"error": "No eval report available"}
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +222,48 @@ def test_patch_paper_invalid_field(client):
     """
     resp = client.patch("/papers/someid", json={"invalid_field": "x"})
     assert resp.status_code == 400
+
+
+def test_query_response_includes_confidence_and_evidence(client):
+    claim = {"claim": "x", "support": 0.82, "grounded": True,
+              "supporting_chunk": "chunk text", "supporting_chunk_index": 0}
+    with patch("rag.answer_question") as mock_query:
+        mock_query.return_value = {
+            "answer": "Test answer",
+            "language": "en",
+            "language_name": "English",
+            "chunks_used": 1,
+            "citations": [],
+            "processing_time": 0.1,
+            "timestamp": "2026-06-30T00:00:00Z",
+            "answer_confidence": 0.82,
+            "faithfulness": [claim],
+        }
+        resp = client.post("/query", json={"question": "What is IndicRAG?"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["confidence"] == 0.82
+    assert body["evidence"] == [claim]
+
+
+def test_query_response_defaults_confidence_and_evidence_when_absent(client):
+    with patch("rag.answer_question") as mock_query:
+        mock_query.return_value = {
+            "answer": "Test answer",
+            "language": "en",
+            "language_name": "English",
+            "chunks_used": 1,
+            "citations": [],
+            "processing_time": 0.1,
+            "timestamp": "2026-06-30T00:00:00Z",
+        }
+        resp = client.post("/query", json={"question": "What is IndicRAG?"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["confidence"] == 0.0
+    assert body["evidence"] == []
 
 
 # ---------------------------------------------------------------------------

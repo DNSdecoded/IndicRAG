@@ -4,7 +4,7 @@ Why per-client: llm_client round-robins a POOL of API keys with failover. An
 explicit CachedContent is scoped to the credential/project that created it, so a
 cache made on key A is unusable on key B — each client gets its own cache.
 
-Why opt-in: gemini-3.5-flash already does IMPLICIT caching for free (automatic
+Why opt-in: gemini-3.6-flash already does IMPLICIT caching for free (automatic
 prefix discount, no storage cost). Explicit caching adds guaranteed reuse but is
 billed per token-hour of storage, so it's gated behind config.GEMINI_CACHE_ENABLED.
 
