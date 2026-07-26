@@ -380,6 +380,7 @@ def execute_arxiv_search(
     max_results: int = 5,
     sort_by: str = "relevance",
     year_from: int | None = None,
+    arxiv_id: str | None = None,
 ) -> dict:
     import datetime
     import concurrent.futures as _cf
@@ -388,11 +389,15 @@ def execute_arxiv_search(
             if sort_by != "submitted_date"
             else arxiv.SortCriterion.SubmittedDate)
     client = arxiv.Client(num_retries=1)
-    search = arxiv.Search(
-        query=query,
-        max_results=min(max_results * 3, 30),  # over-fetch to absorb date filtering
-        sort_by=sort,
-    )
+    if arxiv_id:
+        # Direct ID lookup — use id_list instead of text search
+        search = arxiv.Search(id_list=[arxiv_id])
+    else:
+        search = arxiv.Search(
+            query=query,
+            max_results=min(max_results * 3, 30),  # over-fetch to absorb date filtering
+            sort_by=sort,
+        )
     cutoff = (
         datetime.datetime(year_from, 1, 1, tzinfo=datetime.timezone.utc)
         if year_from else None

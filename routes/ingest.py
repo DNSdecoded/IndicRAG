@@ -476,7 +476,7 @@ def _resolve_one(item: str) -> Optional[dict]:
             return {"url": passages[0]["pdf_url"], "id": item, "title": passages[0].get("title", "")}
         return None
     # Assume arXiv ID
-    result = execute_arxiv_search(item, max_results=1)
+    result = execute_arxiv_search(item, max_results=1, arxiv_id=item)
     passages = result.get("passages", [])
     if passages and passages[0].get("pdf_url"):
         return {"url": passages[0]["pdf_url"], "id": item, "title": passages[0].get("title", "")}
@@ -491,8 +491,8 @@ def _resolve_urls_to_ingest(
     resolved: List[dict] = []
 
     if arxiv_id:
-        # arxiv_id is a bare ID, not free text — resolve directly, not via _resolve_one's sniffing.
-        result = execute_arxiv_search(arxiv_id.strip(), max_results=1)
+        # arxiv_id is a bare ID, not free text — resolve directly via id_list.
+        result = execute_arxiv_search(arxiv_id.strip(), max_results=1, arxiv_id=arxiv_id.strip())
         passages = result.get("passages", [])
         if passages and passages[0].get("pdf_url"):
             resolved.append({"url": passages[0]["pdf_url"], "id": arxiv_id.strip(),
@@ -560,16 +560,45 @@ def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
                 _inflight_paper_ids.discard(paper_id)
             failed += 1
             continue
+        # Save a permanent copy to the papers directory
+        saved_path = None
         try:
+            import shutil
+            title = item.get("title", "")
+            if title:
+                safe_name = _re.sub(r'[<>:"/\\|?*]', '_', title)[:120].strip(' ._')
+            else:
+                safe_name = paper_id
+            if not safe_name.endswith('.pdf'):
+                safe_name += '.pdf'
+            dest = config.PAPERS_DIR / safe_name
+            shutil.copy2(path, dest)
+            saved_path = dest
+            logger.info(f"[Ingest] Saved paper to {dest} (paper_id={paper_id})")
+        except Exception as e:
+            logger.warning(f"[Ingest] Failed to save paper to disk: {e}", exc_info=True)
+            # Fallback: save with paper_id as filename
+            try:
+                import shutil
+                fallback = config.PAPERS_DIR / (paper_id + ".pdf")
+                shutil.copy2(path, fallback)
+                saved_path = fallback
+                logger.info(f"[Ingest] Saved paper (fallback) to {fallback}")
+            except Exception as e2:
+                logger.warning(f"[Ingest] Fallback save also failed: {e2}", exc_info=True)
+        try:
+            ingest_path = str(saved_path) if saved_path else path
+            logger.info(f"[Ingest] Ingesting from {ingest_path} with paper_id={paper_id}")
             n_chunks, _ = ingest_module.ingest_pdf(
-                path, paper_id=paper_id,
+                ingest_path, paper_id=paper_id,
                 metadata={"title": item.get("title", "")},
             )
             chunks_ingested += n_chunks
             successful += 1
-            existing_paper_ids.add(paper_id)  # a reading_list can carry duplicate ids too
+            existing_paper_ids.add(paper_id)
+            logger.info(f"[Ingest] Successfully ingested {n_chunks} chunks for paper_id={paper_id}")
         except Exception as e:
-            logger.warning(f"Ingest failed for {item['id']}: {e}")
+            logger.warning(f"[Ingest] Ingest failed for {item['id']}: {e}", exc_info=True)
             failed += 1
         finally:
             with _ingest_lock:

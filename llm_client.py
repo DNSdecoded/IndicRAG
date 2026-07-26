@@ -80,10 +80,20 @@ def _circuit_key(provider: str, model: str) -> tuple[str, str]:
 
 
 def _fallback_model_for(provider: str) -> str:
-    """The provider's default model for cross-provider fallback."""
+    """The provider's default model for cross-provider fallback.
+
+    Must return a model that actually belongs to `provider`. The allowlist is
+    Gemini-first, so taking LLM_SELECTABLE_MODELS[0] handed OpenRouter a bare
+    Gemini name — OpenRouter silently rewrites that to google/<model>, routing
+    the "cross-vendor" fallback straight back to the vendor that just failed
+    (and onto a paid route, while the allowlist lists :free slugs).
+    """
     if provider == "gemini":
         return _config.LLM_MODEL_NAME
-    return _config.LLM_SELECTABLE_MODELS[0] if _config.LLM_SELECTABLE_MODELS else _config.LLM_MODEL_NAME
+    for model in _config.LLM_SELECTABLE_MODELS:
+        if "/" in model:                      # slug shape == OpenRouter
+            return model
+    return _config.LLM_MODEL_NAME
 
 
 def model_supports_tools(provider: str, model: str) -> bool:

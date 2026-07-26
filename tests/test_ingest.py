@@ -35,7 +35,7 @@ def test_resolve_urls_direct_url():
 def test_resolve_urls_arxiv_id(monkeypatch):
     import routes.ingest as ingest_routes
 
-    monkeypatch.setattr(ingest_routes, "execute_arxiv_search", lambda q, max_results: {
+    monkeypatch.setattr(ingest_routes, "execute_arxiv_search", lambda q, max_results, **kw: {
         "passages": [{"pdf_url": "http://arxiv.org/pdf/2301.07041", "title": "A Paper"}]
     })
 
@@ -57,7 +57,7 @@ def test_resolve_urls_doi(monkeypatch):
 def test_resolve_urls_arxiv_no_pdf_found_skips(monkeypatch):
     import routes.ingest as ingest_routes
 
-    monkeypatch.setattr(ingest_routes, "execute_arxiv_search", lambda q, max_results: {"passages": []})
+    monkeypatch.setattr(ingest_routes, "execute_arxiv_search", lambda q, max_results, **kw: {"passages": []})
 
     assert ingest_routes._resolve_urls_to_ingest(arxiv_id="nope") == []
 
@@ -65,7 +65,7 @@ def test_resolve_urls_arxiv_no_pdf_found_skips(monkeypatch):
 def test_resolve_urls_reading_list_mixed(monkeypatch):
     import routes.ingest as ingest_routes
 
-    def fake_arxiv(q, max_results):
+    def fake_arxiv(q, max_results, **kw):
         return {"passages": [{"pdf_url": f"http://arxiv.org/pdf/{q}", "title": f"Paper {q}"}]}
 
     def fake_oa(q, max_results):

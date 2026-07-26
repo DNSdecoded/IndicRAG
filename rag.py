@@ -183,6 +183,21 @@ def _extract_tags_post_filter(filter_dict: Optional[Dict]) -> tuple:
 _TAGS_POST_FILTER_KEYS = ("ids", "chunks", "documents", "metadatas", "distances")
 
 
+def _copy_retrieval_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Shallow-copy a retrieval result and its parallel lists.
+
+    The chunk strings and metadata dicts inside are still shared — callers read
+    those — but the lists themselves are per-caller, so slicing or reordering a
+    returned result can't mutate the cached entry.
+    """
+    copied = dict(result)
+    for key in _TAGS_POST_FILTER_KEYS:
+        value = copied.get(key)
+        if isinstance(value, list):
+            copied[key] = list(value)
+    return copied
+
+
 def _apply_tags_post_filter(results: Dict[str, list], tags: list) -> Dict[str, list]:
     """Keep only results whose stored `tags` metadata shares at least one tag.
 
@@ -236,11 +251,18 @@ def retrieve_context(
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
     cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
                          config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde)
-    if collection is None and filter_dict is None:
+    # Decide cacheability BEFORE `collection` is materialized below — the store
+    # step used to re-test `collection is None`, which is never true by then, so
+    # nothing was ever cached and every repeat query re-embedded and re-searched.
+    cacheable = collection is None and filter_dict is None
+    if cacheable:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
             logger.debug("[Retrieval cache hit]")
-            return cached
+            # Hand out a copy: the cached entry is shared by every subsequent
+            # hit, so a caller that trims/sorts the returned lists in place
+            # would corrupt the cache for everyone else.
+            return _copy_retrieval_result(cached)
 
     if collection is None:
         collection = vector_store.get_or_create_collection()
@@ -269,10 +291,18 @@ def retrieve_context(
     # the bare question; lexical (BM25) search below always uses the real query.
     query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
 
+    # A tags post-filter runs AFTER retrieval, so fetching exactly top_k returns
+    # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
+    # doc in a 13-doc corpus, top_k=5 → 0 results). Widen the fetch when tags are
+    # active and narrow back to top_k once the filter has been applied.
+    search_k = top_k
+    if tags_post_filter:
+        search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+
     # Search vector store (dense)
     results = vector_store.search(
         query_embedding=query_embedding,
-        top_k=top_k,
+        top_k=search_k,
         filter_dict=chroma_filter_dict,
         collection=collection
     )
@@ -283,7 +313,7 @@ def retrieve_context(
             import bm25_search
             bm25_idx = bm25_search.get_or_build_index(collection)
             if bm25_idx is not None:
-                sparse_ids, _ = bm25_idx.search(user_query, top_k=top_k)
+                sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
                 fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
                 id_to_doc = dict(zip(results['ids'], results['documents']))
                 id_to_meta = dict(zip(results['ids'], results['metadatas']))
@@ -297,16 +327,20 @@ def retrieve_context(
                         id_to_meta[eid] = emeta
                         id_to_dist[eid] = 1.0
                 results = {
-                    'ids': [i for i in fused_ids if i in id_to_doc][:top_k],
-                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:top_k],
-                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:top_k],
-                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:top_k],
+                    'ids': [i for i in fused_ids if i in id_to_doc][:search_k],
+                    'documents': [id_to_doc[i] for i in fused_ids if i in id_to_doc][:search_k],
+                    'metadatas': [id_to_meta[i] for i in fused_ids if i in id_to_doc][:search_k],
+                    'distances': [id_to_dist.get(i, 1.0) for i in fused_ids if i in id_to_doc][:search_k],
                 }
         except Exception as e:
             logger.debug(f"Hybrid search skipped: {e}")
 
     if tags_post_filter:
         results = _apply_tags_post_filter(results, tags_post_filter)
+        # Back down to the caller's budget now that the filter has run.
+        for key in _TAGS_POST_FILTER_KEYS:
+            if key in results:
+                results[key] = results[key][:top_k]
 
     # Check if search returned results
     if not results['documents']:
@@ -350,8 +384,10 @@ def retrieve_context(
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
-    if collection is None and filter_dict is None:
-        retrieval_cache.put(cache_key, result)
+    if cacheable:
+        # Store a copy, not the object being returned — otherwise the very first
+        # caller still holds a handle on the cached lists.
+        retrieval_cache.put(cache_key, _copy_retrieval_result(result))
     return result
 
 
@@ -367,7 +403,7 @@ def format_context(chunks: List[str], metadatas: List[Dict],
         max_length: Override for max total chars (default config.MAX_CONTEXT_LENGTH)
 
     Returns:
-        Formatted context string with citations
+        (formatted context string with citations, number of chunks kept)
     """
     if max_chunks is None:
         max_chunks = config.MAX_CONTEXT_CHUNKS
@@ -534,8 +570,11 @@ def llm_generate(prompt: str, max_tokens: int = None,
     target_model = model or config.LLM_MODEL_NAME
 
     from cache import llm_cache, make_key
-    # Include model and provider so different models/providers never share a cached answer.
-    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider)
+    # Include model and provider so different models/providers never share a
+    # cached answer, and the system instruction so a caller that overrides it
+    # doesn't collide with the default-prompt entry for the same user prompt.
+    cache_key = make_key(prompt, max_tokens, config.LLM_TEMPERATURE, target_model, provider,
+                         system_instruction or config.SYSTEM_PROMPT)
     cached = llm_cache.get(cache_key)
     if cached is not None:
         logger.debug("[LLM cache hit]")
@@ -1025,8 +1064,12 @@ def answer_with_history(
             i += 1
     history_str = "\n\n".join(history_lines)
 
+    # Strategy B answers in English, so the question must reach the model in
+    # English too — prepare_chat_for_stream already does this, and /chat vs
+    # /chat/stream must not build different prompts for the same request.
+    prompt_query = retrieval_query if strategy == "B" else user_query
     prompt = build_prompt(
-        user_query=user_query,
+        user_query=prompt_query,
         context=context_data["formatted_context"],
         target_lang=detected_lang,
         strategy=strategy,

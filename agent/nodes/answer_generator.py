@@ -65,8 +65,14 @@ def answer_generator_node(state: AgentState) -> dict:
         # Thinking off by default so the full budget goes to the answer (config knob).
         thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
     )
+    # The user's model choice reaches every other node (planner, selector,
+    # evaluator) via state — the node that actually writes the answer must
+    # honour it too, or /agent/* reports a model that never produced the text.
+    model = state.get("requested_model") or config.LLM_MODEL_NAME
+    provider = state.get("requested_provider")
+
     try:
-        resp = rag.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)
+        resp = rag.generate_with_failover(model, contents, gen_config, provider=provider)
         answer = rag.safe_extract_text(resp)
     except Exception as e:
         logger.error(f"[AnswerGenerator] LLM call failed: {e}", exc_info=True)

@@ -168,6 +168,13 @@ DEFAULT_TOP_K = 15  # dense + BM25 fusion, then rerank narrow
 MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
 MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
 
+# Tags are applied as a Python-side post-filter (ChromaDB can't match one tag
+# inside the stored comma-joined string), so a plain top-k fetch returns zero
+# results whenever the tagged papers rank below the cut. Over-fetch first, then
+# filter, then narrow back to top_k. TAGS_OVERFETCH_MAX bounds the widened fetch.
+TAGS_OVERFETCH = int(os.getenv("TAGS_OVERFETCH", "10"))
+TAGS_OVERFETCH_MAX = int(os.getenv("TAGS_OVERFETCH_MAX", "300"))
+
 # Agentic mode gathers passages from up to 4 tool calls, so the 12-chunk cap can
 # truncate formula/equation chunks off the tail before the LLM sees them. The
 # agent answer generator uses a wider cap (Gemini's window has the room).

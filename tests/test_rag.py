@@ -297,6 +297,158 @@ def test_extract_citations_comma_separated():
     assert result[1]["title"] == "Paper B"
 
 
+def _fake_search_results(n_untagged: int, n_tagged: int, tag: str = "thz"):
+    """Dense results where the tagged chunks rank last — the starvation shape."""
+    docs = [f"untagged {i}" for i in range(n_untagged)] + [f"tagged {i}" for i in range(n_tagged)]
+    metas = ([{"title": f"U{i}", "section": "body"} for i in range(n_untagged)]
+             + [{"title": f"T{i}", "section": "body", "tags": f"{tag},review"} for i in range(n_tagged)])
+    return {
+        "ids": [f"id{i}" for i in range(len(docs))],
+        "documents": docs,
+        "metadatas": metas,
+        "distances": [0.1 * (i + 1) for i in range(len(docs))],
+    }
+
+
+def test_tags_filter_overfetches_so_low_ranked_tagged_chunks_survive():
+    """Regression: the tags post-filter runs after retrieval, so fetching exactly
+    top_k returned zero results whenever tagged papers ranked below the cut."""
+    import config
+    import rag
+
+    captured = {}
+
+    def fake_search(query_embedding, top_k, filter_dict, collection):
+        captured["top_k"] = top_k
+        return _fake_search_results(n_untagged=12, n_tagged=1)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        result = rag.retrieve_context(
+            "q", top_k=5, filter_dict={rag._TAGS_SENTINEL: ["thz"]}
+        )
+
+    assert captured["top_k"] > 5, "must widen the fetch when a tags post-filter is active"
+    assert result["chunks_used"] == 1
+    assert result["chunks"] == ["tagged 0"]
+
+
+def test_tags_filter_result_never_exceeds_requested_top_k():
+    import config
+    import rag
+
+    with patch("vector_store.search", return_value=_fake_search_results(0, 9)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        result = rag.retrieve_context("q", top_k=3, filter_dict={rag._TAGS_SENTINEL: ["thz"]})
+
+    assert len(result["chunks"]) == 3
+    assert len(result["metadatas"]) == 3
+    assert len(result["distances"]) == 3
+
+
+def test_untagged_query_fetch_width_unchanged():
+    """No tags → the fetch width must stay exactly top_k (no extra Chroma work)."""
+    import config
+    import rag
+
+    captured = {}
+
+    def fake_search(query_embedding, top_k, filter_dict, collection):
+        captured["top_k"] = top_k
+        return _fake_search_results(n_untagged=4, n_tagged=0)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("q", top_k=5, filter_dict={"year": {"$gte": "2020"}})
+
+    assert captured["top_k"] == 5
+
+
+def test_retrieval_cache_actually_stores_and_hits():
+    """Regression: the store step re-tested `collection is None` after the local
+    had already been assigned a collection, so nothing was ever cached and every
+    repeat query paid a full embed + search + rerank."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    searches = []
+
+    def fake_search(**kwargs):
+        searches.append(1)
+        return _fake_search_results(3, 0)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("repeat me", top_k=3)
+        rag.retrieve_context("repeat me", top_k=3)
+
+    assert len(searches) == 1, "second identical query must be served from the cache"
+    assert retrieval_cache.stats["size"] == 1
+    retrieval_cache.invalidate()
+
+
+def test_retrieval_cache_not_used_for_explicit_collection_or_filter():
+    """Scoped/filtered lookups must stay uncached (they key off caller state)."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    with patch("vector_store.search", side_effect=lambda **kw: _fake_search_results(3, 0)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("q", top_k=3, filter_dict={"year": {"$gte": "2020"}})
+        rag.retrieve_context("q", top_k=3, collection=object())
+
+    assert retrieval_cache.stats["size"] == 0
+    retrieval_cache.invalidate()
+
+
+def test_retrieval_cache_hit_returns_independent_lists():
+    """A caller trimming the returned lists must not corrupt the cached entry."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    # side_effect (not return_value): a shared mock dict would let the first
+    # caller's mutation come back through the mock itself, hiding the real
+    # question — whether the *cache* handed out an aliased list.
+    with patch("vector_store.search", side_effect=lambda **kw: _fake_search_results(4, 0)), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        first = rag.retrieve_context("cache probe", top_k=4)
+        del first["chunks"][:]                      # hostile caller
+        second = rag.retrieve_context("cache probe", top_k=4)
+
+    assert len(second["chunks"]) == 4, "cache entry was mutated by a previous caller"
+    retrieval_cache.invalidate()
+
+
 def test_extract_citations_comma_no_spaces():
     """No-space variant [1,2] must also work."""
     from rag import extract_citations

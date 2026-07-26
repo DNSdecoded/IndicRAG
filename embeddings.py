@@ -142,9 +142,14 @@ def embed_query(query: str) -> np.ndarray:
             _query_cache[key] = result
         return result
     finally:
-        with _in_flight_lock:
-            _in_flight.pop(key, None)
-        wait_event.set()
+        # Only the owning thread clears the registration. A waiter that fell
+        # through after an owner failure must not deregister the owner's entry:
+        # doing so lets a later thread start a third redundant embed of the same
+        # query, which is the most expensive call on the retrieval path.
+        if owns_compute:
+            with _in_flight_lock:
+                _in_flight.pop(key, None)
+            wait_event.set()
 
 
 def embed_passages(passages: List[str], batch_size: int = 32) -> np.ndarray:
