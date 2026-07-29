@@ -88,6 +88,34 @@ def test_extract_citations_cite_format():
     assert result[1]["title"] == "Paper B"
 
 
+def test_compact_citations_closes_numbering_gaps():
+    """Citing papers 1 and 4 of 4 must render as [1],[2] against a 2-entry panel."""
+    from rag import compact_citations
+
+    metadatas = [
+        {"title": "Paper A", "section": "intro"},
+        {"title": "Paper B", "section": "body"},
+        {"title": "Paper C", "section": "body"},
+        {"title": "Paper D", "section": "results"},
+    ]
+    answer, cites = compact_citations("reward [1] and bandwidth [4], both [1, 4]", metadatas)
+
+    assert answer == "reward [1] and bandwidth [2], both [1, 2]"
+    assert [c["number"] for c in cites] == ["1", "2"]
+    assert [c["title"] for c in cites] == ["Paper A", "Paper D"]
+
+
+def test_compact_citations_drops_dangling_marker():
+    """A number the model invented resolves to no paper — drop it, don't renumber around it."""
+    from rag import compact_citations
+
+    metadatas = [{"title": "Paper A", "section": "intro"}]
+    answer, cites = compact_citations("grounded [1] invented [7]", metadatas)
+
+    assert answer == "grounded [1] invented "
+    assert [c["number"] for c in cites] == ["1"]
+
+
 def test_extract_citations_no_false_match():
     from rag import extract_citations
 

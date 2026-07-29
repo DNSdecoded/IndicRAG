@@ -4,6 +4,7 @@ Main RAG pipeline: retrieval and answer generation.
 
 from typing import Dict, List, Optional, Any
 import logging
+import re
 import config
 import embeddings
 import vector_store
@@ -114,6 +115,45 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
                 'figures': figures_by_paper.get(meta.get('paper_id'), []),
             })
     return citations
+
+
+# Inline citation markers: [3], [1, 3, 5], [2,4]. Digit-only, so [NOT FOUND: ...]
+# and ranges like [10-15] never match.
+_CITE_MARKER_RE = re.compile(r'\[(\d+(?:\s*,\s*\d+)*)\]')
+
+
+def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None):
+    """extract_citations, then renumber the survivors to a dense 1..M sequence.
+
+    format_context numbers EVERY retrieved paper, but only the papers the answer
+    actually cites reach the citation panel — so an answer drawing on papers 1
+    and 4 of 4 read "[1] ... [4]" beside a two-entry panel. Renumber the cited
+    papers in context order and rewrite the answer's markers to match. Markers
+    that resolve to no paper (the model over-numbered) are dropped rather than
+    left dangling, mirroring report_runner._remap_markers.
+
+    Returns ``(rewritten answer, citations)`` — the citations carry the new
+    dense numbers, so callers must use the returned answer, not the original.
+    """
+    citations = extract_citations(answer, metadatas, chunks)
+    old_to_new = {int(c['number']): i for i, c in enumerate(citations, 1)}
+
+    def _repl(m: "re.Match") -> str:
+        mapped: List[int] = []
+        for part in m.group(1).split(','):
+            try:
+                new = old_to_new.get(int(part.strip()))
+            except ValueError:
+                new = None
+            if new is not None and new not in mapped:
+                mapped.append(new)
+        if not mapped:  # every number in this marker was dangling
+            return ''
+        return '[' + ', '.join(str(n) for n in mapped) + ']'
+
+    for i, c in enumerate(citations, 1):
+        c['number'] = str(i)
+    return _CITE_MARKER_RE.sub(_repl, answer), citations
 
 
 def _hyde_embedding(user_query: str):
@@ -841,8 +881,10 @@ def answer_question_strategy_a(
     logger.info("Generating answer...")
     answer = llm_generate(prompt, model=model, provider=provider)
     
-    # Extract citations using robust parser
-    citations = extract_citations(answer, context_data['metadatas'], context_data.get('chunks'))
+    # Extract citations using robust parser, compacting [1],[4] → [1],[2] so the
+    # answer's markers match the cited-only panel.
+    answer, citations = compact_citations(
+        answer, context_data['metadatas'], context_data.get('chunks'))
 
     result = {
         'answer': answer,
@@ -931,8 +973,10 @@ def answer_question_strategy_b(
     logger.info("Generating answer in English...")
     english_answer = llm_generate(prompt, model=model, provider=provider)
     
-    # Extract citations from ENGLISH answer (before translation) using robust parser
-    citations = extract_citations(english_answer, context_data['metadatas'], context_data.get('chunks'))
+    # Extract citations from ENGLISH answer (before translation) using robust parser.
+    # Compacting here means the translated answer inherits the dense numbering.
+    english_answer, citations = compact_citations(
+        english_answer, context_data['metadatas'], context_data.get('chunks'))
     
     # Translate answer to target language if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
@@ -1078,7 +1122,9 @@ def answer_with_history(
         prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
 
     english_answer = llm_generate(prompt, model=model, provider=provider)
-    citations = extract_citations(english_answer, context_data["metadatas"], context_data.get("chunks"))
+    # Compact before any translation so the translated answer carries the same numbers.
+    english_answer, citations = compact_citations(
+        english_answer, context_data["metadatas"], context_data.get("chunks"))
 
     if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
         try:
