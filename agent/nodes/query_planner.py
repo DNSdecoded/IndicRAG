@@ -106,7 +106,7 @@ def query_planner_node(state: AgentState) -> dict:
             ),
             provider=_provider,
         )
-        raw_resp = resp.text or ""
+        raw_resp = rag.safe_extract_text(resp)
 
         active_provider = llm_client.resolve_provider(_model, _provider)
 
@@ -119,7 +119,7 @@ def query_planner_node(state: AgentState) -> dict:
                 ),
                 provider="gemini",
             )
-            return r.text or ""
+            return rag.safe_extract_text(r)
 
         parsed = extract_json_with_gemini_retry(
             raw_resp, active_provider, _gemini_retry, _prompt, _DECOMPOSE_SYSTEM,

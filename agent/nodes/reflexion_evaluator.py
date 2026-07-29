@@ -150,7 +150,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             r = rag.generate_with_failover(
                 model=config.LLM_MODEL_NAME, contents=p,
                 gen_config=types.GenerateContentConfig(
-                    temperature=0, max_output_tokens=1024,
+                    temperature=0, max_output_tokens=1024, system_instruction=s,
                     thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
                 ),
                 provider="gemini",

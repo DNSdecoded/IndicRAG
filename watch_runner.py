@@ -11,6 +11,7 @@ import logging
 import os
 
 import config
+import lang_utils
 import persistence
 import rag
 from agent.tool_executor import execute_arxiv_search, execute_open_access_search
@@ -30,7 +31,8 @@ def _summarize(topic: str, papers: list[dict], language: str) -> str:
     listing = "\n\n".join(f"[{p['arxiv_id']}] {p['title']}\n{p['text']}" for p in papers)
     prompt = (
         f"You are compiling a research digest on the topic: {topic!r}.\n"
-        f"Below are newly published papers. Write a concise digest in {language} "
+        f"Below are newly published papers. Write a concise digest in "
+        f"{lang_utils.get_language_name(language)} "
         f"summarizing what is new. Cite each paper inline by its id in square "
         f"brackets, e.g. [2401.12345]. Use only the papers provided.\n\n"
         f"{listing}"

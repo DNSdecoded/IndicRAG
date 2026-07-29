@@ -64,11 +64,11 @@ ROUTING RULES — apply in order, stop at first match:
    indicrag_retrieval with arxiv_search or open_access_search.
 
 RETRY RULES:
-7. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
+5. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
    Never repeat the original query verbatim. Re-use year_from from state.
-8. reformulate: The query was misunderstood — build a corrected query \
+6. reformulate: The query was misunderstood — build a corrected query \
    from missing_aspects before selecting tools.
-9. regenerate: Context is adequate; answer needs rewriting. \
+7. regenerate: Context is adequate; answer needs rewriting. \
    Return an EMPTY tool list so the answer generator runs without re-retrieval.\
 """
 

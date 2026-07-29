@@ -713,6 +713,25 @@ def test_safe_stop_preserves_draft_answer():
     assert draft in result["final_answer"], "draft answer must survive safe_stop"
 
 
+def test_query_planner_survives_safety_blocked_response():
+    """A safety-blocked reply whose .text raises must fall back, not crash the node."""
+    from agent.nodes.query_planner import query_planner_node
+
+    class _BlockedResp:
+        candidates = None
+
+        @property
+        def text(self):
+            raise ValueError("Response has no valid Part")
+
+    # NOTE: rag.safe_extract_text is the code under test — do not patch it.
+    with patch("rag.generate_with_failover", return_value=_BlockedResp()):
+        result = query_planner_node({"original_query": "antenna design for IoT"})
+
+    assert result["query_plan"] == ["antenna design for IoT"]
+    assert result["detected_language"]
+
+
 def test_year_filter_builds_chromadb_where_clause():
     """Year range filter must produce valid ChromaDB where-clauses and ignore junk."""
     from agent.tool_executor import _year_filter

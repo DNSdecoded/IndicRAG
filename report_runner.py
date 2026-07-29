@@ -14,6 +14,7 @@ import logging
 import re
 
 import config
+import lang_utils
 import rag
 
 logger = logging.getLogger(__name__)
@@ -32,12 +33,14 @@ def plan_sections(topic: str, language: str = "en", max_sections: int = None) ->
     """
     if max_sections is None:
         max_sections = config.REPORT_MAX_SECTIONS
+    lang_name = lang_utils.get_language_name(language)
     prompt = (
         f"You are planning a literature-review report on: {topic!r}.\n"
         f"Propose at most {max_sections} section titles (e.g. background, methods "
-        f"comparison, key findings, open gaps). Write the section titles in the "
-        f"language with code {language!r}. Reply with ONLY a JSON array of "
-        f'short title strings, e.g. ["Background", "Methods", "Findings"].'
+        f"comparison, key findings, open gaps). Reply with ONLY a JSON array of "
+        f"short title strings. This example shows the required FORMAT ONLY — its "
+        f'shape, not its language: ["Background", "Methods", "Findings"].\n'
+        f"The titles themselves MUST be written in {lang_name}, not in English."
     )
     try:
         raw = rag.llm_generate(prompt, max_tokens=_PLAN_MAX_TOKENS)

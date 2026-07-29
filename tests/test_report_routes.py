@@ -62,6 +62,24 @@ def test_report_end_to_end(client):
         assert "# Literature Review: graphene sensors" in dl.text
 
 
+def test_plan_sections_prompt_names_language_natively():
+    import config
+    import rag
+    import report_runner
+
+    seen = {}
+
+    def _capture(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return '["x"]'
+
+    with patch.object(rag, "llm_generate", _capture):
+        report_runner.plan_sections("some topic", "hi")
+
+    assert config.LANGUAGE_NAMES["hi"] in seen["prompt"]
+    assert "'hi'" not in seen["prompt"]
+
+
 def test_report_rejects_empty_topic(client):
     with patch("config.REPORT_ENABLE", True):
         assert client.post("/report", json={"topic": ""}).status_code == 422
