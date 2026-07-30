@@ -110,9 +110,10 @@ def test_compact_citations_drops_dangling_marker():
     from rag import compact_citations
 
     metadatas = [{"title": "Paper A", "section": "intro"}]
-    answer, cites = compact_citations("grounded [1] invented [7]", metadatas)
+    answer, cites = compact_citations("grounded [1] invented [7] and mid [7] sentence", metadatas)
 
-    assert answer == "grounded [1] invented "
+    # dropping a marker must not leave a trailing or doubled space behind
+    assert answer == "grounded [1] invented and mid sentence"
     assert [c["number"] for c in cites] == ["1"]
 
 

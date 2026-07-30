@@ -78,6 +78,14 @@ def test_plan_sections_prompt_names_language_natively():
 
     assert config.LANGUAGE_NAMES["hi"] in seen["prompt"]
     assert "'hi'" not in seen["prompt"]
+    assert "Do not write them in English." in seen["prompt"]
+
+    with patch.object(rag, "llm_generate", _capture):
+        report_runner.plan_sections("some topic", "en")
+
+    # English must not get the self-contradictory "in English, not in English"
+    assert "Do not write them in English." not in seen["prompt"]
+    assert "MUST be written in English." in seen["prompt"]
 
 
 def test_report_rejects_empty_topic(client):

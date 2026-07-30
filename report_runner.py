@@ -34,13 +34,16 @@ def plan_sections(topic: str, language: str = "en", max_sections: int = None) ->
     if max_sections is None:
         max_sections = config.REPORT_MAX_SECTIONS
     lang_name = lang_utils.get_language_name(language)
+    lang_rule = f"The titles themselves MUST be written in {lang_name}."
+    if language != "en":
+        lang_rule += " Do not write them in English."
     prompt = (
         f"You are planning a literature-review report on: {topic!r}.\n"
         f"Propose at most {max_sections} section titles (e.g. background, methods "
         f"comparison, key findings, open gaps). Reply with ONLY a JSON array of "
         f"short title strings. This example shows the required FORMAT ONLY — its "
         f'shape, not its language: ["Background", "Methods", "Findings"].\n'
-        f"The titles themselves MUST be written in {lang_name}, not in English."
+        + lang_rule
     )
     try:
         raw = rag.llm_generate(prompt, max_tokens=_PLAN_MAX_TOKENS)
@@ -74,7 +77,9 @@ def _parse_sections(raw: str) -> list[str]:
 
 # Inline citation markers: [3], [1, 3, 5], [2,4]. Excludes [NOT FOUND: ...]
 # and other non-numeric brackets (the digit-only pattern won't match them).
-_MARKER_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# Leading spaces are captured separately so a fully-dangling marker is dropped
+# together with the space in front of it (mirrors rag._CITE_MARKER_RE).
+_MARKER_RE = re.compile(r"([ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
 def _remap_markers(body: str, cites: list[dict], registry: dict) -> str:
@@ -97,13 +102,13 @@ def _remap_markers(body: str, cites: list[dict], registry: dict) -> str:
 
     def _repl(m: re.Match) -> str:
         mapped: list[int] = []
-        for part in m.group(1).split(","):
+        for part in m.group(2).split(","):
             g = local_to_global.get(part.strip())
             if g is not None and g not in mapped:
                 mapped.append(g)
         if not mapped:  # every number in this marker was dangling
-            return ""
-        return "[" + ", ".join(str(g) for g in mapped) + "]"
+            return ""  # drops the preceding space too — no double/trailing space
+        return m.group(1) + "[" + ", ".join(str(g) for g in mapped) + "]"
 
     return _MARKER_RE.sub(_repl, body)
 
@@ -184,6 +189,7 @@ if __name__ == "__main__":  # ponytail: runnable self-check, no framework
         assert "alpha [1]" in md, "P should be global [1] in section 1"
         assert "beta [2] gamma [1] delta" in md, f"remap/drop wrong: {md!r}"
         assert "delta [" not in md, "dangling [5] not dropped"
+        assert "delta " not in md, f"dropped marker left a stray space: {md!r}"
         assert "## References" in md
         assert "- [1] P" in md and "- [2] Q" in md
     # planner fallback when LLM returns junk

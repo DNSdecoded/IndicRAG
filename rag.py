@@ -118,8 +118,9 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
 
 
 # Inline citation markers: [3], [1, 3, 5], [2,4]. Digit-only, so [NOT FOUND: ...]
-# and ranges like [10-15] never match.
-_CITE_MARKER_RE = re.compile(r'\[(\d+(?:\s*,\s*\d+)*)\]')
+# and ranges like [10-15] never match. Leading spaces are captured separately so a
+# fully-dangling marker is dropped together with the space in front of it.
+_CITE_MARKER_RE = re.compile(r'([ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]')
 
 
 def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None):
@@ -140,7 +141,7 @@ def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
 
     def _repl(m: "re.Match") -> str:
         mapped: List[int] = []
-        for part in m.group(1).split(','):
+        for part in m.group(2).split(','):
             try:
                 new = old_to_new.get(int(part.strip()))
             except ValueError:
@@ -148,8 +149,8 @@ def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
             if new is not None and new not in mapped:
                 mapped.append(new)
         if not mapped:  # every number in this marker was dangling
-            return ''
-        return '[' + ', '.join(str(n) for n in mapped) + ']'
+            return ''  # drops the preceding space too — no double/trailing space
+        return m.group(1) + '[' + ', '.join(str(n) for n in mapped) + ']'
 
     for i, c in enumerate(citations, 1):
         c['number'] = str(i)
