@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
 import os
+import shutil
 
 import config
 import lang_utils
@@ -38,6 +39,29 @@ def _summarize(topic: str, papers: list[dict], language: str) -> str:
         f"{listing}"
     )
     return rag.llm_generate(prompt, max_tokens=_DIGEST_MAX_TOKENS)
+
+
+def _keep_pdf(tmp_path: str, paper_id: str) -> str:
+    """Move a downloaded PDF into PAPERS_DIR and return the path to ingest from.
+
+    Watches used to ingest straight from the temp file and delete it, so the
+    paper never appeared in /papers or /ingest/health (both enumerate
+    PAPERS_DIR) and its chunks counted as orphans in the library panel.
+
+    The filename must be `{paper_id}.pdf`: /ingest/health derives paper_id from
+    the file stem, so any other name shows the paper with 0 chunks.
+    Falls back to the temp path so a failed move degrades to the old behavior
+    (indexed but invisible) rather than losing the paper entirely.
+    """
+    try:
+        config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+        dest = config.PAPERS_DIR / f"{paper_id}.pdf"
+        shutil.move(tmp_path, dest)
+        logger.info("[Watch] saved %s", dest)
+        return str(dest)
+    except OSError as exc:
+        logger.warning("[Watch] could not save PDF for %s (%s) — indexing from temp", paper_id, exc)
+        return tmp_path
 
 
 def run_watch(watch_id: str) -> dict:
@@ -72,16 +96,19 @@ def run_watch(watch_id: str) -> dict:
         if pdf_url:
             path = _download_pdf(pdf_url)
             if path:
+                paper_id = _bibtex_safe_id(arxiv_id)
+                ingest_path = _keep_pdf(path, paper_id)
                 try:
                     n_chunks, title = ingest_pdf(
-                        path, paper_id=_bibtex_safe_id(arxiv_id),
+                        ingest_path, paper_id=paper_id,
                         metadata={"title": p.get("title", ""), "source": p.get("source", "")},
                     )
                 finally:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+                    if ingest_path == path:  # still the temp file — nothing kept
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
                 if n_chunks > 0:  # 0 = duplicate/unchanged in corpus → seen, but not "new"
                     ingested.append({"arxiv_id": arxiv_id, "title": title or p.get("title", ""), "text": p.get("text", "")})
                     indexed = True
