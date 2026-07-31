@@ -419,7 +419,7 @@ Key settings (all overridable via environment variables):
 | `LLM_MODEL_NAME` | `gemini-3.6-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
 | `LLM_SELECTABLE_MODELS` | `gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
-| `LLM_MAX_TOKENS` | `2048` | Max tokens for standard RAG |
+| `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion loops |

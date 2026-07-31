@@ -257,7 +257,11 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # LLM Configuration
 # ============================================================================
 # Google Gemini API configuration
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
+# Caps thinking + answer together, not just the answer. gemini-3.6-flash rejects
+# thinking_budget=0 and spends 0-4856 thought tokens on identical prompts, so a
+# 2048 cap left as little as 80 tokens for the answer and truncated mid-sentence.
+# Measured: answer <=2100, worst thinking+answer 6926.
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
 # Thinking budget for ALL agentic-mode LLM calls (query planner, tool routing,
 # query expansion, answer generation, reflexion judge). Gemini semantics:

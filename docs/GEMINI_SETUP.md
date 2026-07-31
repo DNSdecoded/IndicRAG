@@ -130,7 +130,7 @@ Set these in `.env` (defaults live in `config.py`):
 LLM_MODEL_NAME=gemini-3.6-flash
 LLM_SELECTABLE_MODELS=gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku
 
-LLM_MAX_TOKENS=2048    # Maximum response length
+LLM_MAX_TOKENS=8192    # Maximum response length (thinking + answer share this)
 LLM_TEMPERATURE=0.3    # Lower = more factual, higher = more creative
 ```
 
