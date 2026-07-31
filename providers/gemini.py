@@ -12,7 +12,7 @@ from typing import Iterator
 
 import config
 from google import genai
-from providers.base import LLMBackend
+from providers.base import LLMBackend, TRUNCATION_NOTE
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +154,23 @@ class GeminiBackend(LLMBackend):
 
         def _iter(cfg):
             nonlocal emitted
+            finish = None
             for chunk in client.models.generate_content_stream(model=model, contents=contents, config=cfg):
+                cands = getattr(chunk, "candidates", None)
+                if cands and getattr(cands[0], "finish_reason", None):
+                    finish = cands[0].finish_reason
                 try:
                     if chunk.text:
                         emitted = True
                         yield chunk.text
                 except (ValueError, AttributeError) as exc:
                     logger.debug("Skipping non-text Gemini stream chunk: %s", exc)
+            # max_output_tokens caps thinking + answer together, and this model's
+            # thinking budget is dynamic, so the cut is unpredictable. The stream
+            # still ends normally — say so in the text or nobody ever finds out.
+            if emitted and "MAX_TOKENS" in str(finish):
+                logger.warning("Gemini stream hit max_output_tokens for %s — answer truncated", model)
+                yield TRUNCATION_NOTE
 
         try:
             yield from _iter(call_config)

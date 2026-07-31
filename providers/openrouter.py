@@ -11,7 +11,7 @@ import threading
 from typing import Iterator
 
 import config
-from providers.base import LLMBackend, ShimResponse
+from providers.base import LLMBackend, ShimResponse, TRUNCATION_NOTE
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +136,11 @@ class OpenRouterBackend(LLMBackend):
     def generate_stream(self, model: str, contents, gen_config) -> Iterator[str]:
         client = self._get_client()
         emitted = False
+        finish = None
         for chunk in client.chat.completions.create(**self._params(model, contents, gen_config, stream=True)):
             if not chunk.choices:
                 continue
+            finish = getattr(chunk.choices[0], "finish_reason", None) or finish
             delta = chunk.choices[0].delta
             text = getattr(delta, "content", None)
             if text:
@@ -146,6 +148,11 @@ class OpenRouterBackend(LLMBackend):
                 yield text
         if not emitted:
             raise RuntimeError("No text generated from OpenRouter stream")
+        # OpenAI's "length" is Gemini's MAX_TOKENS: a clean stream end that hides
+        # a cut-off answer. Same sentinel so both providers behave alike.
+        if finish == "length":
+            logger.warning("OpenRouter stream hit max_tokens for %s — answer truncated", model)
+            yield TRUNCATION_NOTE
 
     def is_transient(self, exc: Exception) -> bool:
         status = getattr(exc, "status_code", None) or getattr(exc, "code", None)

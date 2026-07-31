@@ -8,9 +8,10 @@ from providers.gemini import GeminiBackend
 class _FakeModels:
     """Rejects thinking_budget=0 the way gemini-3.6-flash does (400 INVALID_ARGUMENT)."""
 
-    def __init__(self, stream_chunks=("hi",)):
+    def __init__(self, stream_chunks=("hi",), finish_reason=None):
         self.calls = []
         self._stream_chunks = stream_chunks
+        self.finish_reason = finish_reason
 
     def _check(self, config):
         tc = getattr(config, "thinking_config", None)
@@ -25,7 +26,17 @@ class _FakeModels:
 
     def generate_content_stream(self, model, contents, config):
         self._check(config)
-        return iter([SimpleNamespace(text=c) for c in self._stream_chunks])
+        return iter(_stream(self._stream_chunks, self.finish_reason))
+
+
+def _stream(chunks, finish_reason=None):
+    """Gemini reports finish_reason on the last chunk's candidate, not the chunk."""
+    out = []
+    for i, c in enumerate(chunks):
+        last = i == len(chunks) - 1
+        cands = [SimpleNamespace(finish_reason=finish_reason)] if (last and finish_reason) else None
+        out.append(SimpleNamespace(text=c, candidates=cands))
+    return out
 
 
 def _backend_with(models):
@@ -67,6 +78,22 @@ def test_stream_retries_before_any_token_emitted(zero_budget_config):
     out = "".join(b.generate_stream("gemini-3.6-flash", "q", zero_budget_config, client=b._pool[0]))
     assert out == "ab"
     assert models.calls == [0, None]
+
+
+def test_stream_appends_truncation_note_on_max_tokens(zero_budget_config):
+    from providers.base import TRUNCATION_NOTE
+    models = _FakeModels(stream_chunks=("half an ans", "wer that stops"),
+                         finish_reason="FinishReason.MAX_TOKENS")
+    b = _backend_with(models)
+    out = "".join(b.generate_stream("gemini-3.5-flash", "q", zero_budget_config, client=b._pool[0]))
+    assert out == "half an answer that stops" + TRUNCATION_NOTE
+
+
+def test_stream_stays_clean_when_model_finishes(zero_budget_config):
+    models = _FakeModels(stream_chunks=("all ", "done"), finish_reason="FinishReason.STOP")
+    b = _backend_with(models)
+    out = "".join(b.generate_stream("gemini-3.5-flash", "q", zero_budget_config, client=b._pool[0]))
+    assert out == "all done"
 
 
 def test_other_invalid_argument_errors_still_propagate():
