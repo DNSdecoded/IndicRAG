@@ -53,7 +53,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
   * **web_search** — Tavily web search for current events and non-academic info
   * **calculate** — numexpr math evaluation (identifier-whitelisted)
   * **execute_python** — process-isolated Python with AST-based validation (import whitelist, dunder + dangerous-builtin blocking) + 10s timeout
-* **Reflexion loops with dual budget** — the evaluator checks faithfulness (NLI entailment, minimum across claims) and completeness (Gemini Flash). Below threshold it can regenerate, retrieve more, or reformulate — bounded by **both** an iteration cap (3) and a wall-clock budget (`AGENT_REFLEXION_BUDGET_S`). Stuck-loop detection auto-accepts when completeness stops improving.
+* **Reflexion loops with layered budgets** — the evaluator checks faithfulness (fraction of claims grounded by NLI entailment) and completeness (Gemini Flash). Below threshold it can regenerate, retrieve more, or reformulate — bounded by an iteration cap (3), a loop budget (`AGENT_REFLEXION_BUDGET_S`, iteration 2+), a deadline reserve (`AGENT_EVAL_RESERVE_S`), and a per-call LLM timeout (`LLM_REQUEST_TIMEOUT_S`). Stuck-loop detection auto-accepts when completeness stops improving.
 * **Contradiction detection** — NLI-based cross-source contradiction flagging in the answer generator; surfaces both sides with citations when sources disagree
 * **Confidence & abstention** — finalizer surfaces a confidence score; low-confidence answers get an explicit abstention prefix with partial sourcing
 * **Multi-turn conversations** — session history threaded through `AgentState` so follow-ups resolve pronouns and references
@@ -68,7 +68,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Dense + sparse** — BGE-M3 (1024d) fused with BM25 via Reciprocal Rank Fusion (RRF)
 * **Two-stage reranking** — `BAAI/bge-reranker-v2-m3` cross-encoder, with optional **ColBERT** multi-vector MaxSim rerank on the narrowed candidate set
 * **Optional HyDE** — generate a hypothetical answer, embed it, and retrieve against it for recall on sparse queries
-* **Faithfulness verification** — `cross-encoder/nli-deberta-v3-base` scores entailment per claim; unsupported assertions flagged, stripped, or regenerated (`FAITHFULNESS_ENFORCE`)
+* **Faithfulness verification** — a multilingual NLI cross-encoder (`NLI_MODEL_NAME`, int8 ONNX on CPU) scores entailment per claim against its cited chunks; unsupported assertions flagged, stripped, or regenerated (`FAITHFULNESS_ENFORCE`). The threshold is **model-specific and calibrated**, not a taste setting — see `FAITHFULNESS_THRESHOLD`
 * **HNSW tuning knobs** — `ef_search`, `ef_construction`, `M` all env-configurable
 
 ### 📥 Smart Ingestion
@@ -422,7 +422,9 @@ Key settings (all overridable via environment variables):
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
-| `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion loops |
+| `LLM_REQUEST_TIMEOUT_S` | `60` | Per-request HTTP timeout for every LLM call. Without it the SDK defaults apply (OpenAI: 600s × 2 retries) and one stalled request outlives the whole agent budget — multiplied by the 3-attempt failover chain |
+| `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion **loops** — blocks starting another cycle, from iteration 2 onwards |
+| `AGENT_EVAL_RESERVE_S` | `90` | Room that must remain under `AGENT_TIMEOUT` to attempt an evaluation at all. Can skip iteration 1, but only when finishing would overrun the timeout and discard the draft |
 | `AGENT_THINKING_BUDGET` | `0` | Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap |
 | `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
 | `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
@@ -452,9 +454,12 @@ Key settings (all overridable via environment variables):
 | `HNSW_EF_CONSTRUCTION` | `100` | HNSW build-time breadth (index quality vs. ingest speed) |
 | `HNSW_M` | `16` | HNSW graph connectivity |
 | `FAITHFULNESS_ENFORCE` | `warn` | `warn`, `strip`, or `regen` |
-| `FAITHFULNESS_THRESHOLD` | `0.5` | NLI support score threshold |
+| `FAITHFULNESS_THRESHOLD` | `0.15` | Per-claim entailment probability above which a claim counts as grounded. **Model-specific — recalibrate if you change `NLI_MODEL_NAME`.** Measured for the default model: a sentence copied verbatim out of its own chunk scores median 0.226 / max 0.428; an unrelated paper's sentence median 0.099 / p90 0.158. A 0.5 bar sits above every positive, so faithfulness reads ~0 for every answer |
+| `AGENT_FAITHFULNESS_ACCEPT` | `0.6` | Fraction of claims that must be grounded for reflexion to accept and for the finalizer to abstain on completeness alone. Below 1.0 by design: per-claim recall is ~0.70, so a fully grounded answer lands near 0.70 |
 | `NLI_MODEL_NAME` | `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7` | NLI model backing faithfulness + contradiction checks |
 | `NLI_ENTAILMENT_INDEX` | `0` | Index of the entailment label in that model's output — change if you swap models |
+| `NLI_MAX_SEQ_LENGTH` | `256` | Premise truncation. NLI cost is linear in length: 1.15s/pair at 512 tokens vs 0.4s at 256 on CPU, with no measured quality cost |
+| `NLI_MAX_CHUNKS_PER_CITATION` | `2` | Chunks scored per cited paper. Uncapped, one answer cost ~275 pairs = 318s in a single reflexion pass |
 | `GEMINI_CACHE_ENABLED` | `false` | Explicit Gemini prompt caching |
 | `GEMINI_CACHE_TTL` | `3600` | Prompt cache lifetime (seconds) |
 | `SESSIONS_DB_PATH` | `sessions.db` | SQLite path for session/job/watch persistence |
@@ -535,7 +540,9 @@ flowchart TD
 | Guard | Behavior |
 |---|---|
 | **Iteration cap** | Max **3** reflexion cycles |
-| **Wall-clock budget** | `AGENT_REFLEXION_BUDGET_S` |
+| **Loop budget** | `AGENT_REFLEXION_BUDGET_S` — blocks starting another cycle, from iteration 2 onwards. Deliberately does *not* gate the first evaluation: on a CPU-only box the first pass alone runs past it, so gating iteration 1 would ship every answer with no faithfulness score and no confidence |
+| **Deadline reserve** | `AGENT_EVAL_RESERVE_S` — skips the evaluation entirely when too little remains under `AGENT_TIMEOUT` to finish it, since being killed mid-evaluation discards the draft and 504s |
+| **Per-call timeout** | `LLM_REQUEST_TIMEOUT_S` bounds every LLM request so one stalled call can't consume the run |
 | **Stuck-loop detection** | Auto-accepts once completeness stops improving |
 
 ### ⚡ Standard RAG mode
@@ -556,8 +563,10 @@ Typical query latency (on CPU):
 |------|---------|-------|
 | Standard RAG (Strategy A) | ~1–2s | Single-pass |
 | Standard RAG (Strategy B) | ~3–6s | Includes NLLB translation |
-| Agentic RAG (1 reflexion) | ~15–30s | Multi-tool + evaluation (parallel tools) |
-| Agentic RAG (max reflexions) | ~60–90s | Bounded by timeout + reflexion budget |
+| Agentic RAG (1 reflexion) | ~2–4 min | Measured on a CPU-only box: ~45s retrieval (3 sub-queries, embed + rerank), ~50s generation, ~25s evaluation (NLI 20s / ~23 claims + completeness call). Tools run in parallel but contend for the same CPU |
+| Agentic RAG (max reflexions) | bounded by `AGENT_TIMEOUT` | Loop budget stops further cycles; the draft is returned rather than discarded |
+
+On CPU the agent is dominated by the cross-encoders, not the LLM. The levers, cheapest first: lower `AGENT_MAX_SUB_QUERIES` (near-linear — the parallel retrievals thrash one CPU), add keys to `LLM_API_KEYS` so an exhausted model doesn't cost a failed call plus fallback on every step, and drop `NLI_MAX_CHUNKS_PER_CITATION` to `1`. A GPU removes most of this.
 
 Memory: base ~500MB · +BGE-M3 ~2.5GB · +reranker ~3.5GB · +NLLB (Strategy B) ~6GB. ColBERT rerank adds ~1GB when enabled.
 
@@ -585,6 +594,10 @@ See [docs/evaluation.md](docs/evaluation.md) for methodology.
 **Agent web search fails** — ensure `TAVILY_API_KEY` is set in `.env`
 
 **Agent answers truncated** — raise `AGENT_MAX_TOKENS` (e.g. `16384`)
+
+**"Agent pipeline timed out"** — every node logs its wall time as `[Graph] <node> took Ns`; read those before changing knobs. On CPU the usual culprit is retrieval or the NLI pass, not the LLM. If a single LLM call hangs, lower `LLM_REQUEST_TIMEOUT_S` so failover fires sooner; raising `AGENT_TIMEOUT` only delays the error
+
+**Faithfulness reads ~0 on every answer** — the threshold is calibrated per NLI model. If you changed `NLI_MODEL_NAME`, recalibrate `FAITHFULNESS_THRESHOLD`: score a sentence copied verbatim out of its own chunk (positive) against one from an unrelated paper (negative) over ~20 chunks, and put the threshold between the two distributions. A bar above every positive silently reports everything as ungrounded
 
 **"Translation model gated"** — NLLB-200 needs no auth; first use downloads ~2.4GB automatically
 
