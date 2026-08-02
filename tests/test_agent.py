@@ -840,6 +840,45 @@ def test_first_evaluation_runs_even_past_the_loop_budget():
     assert cc.called, "first evaluation must not be skipped by the loop budget"
 
 
+def test_over_budget_retry_verdict_finalises_instead_of_looping():
+    """A retry verdict past the loop budget must not start another cycle.
+
+    The top-of-node gate lets iteration 1 evaluate even when already over budget.
+    Without a post-evaluation check, a `retrieve_more` verdict there returns no
+    final_answer, so the graph runs a full retrieve→generate cycle (~95s on CPU)
+    that the budget exists to prevent.
+    """
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Substantive answer. [1]"
+    claims = [{"claim": "c", "support": 0.01, "grounded": False}]
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=0,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    with patch.object(config, "AGENT_TIMEOUT", 600), \
+         patch.object(config, "AGENT_EVAL_RESERVE_S", 90.0), \
+         patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.2, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(state)
+
+    assert result["final_answer"] == draft, (
+        "over-budget retry must finalise; without final_answer the graph loops again"
+    )
+
+
+def test_nli_chunk_cap_cannot_disable_verification():
+    """A 0 cap would slice away every cited chunk, and an empty claim list reads as
+    faithfulness 1.0 — accepting an ungrounded answer. config must clamp it to >=1."""
+    import config
+
+    assert config.NLI_MAX_CHUNKS_PER_CITATION >= 1
+
+
 def test_evaluation_skipped_when_timeout_reserve_is_gone():
     """With less than the reserve left under AGENT_TIMEOUT, return the draft without
     paying for NLI or the completeness LLM call — finishing would 504 and lose it."""

@@ -229,7 +229,12 @@ NLI_CONTRADICTION_INDEX = int(os.getenv("NLI_CONTRADICTION_INDEX", "2"))
 # These two knobs bound that: shorter premise, and at most N chunks per cited paper
 # (chunks arrive rerank-ordered, so the first ones are the best support anyway).
 NLI_MAX_SEQ_LENGTH = int(os.getenv("NLI_MAX_SEQ_LENGTH", "256"))
-NLI_MAX_CHUNKS_PER_CITATION = int(os.getenv("NLI_MAX_CHUNKS_PER_CITATION", "2"))
+# Clamped to >=1 because this value FAILS OPEN: a 0 (or negative) cap slices away
+# every cited chunk, check_claims() then returns no claims, and the reflexion
+# evaluator reads an empty claim list as "no citable claims != hallucination" —
+# faithfulness 1.0, answer accepted with zero grounding. A typo in .env would
+# silently disable verification while reporting perfect scores.
+NLI_MAX_CHUNKS_PER_CITATION = max(1, int(os.getenv("NLI_MAX_CHUNKS_PER_CITATION", "2")))
 
 # ============================================================================
 # Vector Store

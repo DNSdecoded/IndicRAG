@@ -253,4 +253,23 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "reflexion_history": history,
         }
 
+    # Post-evaluation budget check. The gate at the top of this node deliberately
+    # lets iteration 1 evaluate even when already over budget — but a retry verdict
+    # would then send the graph into a full retrieve→generate cycle (~95s on CPU)
+    # that the budget exists to prevent, and only the NEXT entry here would stop it.
+    # Returning without a final_answer is what allows that, so finalise instead.
+    if start is not None:
+        elapsed = time.monotonic() - start
+        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} action={action} but "
+                f"elapsed={elapsed:.0f}s > budget "
+                f"{config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising instead of retrying"
+            )
+            return {
+                "final_answer": answer,
+                "reflexion_count": count + 1,
+                "reflexion_history": history,
+            }
+
     return {"reflexion_count": count + 1, "reflexion_history": history}
