@@ -155,6 +155,7 @@ async def chat_stream(
 
     async def _stream_and_save():
         full_answer: list[str] = []
+        final_answer: str | None = None  # compacted answer from the done event
         hit_error = False
         async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
                                        strategy=body.strategy, query_id=query_id,
@@ -165,6 +166,7 @@ async def chat_stream(
             if event.startswith('data: {"type": "done"'):
                 payload = json.loads(event[6:])
                 payload["session_id"] = session_id
+                final_answer = payload.get("answer")
                 yield f"data: {json.dumps(payload)}\n\n"
             else:
                 if event.startswith('data: {"type": "chunk"'):
@@ -174,7 +176,10 @@ async def chat_stream(
                         pass
                 yield event
         if not hit_error:
-            _append_session_messages(session_id, body.message, "".join(full_answer))
+            # Persist the compacted answer, not the raw streamed chunks — otherwise
+            # the follow-up turns inherit gapped and dangling [N] markers.
+            _append_session_messages(
+                session_id, body.message, final_answer or "".join(full_answer))
 
     return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 

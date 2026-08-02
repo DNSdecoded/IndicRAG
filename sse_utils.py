@@ -63,18 +63,25 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                 break
 
         assembled = "".join(full_answer)
-        if needs_translation and assembled:
-            try:
-                translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
-                yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
-            except Exception:
-                yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
+        # Compact BEFORE translating, so the translated answer inherits the dense
+        # numbering (same order rag.answer_question uses). Chunks already streamed
+        # carry the raw markers — an answer citing papers 1 and 4 of 4 renders
+        # "[1] … [4]" against a two-entry panel, and a marker past visible_chunks
+        # has no source at all — so the done event carries the corrected answer and
+        # the client re-renders from it. visible_chunks keeps a marker invented past
+        # the prompt's truncation point from resolving to a paper never shown.
+        compacted, citations = rag.compact_citations(
+            assembled, metadatas, visible_chunks=visible_chunks)
 
-        # visible_chunks keeps a marker the model invented past the prompt's
-        # truncation point from resolving to a paper it was never shown.
-        citations = rag.extract_citations(assembled, metadatas,
-                                          visible_chunks=visible_chunks)
-        yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
+        if needs_translation and compacted:
+            try:
+                compacted = await run_in_threadpool(
+                    translation.translate_from_english, compacted, language)
+            except Exception:
+                pass  # fall back to English
+            yield f"data: {json.dumps({'type': 'chunk', 'text': compacted})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'answer': compacted, 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
         yield "data: [DONE]\n\n"
     finally:
         stop_event.set()
