@@ -107,8 +107,13 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     chunk_metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                    for c in _contexts]
 
+    _nli_t0 = time.monotonic()
     try:
         claims = verify.check_claims(answer, chunks, chunk_metas)
+        logger.info(
+            "[Reflexion] NLI scored %d claims in %.1fs",
+            len(claims), time.monotonic() - _nli_t0,
+        )
         if claims:
             # Grounded fraction (RAGAS-style): min() collapsed to ~0 on any long
             # multi-claim answer because one synthesized/comparative sentence
