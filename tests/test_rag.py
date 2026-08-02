@@ -105,6 +105,32 @@ def test_compact_citations_closes_numbering_gaps():
     assert [c["title"] for c in cites] == ["Paper A", "Paper D"]
 
 
+def test_citations_ignore_papers_the_prompt_never_showed():
+    """A marker past the prompt's truncation point must not resolve to a real paper.
+
+    format_context truncates by chunk count and by length, but callers hold the
+    FULL retrieved metadata. Without visible_chunks, an invented [3] resolves to
+    Paper C — a paper the model was never shown — producing a citation that looks
+    legitimate. Numbering only the visible slice makes it dangle, so it is dropped.
+    """
+    from rag import compact_citations, extract_citations
+
+    metadatas = [
+        {"title": "Paper A", "section": "intro"},
+        {"title": "Paper B", "section": "body"},
+        {"title": "Paper C", "section": "results"},  # truncated out of the prompt
+    ]
+    answer = "grounded [1] and invented [3]"
+
+    # Only the first two chunks reached the prompt.
+    compacted, cites = compact_citations(answer, metadatas, visible_chunks=2)
+    assert [c["title"] for c in cites] == ["Paper A"]
+    assert compacted == "grounded [1] and invented"
+
+    # Same call without the slice is what produced the phantom citation.
+    assert [c["title"] for c in extract_citations(answer, metadatas)] == ["Paper A", "Paper C"]
+
+
 def test_compact_citations_drops_dangling_marker():
     """A number the model invented resolves to no paper — drop it, don't renumber around it."""
     from rag import compact_citations

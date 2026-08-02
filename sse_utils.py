@@ -14,7 +14,8 @@ import translation
 
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
                       max_tokens: int = None, query_id: str = None,
-                      model: str = None, provider: str = None):
+                      model: str = None, provider: str = None,
+                      visible_chunks: int = None):
     """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
 
     Strategy B + Indic target language: buffers all chunks, translates the full
@@ -69,7 +70,10 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
             except Exception:
                 yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
 
-        citations = rag.extract_citations(assembled, metadatas)
+        # visible_chunks keeps a marker the model invented past the prompt's
+        # truncation point from resolving to a paper it was never shown.
+        citations = rag.extract_citations(assembled, metadatas,
+                                          visible_chunks=visible_chunks)
         yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
         yield "data: [DONE]\n\n"
     finally:

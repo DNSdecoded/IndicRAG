@@ -168,7 +168,8 @@ async def agent_query(
         # only the cited ones — so an answer citing papers 1 and 4 of 4 read
         # "[1] … [4]" beside a two-entry panel. compact_citations renumbers the
         # answer's markers and the citations together to a dense 1..M.
-        final_answer, cits = rag.compact_citations(final_answer, metas)
+        final_answer, cits = rag.compact_citations(
+            final_answer, metas, visible_chunks=result.get("context_chunks_used"))
         for cit in cits:
             title = cit["title"].strip()
             cited_titles.add(title)
@@ -309,7 +310,8 @@ async def agent_stream(
         try:
             metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                      for c in all_contexts]
-            final_answer, cits = rag.compact_citations(final_answer, metas)
+            final_answer, cits = rag.compact_citations(
+                final_answer, metas, visible_chunks=result.get("context_chunks_used"))
             for cit in cits:
                 title = cit["title"].strip()
                 cited_titles.add(title)

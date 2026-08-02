@@ -158,7 +158,8 @@ async def chat_stream(
         hit_error = False
         async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
                                        strategy=body.strategy, query_id=query_id,
-                                       model=body.model, provider=body.provider):
+                                       model=body.model, provider=body.provider,
+                                       visible_chunks=prepared["chunks_used"]):
             if event.startswith('data: {"type": "error"'):
                 hit_error = True
             if event.startswith('data: {"type": "done"'):

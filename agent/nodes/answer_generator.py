@@ -79,4 +79,7 @@ def answer_generator_node(state: AgentState) -> dict:
         return {"draft_answer": "The AI model is temporarily unavailable. Please try again."}
 
     logger.info(f"[AnswerGenerator] chunks_used={chunks_used}, ans_len={len(answer)}")
-    return {"draft_answer": answer}
+    # Surfaced so citation resolution can number only the chunks the model was
+    # actually shown — format_context truncates, and a marker invented past that
+    # point would otherwise resolve to a real paper that never reached the prompt.
+    return {"draft_answer": answer, "context_chunks_used": chunks_used}

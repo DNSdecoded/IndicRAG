@@ -21,6 +21,12 @@ class AgentState(TypedDict):
     draft_answer: Optional[str]
     final_answer: Optional[str]
 
+    # How many of retrieved_contexts actually reached the answer prompt —
+    # format_context truncates by chunk count and by length. Citation resolution
+    # numbers only this slice, so a marker invented past it dangles (and is
+    # dropped) instead of resolving to a paper the model never saw.
+    context_chunks_used: Optional[int]
+
     reflexion_count: int
     reflexion_history: List[ReflexionFeedback]
 

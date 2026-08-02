@@ -51,7 +51,8 @@ def _crop_url(crop_path: str) -> Optional[str]:
         return None
 
 
-def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None) -> List[Dict]:
+def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None,
+                      visible_chunks: int = None) -> List[Dict]:
     """
     Extract [Cite:N] citations from answer text and resolve them to papers.
 
@@ -62,11 +63,24 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
         answer: Generated answer text containing citations
         metadatas: List of metadata dictionaries from retrieved chunks
         chunks: Unused; kept for backwards-compatible call sites
+        visible_chunks: How many leading chunks actually reached the prompt
+            (``format_context``'s ``chunks_used``). Callers hold the FULL
+            retrieved metadata, but format_context truncates by chunk count and
+            by total length — so without this, a number the model invented past
+            the truncation point resolves to a real paper it was never shown,
+            and the answer carries a citation that looks legitimate. Numbering
+            the visible slice only makes such a marker dangle, and dangling
+            markers are dropped. ``None`` means "truncation unknown", use all.
 
     Returns:
         List of citation dictionaries with number, title, and section
     """
     import re
+
+    if visible_chunks is not None:
+        metadatas = metadatas[:visible_chunks]
+        if chunks:
+            chunks = chunks[:visible_chunks]
 
     seen_nums = set()
     # Match [N] and comma-separated [N, N, ...] citation markers.
@@ -123,7 +137,8 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
 _CITE_MARKER_RE = re.compile(r'([ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]')
 
 
-def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None):
+def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None,
+                      visible_chunks: int = None):
     """extract_citations, then renumber the survivors to a dense 1..M sequence.
 
     format_context numbers EVERY retrieved paper, but only the papers the answer
@@ -136,7 +151,7 @@ def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
     Returns ``(rewritten answer, citations)`` — the citations carry the new
     dense numbers, so callers must use the returned answer, not the original.
     """
-    citations = extract_citations(answer, metadatas, chunks)
+    citations = extract_citations(answer, metadatas, chunks, visible_chunks)
     old_to_new = {int(c['number']): i for i, c in enumerate(citations, 1)}
 
     def _repl(m: "re.Match") -> str:
@@ -885,7 +900,8 @@ def answer_question_strategy_a(
     # Extract citations using robust parser, compacting [1],[4] → [1],[2] so the
     # answer's markers match the cited-only panel.
     answer, citations = compact_citations(
-        answer, context_data['metadatas'], context_data.get('chunks'))
+        answer, context_data['metadatas'], context_data.get('chunks'),
+        visible_chunks=context_data.get('chunks_used'))
 
     result = {
         'answer': answer,
@@ -977,7 +993,8 @@ def answer_question_strategy_b(
     # Extract citations from ENGLISH answer (before translation) using robust parser.
     # Compacting here means the translated answer inherits the dense numbering.
     english_answer, citations = compact_citations(
-        english_answer, context_data['metadatas'], context_data.get('chunks'))
+        english_answer, context_data['metadatas'], context_data.get('chunks'),
+        visible_chunks=context_data.get('chunks_used'))
     
     # Translate answer to target language if needed
     if detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
@@ -1125,7 +1142,8 @@ def answer_with_history(
     english_answer = llm_generate(prompt, model=model, provider=provider)
     # Compact before any translation so the translated answer carries the same numbers.
     english_answer, citations = compact_citations(
-        english_answer, context_data["metadatas"], context_data.get("chunks"))
+        english_answer, context_data["metadatas"], context_data.get("chunks"),
+        visible_chunks=context_data.get("chunks_used"))
 
     if strategy == "B" and detected_lang != "en" and lang_utils.is_indic_language(detected_lang):
         try:
