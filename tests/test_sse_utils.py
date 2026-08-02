@@ -71,8 +71,11 @@ def test_partial_answer_keeps_its_citations_after_a_stream_error():
 
     assert any(e["type"] == "error" for e in events), "the failure must still surface"
     done = next(e for e in events if e["type"] == "done")
-    assert done["answer"] == "grounded [1] and more"
+    assert done["answer"].startswith("grounded [1] and more")
     assert [c["title"] for c in done["citations"]] == ["Paper A"]
+    # ...and the answer must admit it is incomplete: with the error toast gone,
+    # a mid-sentence answer arriving with citations reads as a finished one.
+    assert done["answer"].endswith(sse_utils.INTERRUPTED_NOTE)
 
 
 def test_empty_stream_error_stops_without_a_done_event():

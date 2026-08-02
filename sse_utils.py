@@ -11,6 +11,14 @@ import llm_client
 import rag
 import translation
 
+# Distinct from providers.base.TRUNCATION_NOTE, which means "hit the token limit".
+# This one means the connection died mid-generation, so the answer stops wherever
+# the last chunk landed — usually mid-sentence.
+INTERRUPTED_NOTE = (
+    "\n\n*[Answer incomplete — the connection to the model dropped mid-response. "
+    "The sources below cover only what was generated.]*"
+)
+
 
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
                       max_tokens: int = None, query_id: str = None,
@@ -48,6 +56,7 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
     # ponytail: buffer when translation needed, stream otherwise
     needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
     full_answer: list[str] = []
+    interrupted = False  # stream died partway, but there is text worth keeping
     try:
         while True:
             kind, data = await q.get()
@@ -65,6 +74,11 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                 if not full_answer:
                     yield "data: [DONE]\n\n"
                     return
+                # Say so in the answer itself. A stream cut off mid-sentence
+                # otherwise reads as a complete answer once the error toast is
+                # gone — and it arrives with citations, which makes it look
+                # more finished than it is.
+                interrupted = True
                 break
             else:  # done
                 break
@@ -79,6 +93,8 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
         # the prompt's truncation point from resolving to a paper never shown.
         compacted, citations = rag.compact_citations(
             assembled, metadatas, visible_chunks=visible_chunks)
+        if interrupted:
+            compacted += INTERRUPTED_NOTE
 
         if needs_translation and compacted:
             try:

@@ -200,15 +200,27 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
             gen_config = _build_openrouter_stream_config(max_tokens, system_instruction)
         any_attempted = True
         emitted = False
+        chars = 0
+        started = time.monotonic()
         try:
             for chunk in backend.generate_stream(mdl, prompt, gen_config):
                 emitted = True
+                chars += len(chunk)
                 yield chunk
             _circuit_clear(key)
             return
         except Exception as exc:
             last_exc = exc
             if emitted:
+                # A mid-stream death can't be retried (the client already holds the
+                # prefix), so log what tells the causes apart: elapsed near
+                # LLM_STREAM_TIMEOUT_S means our own timeout cut it; elapsed well
+                # under it means the provider dropped the connection.
+                logger.warning(
+                    "[stream] %s:%s died after %.0fs and %d chars (limit %ds) — %s: %s",
+                    prov, mdl, time.monotonic() - started, chars,
+                    _config.LLM_STREAM_TIMEOUT_S, type(exc).__name__, str(exc)[:200],
+                )
                 raise  # committed to this stream
             if backend.is_permanent(exc):
                 raise
