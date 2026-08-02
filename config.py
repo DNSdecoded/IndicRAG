@@ -304,6 +304,11 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
 # generate_with_failover walks up to 3 (provider, model) attempts, multiplying it.
 # Keep well under AGENT_REFLEXION_BUDGET_S so failover still fits inside the budget.
 LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
+# Streaming needs its own, much larger budget: for Gemini the HTTP timeout covers
+# the WHOLE stream, not the gap between chunks, so reusing the 60s unary value tore
+# down long answers mid-generation (WinError 10054, truncated text). This still
+# bounds a genuinely stuck stream without capping legitimate long generations.
+LLM_STREAM_TIMEOUT_S = int(os.getenv("LLM_STREAM_TIMEOUT_S", "300"))
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all

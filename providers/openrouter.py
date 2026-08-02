@@ -111,6 +111,11 @@ class OpenRouterBackend(LLMBackend):
             "messages": _to_messages(contents, gen_config),
             "stream": stream,
         }
+        if stream:
+            # Per-request override: the streamed request stays open for the whole
+            # generation, so the client's unary timeout would cut long answers off
+            # mid-stream. Client default still applies to non-streaming calls.
+            params["timeout"] = config.LLM_STREAM_TIMEOUT_S
         temp = getattr(gen_config, "temperature", None)
         if temp is not None:
             params["temperature"] = temp

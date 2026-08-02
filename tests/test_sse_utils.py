@@ -54,6 +54,40 @@ def test_done_event_carries_compacted_answer():
     assert [c["number"] for c in done["citations"]] == ["1", "2"]
 
 
+def test_partial_answer_keeps_its_citations_after_a_stream_error():
+    """A stream that dies partway must still emit done.
+
+    Observed with a dropped upstream connection (WinError 10054): the user kept
+    the partial answer on screen but every citation vanished with it, because the
+    error path returned before the done event.
+    """
+    def _die_midway():
+        yield "grounded [1] and more"
+        raise RuntimeError("[WinError 10054] connection forcibly closed")
+
+    with patch("llm_client.llm_generate_stream", return_value=_die_midway()):
+        events = _drive(prompt="p", metadatas=_METADATAS, language="en",
+                        query_id="q3", visible_chunks=3)
+
+    assert any(e["type"] == "error" for e in events), "the failure must still surface"
+    done = next(e for e in events if e["type"] == "done")
+    assert done["answer"] == "grounded [1] and more"
+    assert [c["title"] for c in done["citations"]] == ["Paper A"]
+
+
+def test_empty_stream_error_stops_without_a_done_event():
+    """Nothing salvageable — no answer text, so there is nothing to attribute."""
+    def _die_immediately():
+        raise RuntimeError("upstream refused")
+        yield  # pragma: no cover - makes this a generator
+
+    with patch("llm_client.llm_generate_stream", return_value=_die_immediately()):
+        events = _drive(prompt="p", metadatas=_METADATAS, language="en",
+                        query_id="q4", visible_chunks=3)
+
+    assert [e["type"] for e in events] == ["error"]
+
+
 def test_marker_past_visible_chunks_resolves_to_nothing():
     """A number invented past the prompt's truncation point must not resolve to a
     real paper — Paper C never reached the prompt when only 2 chunks were used."""

@@ -431,7 +431,8 @@ Key settings (all overridable via environment variables):
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
-| `LLM_REQUEST_TIMEOUT_S` | `60` | Per-request HTTP timeout for every LLM call. Without it the SDK defaults apply (OpenAI: 600s × 2 retries) and one stalled request outlives the whole agent budget — multiplied by the 3-attempt failover chain |
+| `LLM_REQUEST_TIMEOUT_S` | `60` | Per-request HTTP timeout for non-streaming LLM calls. Without it the SDK defaults apply (OpenAI: 600s × 2 retries) and one stalled request outlives the whole agent budget — multiplied by the 3-attempt failover chain |
+| `LLM_STREAM_TIMEOUT_S` | `300` | Same, for **streamed** calls. Separate because the timeout covers the whole stream rather than the gap between chunks — sharing the unary value cuts long answers off mid-generation |
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion **loops** — blocks starting another cycle, from iteration 2 onwards |
 | `AGENT_EVAL_RESERVE_S` | `90` | Room that must remain under `AGENT_TIMEOUT` to attempt an evaluation at all. Can skip iteration 1, but only when finishing would overrun the timeout and discard the draft |
 | `AGENT_THINKING_BUDGET` | `0` | Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap |

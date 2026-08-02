@@ -57,8 +57,15 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                     yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
             elif kind == "error":
                 yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+                # Don't discard what already streamed. A stream that dies partway
+                # (dropped connection, provider hiccup) used to return here, so the
+                # user kept the partial answer on screen but lost every citation
+                # with it. Fall through to the done event when there is text left
+                # to attribute; only a completely empty answer stops here.
+                if not full_answer:
+                    yield "data: [DONE]\n\n"
+                    return
+                break
             else:  # done
                 break
 

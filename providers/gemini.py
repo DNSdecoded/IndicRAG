@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class GeminiBackend(LLMBackend):
     def __init__(self):
         self._pool: list[genai.Client] = []
+        self._stream_pool: list[genai.Client] = []
         self._lock = threading.Lock()
         self._index = itertools.cycle([])
 
@@ -38,11 +39,19 @@ class GeminiBackend(LLMBackend):
         # Explicit per-request timeout (google-genai takes milliseconds). The SDK
         # default is generous enough that one stalled call outlives the agent's whole
         # budget and surfaces as "Agent pipeline timed out" instead of failing over.
-        http_opts = genai_types.HttpOptions(timeout=config.LLM_REQUEST_TIMEOUT_S * 1000)
-        self._pool = [
-            genai.Client(api_key=k, http_options=http_opts)
-            for k in config.LLM_API_KEY_POOL
-        ]
+        #
+        # Streaming gets a SEPARATE, much larger budget because this timeout covers
+        # the whole stream rather than the gap between chunks — sharing the unary
+        # value tore down long answers mid-generation (WinError 10054, truncated text).
+        def _client(key, seconds):
+            return genai.Client(
+                api_key=key,
+                http_options=genai_types.HttpOptions(timeout=seconds * 1000),
+            )
+
+        self._pool = [_client(k, config.LLM_REQUEST_TIMEOUT_S) for k in config.LLM_API_KEY_POOL]
+        self._stream_pool = [_client(k, config.LLM_STREAM_TIMEOUT_S)
+                             for k in config.LLM_API_KEY_POOL]
         self._index = itertools.cycle(range(len(self._pool)))
 
     def _ensure_pool(self) -> None:
@@ -55,6 +64,12 @@ class GeminiBackend(LLMBackend):
         self._ensure_pool()
         with self._lock:
             return next(self._index)
+
+    @property
+    def stream_pool(self) -> list:
+        """Clients whose HTTP timeout fits a whole streamed generation."""
+        self._ensure_pool()
+        return self._stream_pool
 
     @property
     def pool(self) -> list:
@@ -156,7 +171,7 @@ class GeminiBackend(LLMBackend):
             return client.models.generate_content(model=model, contents=contents, config=retry_config)
 
     def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
-        client = client or self.pool[self.next_client_idx()]
+        client = client or self.stream_pool[self.next_client_idx()]
         call_config = self._prep_config(client, model, gen_config)
         emitted = False
 
