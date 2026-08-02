@@ -299,10 +299,20 @@ AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
 # AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on
 # every stock-config run — the answer shipped with no faithfulness score at all.
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
-# Per-request HTTP timeout for LLM calls. Without it the SDK defaults apply (OpenAI:
-# 600s x 2 retries), so ONE stalled request outlasts the whole agent budget — and
-# generate_with_failover walks up to 3 (provider, model) attempts, multiplying it.
-# Keep well under AGENT_REFLEXION_BUDGET_S so failover still fits inside the budget.
+# Per-request HTTP timeout for non-streaming LLM calls. Without it the SDK defaults
+# apply (OpenAI: 600s x 2 retries) and ONE stalled request outlasts the whole agent
+# budget. 60s is sized for a legitimate call, not for the failover chain: agent
+# answer generation is unary and measured 20-50s on CPU, so a materially lower
+# value would abort real generations rather than stalled ones.
+#
+# The chain is therefore NOT bounded by AGENT_REFLEXION_BUDGET_S: generate_with_failover
+# walks up to 3 (provider, model) attempts sequentially, so a fully-stalled chain can
+# reach ~180s — past the 90s reflexion budget. What actually bounds it is AGENT_TIMEOUT
+# plus AGENT_EVAL_RESERVE_S, which finalise the draft rather than 504. In practice the
+# per-(provider, model) circuit breaker in llm_client skips recently-dead paths, so
+# three consecutive full stalls are rare. If that worst case ever matters more than
+# generation headroom, make the timeout deadline-aware (remaining budget / attempts
+# left) instead of just lowering it.
 LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
 # Streaming needs its own, much larger budget: for Gemini the HTTP timeout covers
 # the WHOLE stream, not the gap between chunks, so reusing the 60s unary value tore

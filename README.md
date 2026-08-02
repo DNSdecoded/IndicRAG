@@ -552,7 +552,7 @@ flowchart TD
 | **Iteration cap** | Max **3** reflexion cycles |
 | **Loop budget** | `AGENT_REFLEXION_BUDGET_S` — blocks starting another cycle, from iteration 2 onwards. Deliberately does *not* gate the first evaluation: on a CPU-only box the first pass alone runs past it, so gating iteration 1 would ship every answer with no faithfulness score and no confidence |
 | **Deadline reserve** | `AGENT_EVAL_RESERVE_S` — skips the evaluation entirely when too little remains under `AGENT_TIMEOUT` to finish it, since being killed mid-evaluation discards the draft and 504s |
-| **Per-call timeout** | `LLM_REQUEST_TIMEOUT_S` bounds every LLM request so one stalled call can't consume the run |
+| **Per-call timeout** | `LLM_REQUEST_TIMEOUT_S` bounds each LLM request. Note it bounds one *attempt*, not the failover chain — three stalled attempts still take ~180s, which the deadline reserve absorbs |
 | **Stuck-loop detection** | Auto-accepts once completeness stops improving |
 
 ### ⚡ Standard RAG mode
@@ -605,7 +605,7 @@ See [docs/evaluation.md](docs/evaluation.md) for methodology.
 
 **Agent answers truncated** — raise `AGENT_MAX_TOKENS` (e.g. `16384`)
 
-**"Agent pipeline timed out"** — every node logs its wall time as `[Graph] <node> took Ns`; read those before changing knobs. On CPU the usual culprit is retrieval or the NLI pass, not the LLM. If a single LLM call hangs, lower `LLM_REQUEST_TIMEOUT_S` so failover fires sooner; raising `AGENT_TIMEOUT` only delays the error
+**"Agent pipeline timed out"** — every node logs its wall time as `[Graph] <node> took Ns`; read those before changing knobs. On CPU the usual culprit is retrieval or the NLI pass, not the LLM. If a single LLM call hangs, lower `LLM_REQUEST_TIMEOUT_S` so failover fires sooner — but not below ~60s, since agent answer generation is a unary call measured at 20–50s on CPU and would start aborting legitimately. Raising `AGENT_TIMEOUT` only delays the error
 
 **Faithfulness reads ~0 on every answer** — the threshold is calibrated per NLI model. If you changed `NLI_MODEL_NAME`, recalibrate `FAITHFULNESS_THRESHOLD`: score a sentence copied verbatim out of its own chunk (positive) against one from an unrelated paper (negative) over ~20 chunks, and put the threshold between the two distributions. A bar above every positive silently reports everything as ungrounded
 
