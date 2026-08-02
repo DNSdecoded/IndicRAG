@@ -81,23 +81,35 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "reflexion_count": count,
         }
 
-    # Time budget: stop looping once we've spent the reflexion budget. Finalises the
-    # current draft rather than paying another NLI + completeness pass and a
-    # retrieve→generate→verify cycle that would blow past AGENT_TIMEOUT and 504.
-    # Checked on the first entry too (as long as there IS a draft): a slow first pass
-    # already ate the budget, and the evaluation itself is what pushes it over.
+    # Two time gates, because they protect different things.
+    #
+    # AGENT_REFLEXION_BUDGET_S stops LOOPING: past it, don't start another
+    # retrieve→generate→verify cycle. It must not block the FIRST evaluation — on a
+    # CPU-only box the first pass alone (retrieval + generation) runs past the budget,
+    # so gating iteration 1 on it means the answer ships with no faithfulness score,
+    # no completeness check and no confidence, every single time.
+    #
+    # AGENT_EVAL_RESERVE_S is the real deadline guard: only skip the evaluation when
+    # there isn't room left under AGENT_TIMEOUT to finish it, since being killed
+    # mid-evaluation discards the draft and 504s.
     start = state.get("start_time")
-    if start is not None and state.get("draft_answer"):
+    draft = state.get("draft_answer")
+    if start is not None and draft:
         elapsed = time.monotonic() - start
-        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+        remaining = config.AGENT_TIMEOUT - elapsed
+        if remaining < config.AGENT_EVAL_RESERVE_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s, "
+                f"{remaining:.0f}s left < {config.AGENT_EVAL_RESERVE_S:.0f}s reserve "
+                f"→ finalising unverified draft"
+            )
+            return {"final_answer": draft, "reflexion_count": count + 1}
+        if count >= 1 and elapsed > config.AGENT_REFLEXION_BUDGET_S:
             logger.info(
                 f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s "
                 f"> budget {config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising best draft"
             )
-            return {
-                "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
-                "reflexion_count": count + 1,
-            }
+            return {"final_answer": draft, "reflexion_count": count + 1}
 
     answer = state.get("draft_answer", "")
     _contexts = state.get("retrieved_contexts", [])

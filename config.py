@@ -300,6 +300,12 @@ LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
 # work. Keep below AGENT_TIMEOUT so it fires first.
 AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
+# Wall-clock room that must remain under AGENT_TIMEOUT for the evaluator to attempt
+# an evaluation at all. Unlike the budget above (which only stops FURTHER loops),
+# this one can skip iteration 1 — but only when finishing would overrun the timeout
+# and discard the draft entirely. Sized for one NLI pass plus one completeness LLM
+# call: measured ~30s + ~15s on CPU, doubled for headroom.
+AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # Max sub-queries the planner emits (and tools run per cycle). Each sub-query does a
 # retrieve + CPU reranker pass (~15 pairs); those passes are CPU-bound so N concurrent
 # ones thrash rather than parallelize. Over a small corpus, 3 covers most queries at a

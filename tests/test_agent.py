@@ -810,21 +810,45 @@ def test_reflexion_time_budget_finalises_draft():
     assert result["final_answer"] == draft
 
 
-def test_reflexion_budget_checked_on_first_iteration():
-    """Over budget on the FIRST evaluation, the node returns the draft without paying
-    for the NLI check or the completeness LLM call (both patched to explode)."""
+def test_first_evaluation_runs_even_past_the_loop_budget():
+    """The reflexion budget stops FURTHER loops, not the first evaluation.
+
+    On a CPU-only box the first pass alone runs past the budget, so gating
+    iteration 1 on it shipped every answer unverified — no faithfulness score, no
+    completeness, no confidence.
+    """
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    state = _eval_state(
+        draft_answer="Substantive answer. [1]",
+        reflexion_count=0,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    with patch("verify.check_claims", return_value=[]) as cc, \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.9, "accept")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        reflexion_evaluator_node(state)
+
+    assert cc.called, "first evaluation must not be skipped by the loop budget"
+
+
+def test_evaluation_skipped_when_timeout_reserve_is_gone():
+    """With less than the reserve left under AGENT_TIMEOUT, return the draft without
+    paying for NLI or the completeness LLM call — finishing would 504 and lose it."""
     import time as _time
     import config
     from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
 
     def _boom(*a, **kw):
-        raise AssertionError("must not be called when over budget")
+        raise AssertionError("must not be called with no time left")
 
     draft = "Best-effort answer so far."
     state = _eval_state(
         draft_answer=draft,
         reflexion_count=0,
-        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+        start_time=_time.monotonic() - (config.AGENT_TIMEOUT - config.AGENT_EVAL_RESERVE_S + 5),
     )
     with patch("verify.check_claims", side_effect=_boom), \
          patch("rag.generate_with_failover", side_effect=_boom):
