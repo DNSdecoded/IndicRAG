@@ -105,6 +105,18 @@ def test_compact_citations_closes_numbering_gaps():
     assert [c["title"] for c in cites] == ["Paper A", "Paper D"]
 
 
+def test_dangling_marker_on_its_own_line_leaves_no_blank_line():
+    """A marker alone on a line must take its newline with it, not leave a blank
+    line that markdown renders as a paragraph break — and must not splice the
+    surrounding lines together either."""
+    from rag import compact_citations
+
+    metadatas = [{"title": "Paper A", "section": "intro"}]
+    answer, _ = compact_citations("first line\n[99]\nsecond line", metadatas)
+
+    assert answer == "first line\nsecond line"
+
+
 def test_citations_ignore_papers_the_prompt_never_showed():
     """A marker past the prompt's truncation point must not resolve to a real paper.
 

@@ -132,9 +132,11 @@ def extract_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
 
 
 # Inline citation markers: [3], [1, 3, 5], [2,4]. Digit-only, so [NOT FOUND: ...]
-# and ranges like [10-15] never match. Leading spaces are captured separately so a
-# fully-dangling marker is dropped together with the space in front of it.
-_CITE_MARKER_RE = re.compile(r'([ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]')
+# and ranges like [10-15] never match. Leading whitespace is captured separately so
+# a fully-dangling marker is dropped together with the space in front of it — and
+# the optional newline is included because a marker alone on its own line otherwise
+# left the newline behind, which markdown renders as a paragraph break.
+_CITE_MARKER_RE = re.compile(r'([ \t]*\n?[ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]')
 
 
 def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = None,
@@ -164,7 +166,15 @@ def compact_citations(answer: str, metadatas: List[Dict], chunks: List[str] = No
             if new is not None and new not in mapped:
                 mapped.append(new)
         if not mapped:  # every number in this marker was dangling
-            return ''  # drops the preceding space too — no double/trailing space
+            # Drop the preceding space too — no double/trailing space. When the
+            # marker sat alone on its line, the line's own trailing newline
+            # survives, so the captured leading newline must go with the marker
+            # or a blank line is left behind (markdown reads it as a paragraph
+            # break). Otherwise put it back, or the lines splice together.
+            if '\n' not in m.group(1):
+                return ''
+            rest = m.string[m.end():]
+            return '' if (rest == '' or rest[0] == '\n') else '\n'
         return m.group(1) + '[' + ', '.join(str(n) for n in mapped) + ']'
 
     for i, c in enumerate(citations, 1):

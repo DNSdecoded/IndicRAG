@@ -52,7 +52,7 @@ def plan_sections(topic: str, language: str = "en", max_sections: int = None) ->
         logger.warning(f"[Report] section planning failed, using default outline: {e}")
         sections = []
     if not sections:
-        sections = list(_DEFAULT_SECTIONS)
+        sections = _default_sections(language)
     # de-dupe (case-insensitive) preserving order, then cap
     seen, out = set(), []
     for s in sections:
@@ -61,6 +61,33 @@ def plan_sections(topic: str, language: str = "en", max_sections: int = None) ->
             seen.add(key)
             out.append(s)
     return out[:max_sections]
+
+
+def _default_sections(language: str) -> list[str]:
+    """The fallback outline, in the requested language.
+
+    plan_sections promises titles in `language`; returning the English skeleton
+    on the fallback path broke that promise precisely when the planner had
+    already failed. One short translation call is cheap here — this path only
+    runs when the planner returned nothing parseable — and English remains the
+    last resort if it fails too.
+    """
+    if language == "en":
+        return list(_DEFAULT_SECTIONS)
+    try:
+        lang_name = lang_utils.get_language_name(language)
+        raw = rag.llm_generate(
+            f"Translate each title into {lang_name}. Reply with ONLY a JSON array "
+            f"of {len(_DEFAULT_SECTIONS)} strings, same order, no English: "
+            f"{json.dumps(_DEFAULT_SECTIONS)}",
+            max_tokens=_PLAN_MAX_TOKENS,
+        )
+        translated = _parse_sections(raw)
+        if len(translated) == len(_DEFAULT_SECTIONS):
+            return translated
+    except Exception as e:
+        logger.warning(f"[Report] default-outline translation failed: {e}")
+    return list(_DEFAULT_SECTIONS)
 
 
 def _parse_sections(raw: str) -> list[str]:
@@ -77,9 +104,10 @@ def _parse_sections(raw: str) -> list[str]:
 
 # Inline citation markers: [3], [1, 3, 5], [2,4]. Excludes [NOT FOUND: ...]
 # and other non-numeric brackets (the digit-only pattern won't match them).
-# Leading spaces are captured separately so a fully-dangling marker is dropped
-# together with the space in front of it (mirrors rag._CITE_MARKER_RE).
-_MARKER_RE = re.compile(r"([ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]")
+# Leading whitespace is captured separately so a fully-dangling marker is dropped
+# together with the space in front of it, including a newline when the marker sits
+# alone on its own line (mirrors rag._CITE_MARKER_RE).
+_MARKER_RE = re.compile(r"([ \t]*\n?[ \t]*)\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
 def _remap_markers(body: str, cites: list[dict], registry: dict) -> str:
@@ -107,7 +135,14 @@ def _remap_markers(body: str, cites: list[dict], registry: dict) -> str:
             if g is not None and g not in mapped:
                 mapped.append(g)
         if not mapped:  # every number in this marker was dangling
-            return ""  # drops the preceding space too — no double/trailing space
+            # Drops the preceding space too — no double/trailing space. Mirrors
+            # rag.compact_citations: a marker alone on its line takes the leading
+            # newline with it (the line's own newline survives), otherwise the
+            # newline is restored so neighbouring lines don't splice together.
+            if "\n" not in m.group(1):
+                return ""
+            rest = m.string[m.end():]
+            return "" if (rest == "" or rest[0] == "\n") else "\n"
         return m.group(1) + "[" + ", ".join(str(g) for g in mapped) + "]"
 
     return _MARKER_RE.sub(_repl, body)
