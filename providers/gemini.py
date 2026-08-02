@@ -12,6 +12,7 @@ from typing import Iterator
 
 import config
 from google import genai
+from google.genai import types as genai_types
 from providers.base import LLMBackend, TRUNCATION_NOTE
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,14 @@ class GeminiBackend(LLMBackend):
                 "Google Gemini API key not configured. "
                 "Set LLM_API_KEY (single) or LLM_API_KEYS (comma-separated) in .env."
             )
-        self._pool = [genai.Client(api_key=k) for k in config.LLM_API_KEY_POOL]
+        # Explicit per-request timeout (google-genai takes milliseconds). The SDK
+        # default is generous enough that one stalled call outlives the agent's whole
+        # budget and surfaces as "Agent pipeline timed out" instead of failing over.
+        http_opts = genai_types.HttpOptions(timeout=config.LLM_REQUEST_TIMEOUT_S * 1000)
+        self._pool = [
+            genai.Client(api_key=k, http_options=http_opts)
+            for k in config.LLM_API_KEY_POOL
+        ]
         self._index = itertools.cycle(range(len(self._pool)))
 
     def _ensure_pool(self) -> None:

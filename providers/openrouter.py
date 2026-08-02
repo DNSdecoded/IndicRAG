@@ -95,9 +95,13 @@ class OpenRouterBackend(LLMBackend):
                             "OPENROUTER_API_KEY not configured. Set it in .env to use OpenRouter."
                         )
                     from openai import OpenAI
+                    # SDK defaults are 600s per request with 2 retries — one stalled
+                    # call would outlive the agent budget and 504 the whole run.
                     self._client = OpenAI(
                         api_key=config.OPENROUTER_API_KEY,
                         base_url=config.OPENROUTER_BASE_URL,
+                        timeout=config.LLM_REQUEST_TIMEOUT_S,
+                        max_retries=1,
                     )
         return self._client
 

@@ -190,7 +190,19 @@ SCOPED_MAX_CONTEXT_LENGTH = int(os.getenv("SCOPED_MAX_CONTEXT_LENGTH", "120000")
 # ============================================================================
 # Faithfulness Verification
 # ============================================================================
-FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.5"))
+# Per-claim entailment probability above which a claim counts as grounded.
+# Calibrated on this corpus with the shipped int8 mDeBERTa-xnli model: a sentence
+# copied VERBATIM out of its own chunk scores median 0.226 / max 0.428, while a
+# sentence from an unrelated paper scores p90 0.158. The old 0.5 was unreachable —
+# recall 0.00 on guaranteed-grounded claims, so faithfulness read ~0 for every
+# answer ever produced. 0.15 gives recall 0.70 at false-positive 0.10.
+# Recalibrate (positives vs cross-paper negatives) if NLI_MODEL_NAME changes.
+FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.15"))
+# Fraction of an answer's claims that must be grounded for the reflexion loop to
+# accept it, and for the finalizer to trust the answer enough to abstain on
+# completeness alone. Sits below 1.0 by design: per-claim recall is 0.70, so even a
+# fully grounded answer lands near 0.70 — the old hardcoded 0.75 could never fire.
+AGENT_FAITHFULNESS_ACCEPT = float(os.getenv("AGENT_FAITHFULNESS_ACCEPT", "0.6"))
 FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
 # NLI model for claim faithfulness. Default is MULTILINGUAL so Indic-language
@@ -211,6 +223,13 @@ NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
 #   mDeBERTa-xnli (default):     2=contradiction
 #   cross-encoder/nli-deberta-v3-base: 0=contradiction
 NLI_CONTRADICTION_INDEX = int(os.getenv("NLI_CONTRADICTION_INDEX", "2"))
+# NLI cost is linear in pairs and in premise length — measured on this CPU box with
+# the int8 ONNX model: 1.15s/pair at 512 tokens, 0.4s/pair at 256. A 30-sentence
+# answer citing multi-chunk papers hit ~275 pairs = 318s in one reflexion pass.
+# These two knobs bound that: shorter premise, and at most N chunks per cited paper
+# (chunks arrive rerank-ordered, so the first ones are the best support anyway).
+NLI_MAX_SEQ_LENGTH = int(os.getenv("NLI_MAX_SEQ_LENGTH", "256"))
+NLI_MAX_CHUNKS_PER_CITATION = int(os.getenv("NLI_MAX_CHUNKS_PER_CITATION", "2"))
 
 # ============================================================================
 # Vector Store
@@ -271,6 +290,11 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 # Raise this only if agent answer/routing quality is the bottleneck, not the bill.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
+# Per-request HTTP timeout for LLM calls. Without it the SDK defaults apply (OpenAI:
+# 600s x 2 retries), so ONE stalled request outlasts the whole agent budget — and
+# generate_with_failover walks up to 3 (provider, model) attempts, multiplying it.
+# Keep well under AGENT_REFLEXION_BUDGET_S so failover still fits inside the budget.
+LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all

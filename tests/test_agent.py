@@ -810,6 +810,29 @@ def test_reflexion_time_budget_finalises_draft():
     assert result["final_answer"] == draft
 
 
+def test_reflexion_budget_checked_on_first_iteration():
+    """Over budget on the FIRST evaluation, the node returns the draft without paying
+    for the NLI check or the completeness LLM call (both patched to explode)."""
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not be called when over budget")
+
+    draft = "Best-effort answer so far."
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=0,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    with patch("verify.check_claims", side_effect=_boom), \
+         patch("rag.generate_with_failover", side_effect=_boom):
+        result = reflexion_evaluator_node(state)
+
+    assert result["final_answer"] == draft
+
+
 def test_evaluator_sees_full_long_answer():
     """Completeness evaluator must not judge only the first 4000 chars of a long answer."""
     from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
