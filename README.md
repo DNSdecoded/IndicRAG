@@ -69,6 +69,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Two-stage reranking** — `BAAI/bge-reranker-v2-m3` cross-encoder, with optional **ColBERT** multi-vector MaxSim rerank on the narrowed candidate set
 * **Optional HyDE** — generate a hypothetical answer, embed it, and retrieve against it for recall on sparse queries
 * **Faithfulness verification** — a multilingual NLI cross-encoder (`NLI_MODEL_NAME`, int8 ONNX on CPU) scores entailment per claim against its cited chunks; unsupported assertions flagged, stripped, or regenerated (`FAITHFULNESS_ENFORCE`). The threshold is **model-specific and calibrated**, not a taste setting — see `FAITHFULNESS_THRESHOLD`
+* **Citation integrity** — the answer's `[N]` markers are renumbered to a dense `1..M` matching the cited-only source panel, and markers are resolved against **only the chunks that reached the prompt**. The context is truncated by chunk count and by length, so numbering against everything retrieved let a marker the model invented resolve to a real paper it was never shown — a phantom citation that reads as legitimate. Unresolvable markers are dropped rather than left dangling
 * **HNSW tuning knobs** — `ef_search`, `ef_construction`, `M` all env-configurable
 
 ### 📥 Smart Ingestion
@@ -89,7 +90,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 ### 🛡️ Production-Ready Infrastructure
 
 * **SQLite session/job persistence** — restarts don't drop in-flight state (`SESSIONS_DB_PATH`)
-* **SSE streaming** — token-by-token answers and live ingest progress
+* **SSE streaming** — token-by-token answers and live ingest progress; the `done` event carries the citation-corrected answer, since chunks stream before numbering can be resolved
 * Thread-safe model init (double-checked locking on all singletons)
 * Startup warm-up via FastAPI lifespan (embeddings, vector store, reranker, BM25) — no cold first request
 * Request-ID correlation across log lines; Prometheus metrics
@@ -233,6 +234,14 @@ with requests.post('http://localhost:8080/query/stream',
         if line:
             print(line.decode())  # Server-Sent Events
 ```
+
+**Use the `done` event's `answer`, not the concatenated chunks.** Chunks are emitted as the model produces them, so they carry its raw `[N]` markers. The `done` event carries the *compacted* answer — citations renumbered to a dense `1..M` matching the source panel, and markers that resolve to nothing removed. Concatenating the chunks yields text whose numbering disagrees with `citations` (an answer drawing on papers 1 and 4 of 4 streams as `[1] … [4]` beside a two-entry panel).
+
+| SSE event | Fields |
+|---|---|
+| `chunk` | `text` — raw answer fragment, streamed live |
+| `done` | `answer` (compacted), `citations`, `language`, `query_id`, `session_id` (chat only) |
+| `error` | `message` |
 
 #### Standard Chat — `POST /chat`
 
