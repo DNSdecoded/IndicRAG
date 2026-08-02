@@ -821,12 +821,18 @@ def test_first_evaluation_runs_even_past_the_loop_budget():
     import config
     from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
 
+    budget = 90.0
     state = _eval_state(
         draft_answer="Substantive answer. [1]",
         reflexion_count=0,
-        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+        start_time=_time.monotonic() - (budget + 10),
     )
-    with patch("verify.check_claims", return_value=[]) as cc, \
+    # Pin all three knobs: a developer .env (or its absence in CI) otherwise decides
+    # whether the reserve gate fires, and this test is about the loop budget.
+    with patch.object(config, "AGENT_REFLEXION_BUDGET_S", budget), \
+         patch.object(config, "AGENT_TIMEOUT", 600), \
+         patch.object(config, "AGENT_EVAL_RESERVE_S", 90.0), \
+         patch("verify.check_claims", return_value=[]) as cc, \
          patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.9, "accept")), \
          patch("rag.safe_extract_text", side_effect=lambda r: r.text):
         reflexion_evaluator_node(state)

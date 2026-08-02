@@ -289,7 +289,11 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 #   N  = cap thinking to N tokens (billed; higher = smarter routing/judging, pricier)
 # Raise this only if agent answer/routing quality is the bottleneck, not the bill.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
-AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
+# Seconds. Measured end-to-end on a CPU-only box: ~45s retrieval + ~50s generation
+# + ~25s evaluation. The old 120s default left under 30s of room once
+# AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on
+# every stock-config run — the answer shipped with no faithfulness score at all.
+AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
 # Per-request HTTP timeout for LLM calls. Without it the SDK defaults apply (OpenAI:
 # 600s x 2 retries), so ONE stalled request outlasts the whole agent budget — and
 # generate_with_failover walks up to 3 (provider, model) attempts, multiplying it.

@@ -421,7 +421,7 @@ Key settings (all overridable via environment variables):
 | `LLM_SELECTABLE_MODELS` | `gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
-| `AGENT_TIMEOUT` | `120` | Agent pipeline timeout (seconds) → 504 |
+| `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
 | `LLM_REQUEST_TIMEOUT_S` | `60` | Per-request HTTP timeout for every LLM call. Without it the SDK defaults apply (OpenAI: 600s × 2 retries) and one stalled request outlives the whole agent budget — multiplied by the 3-attempt failover chain |
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion **loops** — blocks starting another cycle, from iteration 2 onwards |
 | `AGENT_EVAL_RESERVE_S` | `90` | Room that must remain under `AGENT_TIMEOUT` to attempt an evaluation at all. Can skip iteration 1, but only when finishing would overrun the timeout and discard the draft |
