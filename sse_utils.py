@@ -11,10 +11,19 @@ import llm_client
 import rag
 import translation
 
+# Distinct from providers.base.TRUNCATION_NOTE, which means "hit the token limit".
+# This one means the connection died mid-generation, so the answer stops wherever
+# the last chunk landed — usually mid-sentence.
+INTERRUPTED_NOTE = (
+    "\n\n*[Answer incomplete — the connection to the model dropped mid-response. "
+    "The sources below cover only what was generated.]*"
+)
+
 
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
                       max_tokens: int = None, query_id: str = None,
-                      model: str = None, provider: str = None):
+                      model: str = None, provider: str = None,
+                      visible_chunks: int = None):
     """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
 
     Strategy B + Indic target language: buffers all chunks, translates the full
@@ -47,6 +56,7 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
     # ponytail: buffer when translation needed, stream otherwise
     needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
     full_answer: list[str] = []
+    interrupted = False  # stream died partway, but there is text worth keeping
     try:
         while True:
             kind, data = await q.get()
@@ -56,21 +66,45 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                     yield f"data: {json.dumps({'type': 'chunk', 'text': data})}\n\n"
             elif kind == "error":
                 yield f"data: {json.dumps({'type': 'error', 'message': data})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+                # Don't discard what already streamed. A stream that dies partway
+                # (dropped connection, provider hiccup) used to return here, so the
+                # user kept the partial answer on screen but lost every citation
+                # with it. Fall through to the done event when there is text left
+                # to attribute; only a completely empty answer stops here.
+                if not full_answer:
+                    yield "data: [DONE]\n\n"
+                    return
+                # Say so in the answer itself. A stream cut off mid-sentence
+                # otherwise reads as a complete answer once the error toast is
+                # gone — and it arrives with citations, which makes it look
+                # more finished than it is.
+                interrupted = True
+                break
             else:  # done
                 break
 
         assembled = "".join(full_answer)
-        if needs_translation and assembled:
-            try:
-                translated = await run_in_threadpool(translation.translate_from_english, assembled, language)
-                yield f"data: {json.dumps({'type': 'chunk', 'text': translated})}\n\n"
-            except Exception:
-                yield f"data: {json.dumps({'type': 'chunk', 'text': assembled})}\n\n"  # fall back to English
+        # Compact BEFORE translating, so the translated answer inherits the dense
+        # numbering (same order rag.answer_question uses). Chunks already streamed
+        # carry the raw markers — an answer citing papers 1 and 4 of 4 renders
+        # "[1] … [4]" against a two-entry panel, and a marker past visible_chunks
+        # has no source at all — so the done event carries the corrected answer and
+        # the client re-renders from it. visible_chunks keeps a marker invented past
+        # the prompt's truncation point from resolving to a paper never shown.
+        compacted, citations = rag.compact_citations(
+            assembled, metadatas, visible_chunks=visible_chunks)
+        if interrupted:
+            compacted += INTERRUPTED_NOTE
 
-        citations = rag.extract_citations(assembled, metadatas)
-        yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
+        if needs_translation and compacted:
+            try:
+                compacted = await run_in_threadpool(
+                    translation.translate_from_english, compacted, language)
+            except Exception:
+                pass  # fall back to English
+            yield f"data: {json.dumps({'type': 'chunk', 'text': compacted})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done', 'answer': compacted, 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
         yield "data: [DONE]\n\n"
     finally:
         stop_event.set()

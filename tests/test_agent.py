@@ -713,6 +713,25 @@ def test_safe_stop_preserves_draft_answer():
     assert draft in result["final_answer"], "draft answer must survive safe_stop"
 
 
+def test_query_planner_survives_safety_blocked_response():
+    """A safety-blocked reply whose .text raises must fall back, not crash the node."""
+    from agent.nodes.query_planner import query_planner_node
+
+    class _BlockedResp:
+        candidates = None
+
+        @property
+        def text(self):
+            raise ValueError("Response has no valid Part")
+
+    # NOTE: rag.safe_extract_text is the code under test — do not patch it.
+    with patch("rag.generate_with_failover", return_value=_BlockedResp()):
+        result = query_planner_node({"original_query": "antenna design for IoT"})
+
+    assert result["query_plan"] == ["antenna design for IoT"]
+    assert result["detected_language"]
+
+
 def test_year_filter_builds_chromadb_where_clause():
     """Year range filter must produce valid ChromaDB where-clauses and ignore junk."""
     from agent.tool_executor import _year_filter
@@ -788,6 +807,98 @@ def test_reflexion_time_budget_finalises_draft():
         start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
     )
     result = reflexion_evaluator_node(state)
+    assert result["final_answer"] == draft
+
+
+def test_first_evaluation_runs_even_past_the_loop_budget():
+    """The reflexion budget stops FURTHER loops, not the first evaluation.
+
+    On a CPU-only box the first pass alone runs past the budget, so gating
+    iteration 1 on it shipped every answer unverified — no faithfulness score, no
+    completeness, no confidence.
+    """
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    budget = 90.0
+    state = _eval_state(
+        draft_answer="Substantive answer. [1]",
+        reflexion_count=0,
+        start_time=_time.monotonic() - (budget + 10),
+    )
+    # Pin all three knobs: a developer .env (or its absence in CI) otherwise decides
+    # whether the reserve gate fires, and this test is about the loop budget.
+    with patch.object(config, "AGENT_REFLEXION_BUDGET_S", budget), \
+         patch.object(config, "AGENT_TIMEOUT", 600), \
+         patch.object(config, "AGENT_EVAL_RESERVE_S", 90.0), \
+         patch("verify.check_claims", return_value=[]) as cc, \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.9, "accept")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        reflexion_evaluator_node(state)
+
+    assert cc.called, "first evaluation must not be skipped by the loop budget"
+
+
+def test_over_budget_retry_verdict_finalises_instead_of_looping():
+    """A retry verdict past the loop budget must not start another cycle.
+
+    The top-of-node gate lets iteration 1 evaluate even when already over budget.
+    Without a post-evaluation check, a `retrieve_more` verdict there returns no
+    final_answer, so the graph runs a full retrieve→generate cycle (~95s on CPU)
+    that the budget exists to prevent.
+    """
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    draft = "Substantive answer. [1]"
+    claims = [{"claim": "c", "support": 0.01, "grounded": False}]
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=0,
+        start_time=_time.monotonic() - (config.AGENT_REFLEXION_BUDGET_S + 10),
+    )
+    with patch.object(config, "AGENT_TIMEOUT", 600), \
+         patch.object(config, "AGENT_EVAL_RESERVE_S", 90.0), \
+         patch("verify.check_claims", return_value=claims), \
+         patch("rag.generate_with_failover", return_value=_mk_eval_resp(0.2, "retrieve_more")), \
+         patch("rag.safe_extract_text", side_effect=lambda r: r.text):
+        result = reflexion_evaluator_node(state)
+
+    assert result["final_answer"] == draft, (
+        "over-budget retry must finalise; without final_answer the graph loops again"
+    )
+
+
+def test_nli_chunk_cap_cannot_disable_verification():
+    """A 0 cap would slice away every cited chunk, and an empty claim list reads as
+    faithfulness 1.0 — accepting an ungrounded answer. config must clamp it to >=1."""
+    import config
+
+    assert config.NLI_MAX_CHUNKS_PER_CITATION >= 1
+
+
+def test_evaluation_skipped_when_timeout_reserve_is_gone():
+    """With less than the reserve left under AGENT_TIMEOUT, return the draft without
+    paying for NLI or the completeness LLM call — finishing would 504 and lose it."""
+    import time as _time
+    import config
+    from agent.nodes.reflexion_evaluator import reflexion_evaluator_node
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not be called with no time left")
+
+    draft = "Best-effort answer so far."
+    state = _eval_state(
+        draft_answer=draft,
+        reflexion_count=0,
+        start_time=_time.monotonic() - (config.AGENT_TIMEOUT - config.AGENT_EVAL_RESERVE_S + 5),
+    )
+    with patch("verify.check_claims", side_effect=_boom), \
+         patch("rag.generate_with_failover", side_effect=_boom):
+        result = reflexion_evaluator_node(state)
+
     assert result["final_answer"] == draft
 
 

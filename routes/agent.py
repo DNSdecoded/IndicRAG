@@ -157,14 +157,6 @@ async def agent_query(
             detail={"error": "Agent pipeline failed. Please try again later.", "code": "AGENT_ERROR"},
         )
 
-    _append_session_messages(session_id, body.question, result["final_answer"])
-    processing_time = time.time() - start_time
-
-    logger.info(
-        f"Agent query: lang={result['detected_language']} "
-        f"reflexion={result['reflexion_count']} time={processing_time:.2f}s"
-    )
-
     all_contexts = result.get("retrieved_contexts", [])
     final_answer = result["final_answer"]
     cited_titles: set[str] = set()
@@ -172,14 +164,26 @@ async def agent_query(
     try:
         metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                  for c in all_contexts]
-        # Same per-paper numbering the LLM saw in the context, so the source
-        # panel's [N] matches [Cite:N] in the answer text.
-        for num, meta in rag.citation_number_map(metas).items():
-            title_to_num[(meta.get("title") or "Unknown").strip()] = num
-        for cit in rag.extract_citations(final_answer, metas):
-            cited_titles.add(cit["title"].strip())
+        # The context numbers every retrieved paper, but the panel below keeps
+        # only the cited ones — so an answer citing papers 1 and 4 of 4 read
+        # "[1] … [4]" beside a two-entry panel. compact_citations renumbers the
+        # answer's markers and the citations together to a dense 1..M.
+        final_answer, cits = rag.compact_citations(
+            final_answer, metas, visible_chunks=result.get("context_chunks_used"))
+        for cit in cits:
+            title = cit["title"].strip()
+            cited_titles.add(title)
+            title_to_num[title] = int(cit["number"])
     except Exception:
         pass  # fall through to dedup-only logic below
+
+    _append_session_messages(session_id, body.question, final_answer)
+    processing_time = time.time() - start_time
+
+    logger.info(
+        f"Agent query: lang={result['detected_language']} "
+        f"reflexion={result['reflexion_count']} time={processing_time:.2f}s"
+    )
 
     seen_titles: set[str] = set()
     sources = []
@@ -206,18 +210,18 @@ async def agent_query(
     query_id = str(uuid.uuid4())
     try:
         persistence.log_query(
-            query_id=query_id, question=body.question, answer=result["final_answer"],
+            query_id=query_id, question=body.question, answer=final_answer,
             mode=f"agent_{body.strategy}", model=body.model or "default",
             language=result.get("detected_language", "en"),
             confidence=result.get("answer_confidence") or 0.0,
-            coverage=citation_coverage(result["final_answer"]),
+            coverage=citation_coverage(final_answer),
             created_at=datetime.now(timezone.utc).isoformat(),
         )
     except Exception:
         logger.warning("Failed to log query for feedback correlation", exc_info=True)
 
     return AgentQueryResponse(
-        answer=result["final_answer"],
+        answer=final_answer,
         session_id=session_id,
         language=result.get("detected_language", "en"),
         reflexion_iterations=result.get("reflexion_count", 0),
@@ -287,7 +291,6 @@ async def agent_stream(
             return
 
         processing_time = time.time() - start_time
-        _append_session_messages(session_id, body.question, result["final_answer"])
 
         # --- Phase 2: stream tool calls as thinking events ---
         for tc in result.get("tool_calls_log", []):
@@ -297,27 +300,34 @@ async def agent_stream(
             })
             yield f"data: {tool_msg}\n\n"
 
-        # --- Phase 3: stream the final answer in chunks ---
+        # --- Phase 3: resolve citations BEFORE streaming ---
+        # The markers have to be compacted before the first chunk goes out, or
+        # the client renders [1],[4] against a two-entry panel.
         final_answer = result["final_answer"] or ""
-        chunk_size = 80  # characters per SSE chunk
-        for i in range(0, len(final_answer), chunk_size):
-            chunk = final_answer[i:i + chunk_size]
-            yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
-
-        # --- Phase 4: build sources list ---
         all_contexts = result.get("retrieved_contexts", [])
         cited_titles: set = set()
         title_to_num: dict = {}
         try:
             metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                      for c in all_contexts]
-            for num, meta in rag.citation_number_map(metas).items():
-                title_to_num[(meta.get("title") or "Unknown").strip()] = num
-            for cit in rag.extract_citations(final_answer, metas):
-                cited_titles.add(cit["title"].strip())
+            final_answer, cits = rag.compact_citations(
+                final_answer, metas, visible_chunks=result.get("context_chunks_used"))
+            for cit in cits:
+                title = cit["title"].strip()
+                cited_titles.add(title)
+                title_to_num[title] = int(cit["number"])
         except Exception:
             pass
 
+        _append_session_messages(session_id, body.question, final_answer)
+
+        # --- Phase 3b: stream the final answer in chunks ---
+        chunk_size = 80  # characters per SSE chunk
+        for i in range(0, len(final_answer), chunk_size):
+            chunk = final_answer[i:i + chunk_size]
+            yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+
+        # --- Phase 4: build sources list ---
         seen_titles: set = set()
         sources = []
         for ctx in all_contexts:

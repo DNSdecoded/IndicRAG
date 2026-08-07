@@ -81,21 +81,35 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "reflexion_count": count,
         }
 
-    # Time budget: after at least one full evaluation, stop looping if we've spent
-    # the reflexion budget. Finalises the current draft rather than starting another
-    # retrieve→generate→verify cycle that would blow past AGENT_TIMEOUT and 504.
+    # Two time gates, because they protect different things.
+    #
+    # AGENT_REFLEXION_BUDGET_S stops LOOPING: past it, don't start another
+    # retrieve→generate→verify cycle. It must not block the FIRST evaluation — on a
+    # CPU-only box the first pass alone (retrieval + generation) runs past the budget,
+    # so gating iteration 1 on it means the answer ships with no faithfulness score,
+    # no completeness check and no confidence, every single time.
+    #
+    # AGENT_EVAL_RESERVE_S is the real deadline guard: only skip the evaluation when
+    # there isn't room left under AGENT_TIMEOUT to finish it, since being killed
+    # mid-evaluation discards the draft and 504s.
     start = state.get("start_time")
-    if start is not None and count >= 1:
+    draft = state.get("draft_answer")
+    if start is not None and draft:
         elapsed = time.monotonic() - start
-        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+        remaining = config.AGENT_TIMEOUT - elapsed
+        if remaining < config.AGENT_EVAL_RESERVE_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s, "
+                f"{remaining:.0f}s left < {config.AGENT_EVAL_RESERVE_S:.0f}s reserve "
+                f"→ finalising unverified draft"
+            )
+            return {"final_answer": draft, "reflexion_count": count + 1}
+        if count >= 1 and elapsed > config.AGENT_REFLEXION_BUDGET_S:
             logger.info(
                 f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} elapsed={elapsed:.0f}s "
                 f"> budget {config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising best draft"
             )
-            return {
-                "final_answer": state.get("draft_answer", "Unable to produce a satisfactory answer."),
-                "reflexion_count": count + 1,
-            }
+            return {"final_answer": draft, "reflexion_count": count + 1}
 
     answer = state.get("draft_answer", "")
     _contexts = state.get("retrieved_contexts", [])
@@ -105,8 +119,13 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     chunk_metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                    for c in _contexts]
 
+    _nli_t0 = time.monotonic()
     try:
         claims = verify.check_claims(answer, chunks, chunk_metas)
+        logger.info(
+            "[Reflexion] NLI scored %d claims in %.1fs",
+            len(claims), time.monotonic() - _nli_t0,
+        )
         if claims:
             # Grounded fraction (RAGAS-style): min() collapsed to ~0 on any long
             # multi-claim answer because one synthesized/comparative sentence
@@ -138,7 +157,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
                 temperature=0,
                 max_output_tokens=1024,
                 # JSON completeness verdict — thinking off by default (config knob).
-                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                thinking_config=llm_client.thinking_config_for("agent"),
             ),
             provider=_provider,
         )
@@ -150,8 +169,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             r = rag.generate_with_failover(
                 model=config.LLM_MODEL_NAME, contents=p,
                 gen_config=types.GenerateContentConfig(
-                    temperature=0, max_output_tokens=1024,
-                    thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                    temperature=0, max_output_tokens=1024, system_instruction=s,
+                    thinking_config=llm_client.thinking_config_for("agent"),
                 ),
                 provider="gemini",
             )
@@ -165,7 +184,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
         if not claims:
             action = parsed.get("action", "retrieve_more")
-        elif faithfulness_score >= 0.75 and completeness_score >= 0.75:
+        elif faithfulness_score >= config.AGENT_FAITHFULNESS_ACCEPT and completeness_score >= 0.75:
             action = "accept"
         else:
             action = parsed.get("action", "retrieve_more")
@@ -176,7 +195,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             f"| raw={raw_text[:300]!r}"
         )
         completeness_score, missing = 0.5, []
-        action = "regenerate" if faithfulness_score >= 0.75 else "retrieve_more"
+        action = ("regenerate" if faithfulness_score >= config.AGENT_FAITHFULNESS_ACCEPT
+                  else "retrieve_more")
 
     feedback = ReflexionFeedback(
         faithfulness_score=faithfulness_score,
@@ -191,7 +211,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     if prev and action != "accept":
         prev_complete = prev[-1].get("completeness_score", 0.0)
         if completeness_score <= prev_complete + 0.05 and count >= 1:
-            if faithfulness_score < 0.75:
+            if faithfulness_score < config.AGENT_FAITHFULNESS_ACCEPT:
                 missing_str = ", ".join(missing) or "the requested details"
                 logger.info(
                     f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} "
@@ -232,5 +252,24 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             "reflexion_count": count + 1,
             "reflexion_history": history,
         }
+
+    # Post-evaluation budget check. The gate at the top of this node deliberately
+    # lets iteration 1 evaluate even when already over budget — but a retry verdict
+    # would then send the graph into a full retrieve→generate cycle (~95s on CPU)
+    # that the budget exists to prevent, and only the NEXT entry here would stop it.
+    # Returning without a final_answer is what allows that, so finalise instead.
+    if start is not None:
+        elapsed = time.monotonic() - start
+        if elapsed > config.AGENT_REFLEXION_BUDGET_S:
+            logger.info(
+                f"[Reflexion] iter={count + 1}/{MAX_REFLEXION} action={action} but "
+                f"elapsed={elapsed:.0f}s > budget "
+                f"{config.AGENT_REFLEXION_BUDGET_S:.0f}s → finalising instead of retrying"
+            )
+            return {
+                "final_answer": answer,
+                "reflexion_count": count + 1,
+                "reflexion_history": history,
+            }
 
     return {"reflexion_count": count + 1, "reflexion_history": history}

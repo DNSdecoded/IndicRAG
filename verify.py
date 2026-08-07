@@ -34,6 +34,10 @@ def _load():
                     # claims are actually verified, not scored by an English-only model.
                     _model = CrossEncoder(config.NLI_MODEL_NAME, device=device,
                                           cache_folder=str(config.MODELS_CACHE_DIR))
+                # Truncate the premise: cost is linear in sequence length (measured
+                # 1.15s/pair at 512 tokens vs 0.4s at 256 on this CPU box) and a
+                # chunk's support for a one-sentence claim is in its head, not tail.
+                _model.max_seq_length = config.NLI_MAX_SEQ_LENGTH
     return _model
 
 
@@ -95,7 +99,15 @@ def check_claims(answer: str, chunks: List[str], metadatas=None) -> List[dict]:
     results = []
     for sent in sentences:
         cited_nums = {int(n) for n in re.findall(r'\[(\d+)\]', sent)}
-        cited_chunks = [c for n in cited_nums for c in num_to_chunks.get(n, [])]
+        # Cap chunks per cited paper: a paper contributing 8 chunks used to cost 8
+        # NLI pairs for ONE sentence, and best() over them is dominated by the top
+        # rerank-ordered chunks anyway. This is the difference between a 300s and a
+        # 30s faithfulness pass on CPU.
+        cited_chunks = [
+            c
+            for n in sorted(cited_nums)
+            for c in num_to_chunks.get(n, [])[:config.NLI_MAX_CHUNKS_PER_CITATION]
+        ]
         if not cited_chunks:
             continue
         # Strip citation/not-found markers before scoring — leaving literal

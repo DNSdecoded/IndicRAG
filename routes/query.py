@@ -315,7 +315,8 @@ async def query_stream(
     return StreamingResponse(
         sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
                    strategy=body.strategy, query_id=query_id,
-                   model=body.model, provider=body.provider),
+                   model=body.model, provider=body.provider,
+                   visible_chunks=prepared["chunks_used"]),
         media_type="text/event-stream",
     )
 

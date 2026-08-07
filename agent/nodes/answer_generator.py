@@ -4,6 +4,7 @@ from google.genai import types
 
 import rag
 import config
+import llm_client
 from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def answer_generator_node(state: AgentState) -> dict:
         system_instruction=config.AGENT_SYSTEM_PROMPT,
         safety_settings=config.SAFETY_SETTINGS,
         # Thinking off by default so the full budget goes to the answer (config knob).
-        thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+        thinking_config=llm_client.thinking_config_for("agent"),
     )
     # The user's model choice reaches every other node (planner, selector,
     # evaluator) via state — the node that actually writes the answer must
@@ -79,4 +80,7 @@ def answer_generator_node(state: AgentState) -> dict:
         return {"draft_answer": "The AI model is temporarily unavailable. Please try again."}
 
     logger.info(f"[AnswerGenerator] chunks_used={chunks_used}, ans_len={len(answer)}")
-    return {"draft_answer": answer}
+    # Surfaced so citation resolution can number only the chunks the model was
+    # actually shown — format_context truncates, and a marker invented past that
+    # point would otherwise resolve to a real paper that never reached the prompt.
+    return {"draft_answer": answer, "context_chunks_used": chunks_used}

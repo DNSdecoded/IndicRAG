@@ -190,7 +190,19 @@ SCOPED_MAX_CONTEXT_LENGTH = int(os.getenv("SCOPED_MAX_CONTEXT_LENGTH", "120000")
 # ============================================================================
 # Faithfulness Verification
 # ============================================================================
-FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.5"))
+# Per-claim entailment probability above which a claim counts as grounded.
+# Calibrated on this corpus with the shipped int8 mDeBERTa-xnli model: a sentence
+# copied VERBATIM out of its own chunk scores median 0.226 / max 0.428, while a
+# sentence from an unrelated paper scores p90 0.158. The old 0.5 was unreachable —
+# recall 0.00 on guaranteed-grounded claims, so faithfulness read ~0 for every
+# answer ever produced. 0.15 gives recall 0.70 at false-positive 0.10.
+# Recalibrate (positives vs cross-paper negatives) if NLI_MODEL_NAME changes.
+FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.15"))
+# Fraction of an answer's claims that must be grounded for the reflexion loop to
+# accept it, and for the finalizer to trust the answer enough to abstain on
+# completeness alone. Sits below 1.0 by design: per-claim recall is 0.70, so even a
+# fully grounded answer lands near 0.70 — the old hardcoded 0.75 could never fire.
+AGENT_FAITHFULNESS_ACCEPT = float(os.getenv("AGENT_FAITHFULNESS_ACCEPT", "0.6"))
 FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
 # NLI model for claim faithfulness. Default is MULTILINGUAL so Indic-language
@@ -211,6 +223,18 @@ NLI_ENTAILMENT_INDEX = int(os.getenv("NLI_ENTAILMENT_INDEX", "0"))
 #   mDeBERTa-xnli (default):     2=contradiction
 #   cross-encoder/nli-deberta-v3-base: 0=contradiction
 NLI_CONTRADICTION_INDEX = int(os.getenv("NLI_CONTRADICTION_INDEX", "2"))
+# NLI cost is linear in pairs and in premise length — measured on this CPU box with
+# the int8 ONNX model: 1.15s/pair at 512 tokens, 0.4s/pair at 256. A 30-sentence
+# answer citing multi-chunk papers hit ~275 pairs = 318s in one reflexion pass.
+# These two knobs bound that: shorter premise, and at most N chunks per cited paper
+# (chunks arrive rerank-ordered, so the first ones are the best support anyway).
+NLI_MAX_SEQ_LENGTH = int(os.getenv("NLI_MAX_SEQ_LENGTH", "256"))
+# Clamped to >=1 because this value FAILS OPEN: a 0 (or negative) cap slices away
+# every cited chunk, check_claims() then returns no claims, and the reflexion
+# evaluator reads an empty claim list as "no citable claims != hallucination" —
+# faithfulness 1.0, answer accepted with zero grounding. A typo in .env would
+# silently disable verification while reporting perfect scores.
+NLI_MAX_CHUNKS_PER_CITATION = max(1, int(os.getenv("NLI_MAX_CHUNKS_PER_CITATION", "2")))
 
 # ============================================================================
 # Vector Store
@@ -257,7 +281,11 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # LLM Configuration
 # ============================================================================
 # Google Gemini API configuration
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))  # maximum tokens to generate
+# Caps thinking + answer together, not just the answer. gemini-3.6-flash rejects
+# thinking_budget=0 and spends 0-4856 thought tokens on identical prompts, so a
+# 2048 cap left as little as 80 tokens for the answer and truncated mid-sentence.
+# Measured: answer <=2100, worst thinking+answer 6926.
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
 # Thinking budget for ALL agentic-mode LLM calls (query planner, tool routing,
 # query expansion, answer generation, reflexion judge). Gemini semantics:
@@ -265,13 +293,56 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 #   -1 = DYNAMIC (model decides how much to think)
 #   N  = cap thinking to N tokens (billed; higher = smarter routing/judging, pricier)
 # Raise this only if agent answer/routing quality is the bottleneck, not the bill.
+# LEGACY on Gemini 3.x: those models reject thinking_budget outright (see the level
+# knobs below, which supersede it). Still honoured by models that accept budgets.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
-AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))  # seconds; CPU embedding can take 45s+
+# Thinking LEVEL — the Gemini 3.x control, replacing thinking_budget. Google's docs
+# list minimal | low | medium | high for gemini-3.6-flash, defaulting to MEDIUM when
+# nothing is sent. That default is the trap: sending the legacy thinking_budget=0 gets
+# a 400, the backend used to drop the field entirely, and the model then thought at
+# MEDIUM — the opposite of the "thinking off" that was asked for, with those thought
+# tokens coming out of LLM_MAX_TOKENS and squeezing the answer.
+#   minimal = least thinking (default here; closest to the old budget=0 intent)
+#   low | medium | high = progressively more (slower, pricier, sometimes better)
+#   ""  = send nothing, i.e. accept the model's own default
+LLM_THINKING_LEVEL = os.getenv("LLM_THINKING_LEVEL", "minimal").strip().lower()
+AGENT_THINKING_LEVEL = os.getenv("AGENT_THINKING_LEVEL", "minimal").strip().lower()
+# Seconds. Measured end-to-end on a CPU-only box: ~45s retrieval + ~50s generation
+# + ~25s evaluation. The old 120s default left under 30s of room once
+# AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on
+# every stock-config run — the answer shipped with no faithfulness score at all.
+AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
+# Per-request HTTP timeout for non-streaming LLM calls. Without it the SDK defaults
+# apply (OpenAI: 600s x 2 retries) and ONE stalled request outlasts the whole agent
+# budget. 60s is sized for a legitimate call, not for the failover chain: agent
+# answer generation is unary and measured 20-50s on CPU, so a materially lower
+# value would abort real generations rather than stalled ones.
+#
+# The chain is therefore NOT bounded by AGENT_REFLEXION_BUDGET_S: generate_with_failover
+# walks up to 3 (provider, model) attempts sequentially, so a fully-stalled chain can
+# reach ~180s — past the 90s reflexion budget. What actually bounds it is AGENT_TIMEOUT
+# plus AGENT_EVAL_RESERVE_S, which finalise the draft rather than 504. In practice the
+# per-(provider, model) circuit breaker in llm_client skips recently-dead paths, so
+# three consecutive full stalls are rare. If that worst case ever matters more than
+# generation headroom, make the timeout deadline-aware (remaining budget / attempts
+# left) instead of just lowering it.
+LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
+# Streaming needs its own, much larger budget: for Gemini the HTTP timeout covers
+# the WHOLE stream, not the gap between chunks, so reusing the 60s unary value tore
+# down long answers mid-generation (WinError 10054, truncated text). This still
+# bounds a genuinely stuck stream without capping legitimate long generations.
+LLM_STREAM_TIMEOUT_S = int(os.getenv("LLM_STREAM_TIMEOUT_S", "300"))
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
 # work. Keep below AGENT_TIMEOUT so it fires first.
 AGENT_REFLEXION_BUDGET_S = float(os.getenv("AGENT_REFLEXION_BUDGET_S", "90"))
+# Wall-clock room that must remain under AGENT_TIMEOUT for the evaluator to attempt
+# an evaluation at all. Unlike the budget above (which only stops FURTHER loops),
+# this one can skip iteration 1 — but only when finishing would overrun the timeout
+# and discard the draft entirely. Sized for one NLI pass plus one completeness LLM
+# call: measured ~30s + ~15s on CPU, doubled for headroom.
+AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # Max sub-queries the planner emits (and tools run per cycle). Each sub-query does a
 # retrieve + CPU reranker pass (~15 pairs); those passes are CPU-bound so N concurrent
 # ones thrash rather than parallelize. Over a small corpus, 3 covers most queries at a
