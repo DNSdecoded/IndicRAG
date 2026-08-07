@@ -10,6 +10,7 @@ class _FakeModels:
 
     def __init__(self, stream_chunks=("hi",), finish_reason=None):
         self.calls = []
+        self.levels = []  # thinking_level per call, parallel to calls
         self._stream_chunks = stream_chunks
         self.finish_reason = finish_reason
 
@@ -17,7 +18,9 @@ class _FakeModels:
         tc = getattr(config, "thinking_config", None)
         budget = getattr(tc, "thinking_budget", None) if tc is not None else None
         self.calls.append(budget)
-        if budget == 0:
+        self.levels.append(getattr(tc, "thinking_level", None) if tc is not None else None)
+        if budget is not None:
+            # Gemini 3.x rejects the legacy budget field outright, whatever its value.
             raise Exception("400 INVALID_ARGUMENT. Request contains an invalid argument.")
 
     def generate_content(self, model, contents, config):
@@ -54,22 +57,48 @@ def zero_budget_config():
     )
 
 
-def test_generate_retries_without_thinking_when_zero_budget_rejected(zero_budget_config):
+def test_generate_retries_with_a_level_when_budget_rejected(zero_budget_config):
+    """The retry must ask for MINIMAL thinking, not simply drop the field.
+
+    Omitting thinking_config means the model's own default — MEDIUM on
+    gemini-3.6-flash — so "thinking off" used to produce medium thinking, billed
+    and taken out of the answer's share of max_output_tokens.
+    """
+    from google.genai import types
+
     models = _FakeModels()
     b = _backend_with(models)
     resp = b.generate("gemini-3.6-flash", "q", zero_budget_config, client=b._pool[0])
     assert resp.text == "ok"
-    assert models.calls == [0, None]                       # rejected, then retried without
+    assert models.calls == [0, None]                       # budget rejected, then not resent
+    assert models.levels == [None, types.ThinkingLevel.MINIMAL]
     assert "gemini-3.6-flash" in b._zero_budget_rejected
 
 
-def test_second_call_skips_thinking_config_entirely(zero_budget_config):
+def test_second_call_sends_the_level_without_retrying(zero_budget_config):
+    from google.genai import types
+
     models = _FakeModels()
     b = _backend_with(models)
     client = b._pool[0]
     b.generate("gemini-3.6-flash", "q", zero_budget_config, client=client)
     b.generate("gemini-3.6-flash", "q2", zero_budget_config, client=client)
     assert models.calls == [0, None, None]                 # no repeat of the failing call
+    assert models.levels[-1] == types.ThinkingLevel.MINIMAL
+
+
+def test_dynamic_budget_translates_to_no_thinking_config():
+    """-1 means "model decides", which is exactly what omitting the field does."""
+    from google.genai import types
+
+    models = _FakeModels()
+    b = _backend_with(models)
+    cfg = types.GenerateContentConfig(
+        max_output_tokens=16, thinking_config=types.ThinkingConfig(thinking_budget=-1)
+    )
+    b.generate("gemini-3.6-flash", "q", cfg, client=b._pool[0])
+    assert models.calls == [-1, None]
+    assert models.levels == [None, None]
 
 
 def test_stream_retries_before_any_token_emitted(zero_budget_config):

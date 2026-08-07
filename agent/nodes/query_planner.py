@@ -102,7 +102,7 @@ def query_planner_node(state: AgentState) -> dict:
                 max_output_tokens=1024,
                 system_instruction=_DECOMPOSE_SYSTEM,
                 # Structured JSON decomposition — thinking off by default (config knob).
-                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                thinking_config=llm_client.thinking_config_for("agent"),
             ),
             provider=_provider,
         )
@@ -115,7 +115,7 @@ def query_planner_node(state: AgentState) -> dict:
                 model=config.LLM_MODEL_NAME, contents=p,
                 gen_config=types.GenerateContentConfig(
                     temperature=0, max_output_tokens=1024, system_instruction=s,
-                    thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                    thinking_config=llm_client.thinking_config_for("agent"),
                 ),
                 provider="gemini",
             )

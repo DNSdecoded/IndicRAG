@@ -293,7 +293,20 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 #   -1 = DYNAMIC (model decides how much to think)
 #   N  = cap thinking to N tokens (billed; higher = smarter routing/judging, pricier)
 # Raise this only if agent answer/routing quality is the bottleneck, not the bill.
+# LEGACY on Gemini 3.x: those models reject thinking_budget outright (see the level
+# knobs below, which supersede it). Still honoured by models that accept budgets.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
+# Thinking LEVEL — the Gemini 3.x control, replacing thinking_budget. Google's docs
+# list minimal | low | medium | high for gemini-3.6-flash, defaulting to MEDIUM when
+# nothing is sent. That default is the trap: sending the legacy thinking_budget=0 gets
+# a 400, the backend used to drop the field entirely, and the model then thought at
+# MEDIUM — the opposite of the "thinking off" that was asked for, with those thought
+# tokens coming out of LLM_MAX_TOKENS and squeezing the answer.
+#   minimal = least thinking (default here; closest to the old budget=0 intent)
+#   low | medium | high = progressively more (slower, pricier, sometimes better)
+#   ""  = send nothing, i.e. accept the model's own default
+LLM_THINKING_LEVEL = os.getenv("LLM_THINKING_LEVEL", "minimal").strip().lower()
+AGENT_THINKING_LEVEL = os.getenv("AGENT_THINKING_LEVEL", "minimal").strip().lower()
 # Seconds. Measured end-to-end on a CPU-only box: ~45s retrieval + ~50s generation
 # + ~25s evaluation. The old 120s default left under 30s of room once
 # AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on

@@ -435,7 +435,9 @@ Key settings (all overridable via environment variables):
 | `LLM_STREAM_TIMEOUT_S` | `300` | Same, for **streamed** calls. Separate because the timeout covers the whole stream rather than the gap between chunks — sharing the unary value cuts long answers off mid-generation |
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion **loops** — blocks starting another cycle, from iteration 2 onwards |
 | `AGENT_EVAL_RESERVE_S` | `90` | Room that must remain under `AGENT_TIMEOUT` to attempt an evaluation at all. Can skip iteration 1, but only when finishing would overrun the timeout and discard the draft |
-| `AGENT_THINKING_BUDGET` | `0` | Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap |
+| `AGENT_THINKING_BUDGET` | `0` | **Legacy.** Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap. Gemini 3.x models reject this field; the backend translates it to a level |
+| `LLM_THINKING_LEVEL` | `minimal` | Thinking level for standard RAG — the Gemini 3.x control. `minimal`, `low`, `medium`, `high`, or empty to accept the model default. **Not neutral:** `gemini-3.6-flash` defaults to `medium`, and those thought tokens come out of `LLM_MAX_TOKENS`, squeezing the answer |
+| `AGENT_THINKING_LEVEL` | `minimal` | Same, for the agentic pipeline |
 | `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
 | `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
 | `CONTRADICTION_NLI_THRESHOLD` | `0.6` | NLI score threshold for contradiction detection |

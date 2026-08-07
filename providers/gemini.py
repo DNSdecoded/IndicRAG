@@ -96,17 +96,47 @@ class GeminiBackend(LLMBackend):
     # Models that reject thinking_budget=0 outright (gemini-3.6-flash returns
     # 400 INVALID_ARGUMENT; gemini-3.5-flash accepts it). Learned at runtime and
     # remembered per model, so a new model generation doesn't need a hardcoded
-    # list here — omitting thinking_config is the closest thing to "no thinking"
-    # those models accept.
+    # list here.
     # Class-level on purpose (the learning is about the model, not the instance),
     # so concurrent requests must not race on the check-then-add.
     _zero_budget_rejected: set = set()
     _zero_budget_lock = threading.Lock()
 
+    # Budget-to-level translation for models on the newer thinking API. Dropping
+    # thinking_config was the old fallback, but "send nothing" means the model's
+    # OWN default — MEDIUM on gemini-3.6-flash — so asking for no thinking produced
+    # medium thinking, billed and taken out of the answer's token budget.
+    _LOW_BUDGET_CEILING = 1024  # above this a positive budget reads as MEDIUM
+
     @staticmethod
-    def _has_zero_thinking_budget(gen_config) -> bool:
+    def _thinking_level(name: str):
+        """SDK ThinkingLevel by name, or None if unsupported/unknown.
+
+        Guarded so a pinned older google-genai without the enum keeps working.
+        """
+        enum = getattr(genai_types, "ThinkingLevel", None)
+        if enum is None or not name:
+            return None
+        return getattr(enum, name.upper(), None)
+
+    @classmethod
+    def _level_for_budget(cls, budget):
+        """Legacy thinking_budget → the equivalent ThinkingLevel, or None to omit.
+
+        0 is "off", and MINIMAL is the least thinking the new API offers. -1 is
+        "model decides", which is exactly what omitting the field already means.
+        """
+        if budget is None or budget < 0:
+            return None
+        if budget == 0:
+            return cls._thinking_level("MINIMAL")
+        return cls._thinking_level("LOW" if budget <= cls._LOW_BUDGET_CEILING else "MEDIUM")
+
+    @staticmethod
+    def _has_thinking_budget(gen_config) -> bool:
+        """True if the config carries a legacy thinking_budget of any value."""
         tc = getattr(gen_config, "thinking_config", None)
-        return tc is not None and getattr(tc, "thinking_budget", None) == 0
+        return tc is not None and getattr(tc, "thinking_budget", None) is not None
 
     @staticmethod
     def _is_invalid_argument(exc: Exception) -> bool:
@@ -130,31 +160,50 @@ class GeminiBackend(LLMBackend):
             logger.debug("Gemini context caching skipped: %s", exc)
             return gen_config
 
+    def _translate_thinking(self, call_config):
+        """Re-express a thinking_budget this model rejects as a thinking_level.
+
+        Falls back to dropping thinking_config when no level applies (budget -1,
+        or an SDK too old to expose the enum) — that means "model decides".
+        """
+        tc = getattr(call_config, "thinking_config", None)
+        if tc is None:
+            return call_config
+        level = self._level_for_budget(getattr(tc, "thinking_budget", None))
+        if level is None:
+            return call_config.model_copy(update={"thinking_config": None})
+        return call_config.model_copy(update={
+            "thinking_config": genai_types.ThinkingConfig(thinking_level=level),
+        })
+
     def _prep_config(self, client, model, gen_config):
         call_config = self._with_cache(client, model, gen_config)
+        if not self.supports_thinking(model):
+            if getattr(call_config, "thinking_config", None) is not None:
+                call_config = call_config.model_copy(update={"thinking_config": None})
+            return call_config
+
         with self._zero_budget_lock:
             known_rejected = model in self._zero_budget_rejected
-        drop_thinking = (
-            not self.supports_thinking(model)
-            or (known_rejected and self._has_zero_thinking_budget(call_config))
-        )
-        if drop_thinking and getattr(call_config, "thinking_config", None) is not None:
-            call_config = call_config.model_copy(update={"thinking_config": None})
+        if known_rejected and self._has_thinking_budget(call_config):
+            call_config = self._translate_thinking(call_config)
         return call_config
 
     def _remember_zero_budget_rejection(self, model: str, gen_config, exc: Exception) -> bool:
-        """True if `exc` is this model refusing thinking_budget=0, so the caller
-        can retry once without the field. Narrow on purpose: any other 400 is a
-        genuine bad request and must keep propagating."""
-        if not (self._has_zero_thinking_budget(gen_config) and self._is_invalid_argument(exc)):
+        """True if `exc` is this model refusing a legacy thinking_budget, so the
+        caller can retry once with the translated thinking_level. Narrow on
+        purpose: any other 400 is a genuine bad request and must keep
+        propagating."""
+        if not (self._has_thinking_budget(gen_config) and self._is_invalid_argument(exc)):
             return False
         with self._zero_budget_lock:
             first_time = model not in self._zero_budget_rejected
             self._zero_budget_rejected.add(model)
         if first_time:
             logger.warning(
-                "Model %s rejects thinking_budget=0; retrying without thinking_config "
-                "and omitting it for this model from now on.", model,
+                "Model %s rejects thinking_budget (superseded by thinking_level on "
+                "Gemini 3.x); translating and using a level for this model from now on.",
+                model,
             )
         return True
 
@@ -167,8 +216,10 @@ class GeminiBackend(LLMBackend):
         except Exception as exc:
             if not self._remember_zero_budget_rejection(model, call_config, exc):
                 raise
-            retry_config = call_config.model_copy(update={"thinking_config": None})
-            return client.models.generate_content(model=model, contents=contents, config=retry_config)
+            return client.models.generate_content(
+                model=model, contents=contents,
+                config=self._translate_thinking(call_config),
+            )
 
     def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
         client = client or self.stream_pool[self.next_client_idx()]
@@ -203,7 +254,7 @@ class GeminiBackend(LLMBackend):
             # error is something else and must propagate.
             if emitted or not self._remember_zero_budget_rejection(model, call_config, exc):
                 raise
-            yield from _iter(call_config.model_copy(update={"thinking_config": None}))
+            yield from _iter(self._translate_thinking(call_config))
 
         if not emitted:
             raise RuntimeError("No text generated from Gemini stream")

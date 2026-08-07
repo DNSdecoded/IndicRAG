@@ -195,7 +195,7 @@ def _hyde_embedding(user_query: str):
             max_output_tokens=256,
             safety_settings=config.SAFETY_SETTINGS,
             # Throwaway hypothetical draft for embedding — thinking is wasted spend.
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=llm_client.thinking_config_for("standard"),
         )
         response = llm_client.generate_with_failover(
             config.LLM_MODEL_NAME,
@@ -651,8 +651,10 @@ def llm_generate(prompt: str, max_tokens: int = None,
         max_output_tokens=max_tokens,
         safety_settings=config.SAFETY_SETTINGS,
         system_instruction=system_instruction or config.SYSTEM_PROMPT,
-        # Disable thinking so the full token budget goes to the answer, not thoughts.
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        # Minimise thinking so the token budget goes to the answer, not thoughts.
+        # Sending nothing here would mean the model's own default (MEDIUM on
+        # gemini-3.6-flash), whose thoughts come out of max_output_tokens.
+        thinking_config=llm_client.thinking_config_for("standard"),
     )
 
     try:

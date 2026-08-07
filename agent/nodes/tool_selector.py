@@ -146,7 +146,7 @@ def tool_selector_node(state: AgentState) -> dict:
             function_calling_config=types.FunctionCallingConfig(mode="AUTO")
         ),
         # Rule-based tool routing — thinking off by default (config knob).
-        thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+        thinking_config=llm_client.thinking_config_for("agent"),
     )
 
     gate_provider, gate_model = _gate_model(state)

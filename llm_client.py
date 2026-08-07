@@ -156,6 +156,31 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
     raise last_exc  # type: ignore[misc]
 
 
+def thinking_config_for(scope: str = "standard"):
+    """ThinkingConfig for a call scope ("standard" or "agent"), or None to send nothing.
+
+    Prefers the Gemini 3.x thinking_level knob and falls back to the legacy
+    thinking_budget when the configured level is empty or the installed SDK has no
+    ThinkingLevel enum. Returning None means "omit the field", which lets the model
+    apply its own default — MEDIUM on gemini-3.6-flash, so it is a real choice, not
+    a neutral one.
+    """
+    from google.genai import types
+
+    level_name = (_config.AGENT_THINKING_LEVEL if scope == "agent"
+                  else _config.LLM_THINKING_LEVEL)
+    if level_name:
+        level = get_backend("gemini")._thinking_level(level_name)
+        if level is not None:
+            return types.ThinkingConfig(thinking_level=level)
+        logger.warning(
+            "Unknown thinking level %r for scope %s — falling back to thinking_budget",
+            level_name, scope,
+        )
+    budget = _config.AGENT_THINKING_BUDGET if scope == "agent" else 0
+    return types.ThinkingConfig(thinking_budget=budget)
+
+
 def _build_gemini_stream_config(model, max_tokens, system_instruction):
     from google.genai import types
     kwargs = dict(
@@ -165,7 +190,7 @@ def _build_gemini_stream_config(model, max_tokens, system_instruction):
         system_instruction=system_instruction or _config.SYSTEM_PROMPT,
     )
     if get_backend("gemini").supports_thinking(model):
-        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        kwargs["thinking_config"] = thinking_config_for("standard")
     return types.GenerateContentConfig(**kwargs)
 
 
