@@ -94,6 +94,60 @@ def test_abstract_only_when_no_pdf(monkeypatch):
     assert persistence.get_watch("w1")["seen_ids"] == ["2401.003"]
 
 
+def test_downloaded_pdf_is_kept_in_papers_dir(monkeypatch, tmp_path):
+    """The library lists PAPERS_DIR and derives paper_id from the file stem, so a
+    watch that deleted its download left indexed-but-invisible orphan chunks."""
+    import config
+
+    papers = tmp_path / "papers"
+    monkeypatch.setattr(config, "PAPERS_DIR", papers)
+
+    src = tmp_path / "download.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+
+    seen = {}
+
+    def _ingest(path, paper_id=None, metadata=None):
+        seen["path"], seen["paper_id"] = path, paper_id
+        return 5, "Ingested Title"
+
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.001")], ingest=_ingest)
+    monkeypatch.setattr(watch_runner, "_download_pdf", lambda url: str(src))
+
+    watch_runner.run_watch("w1")
+
+    kept = papers / "2401_001.pdf"
+    assert kept.exists(), "PDF must survive in PAPERS_DIR or the paper never lists"
+    assert kept.stem == seen["paper_id"], "stem drives /ingest/health's paper_id lookup"
+    assert seen["path"] == str(kept)     # ingested from the kept copy, not the temp file
+    assert not src.exists()              # temp moved, not left behind
+
+
+def test_failed_save_still_ingests_from_temp(monkeypatch, tmp_path):
+    """A save failure must degrade to the old behavior, not drop the paper."""
+    import config
+
+    monkeypatch.setattr(config, "PAPERS_DIR", tmp_path / "papers")
+    monkeypatch.setattr(watch_runner.shutil, "move",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+
+    seen = {}
+
+    def _ingest(path, paper_id=None, metadata=None):
+        seen["path"] = path
+        return 5, "Ingested Title"
+
+    _save("w1")
+    _patch(monkeypatch, [_hit("2401.001")], ingest=_ingest)
+    monkeypatch.setattr(watch_runner, "_download_pdf", lambda url: "/tmp/fake.pdf")
+
+    res = watch_runner.run_watch("w1")
+
+    assert res["new_count"] == 1
+    assert seen["path"] == "/tmp/fake.pdf"
+
+
 def test_missing_watch_raises_keyerror(monkeypatch):
     _patch(monkeypatch, [])
     with pytest.raises(KeyError):

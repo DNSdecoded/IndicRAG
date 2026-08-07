@@ -57,6 +57,41 @@ def test_citation_marker_stripped_from_nli_hypothesis():
     assert "[" not in premise
 
 
+def test_faithfulness_threshold_is_reachable():
+    """The grounded bar must sit inside the range the NLI model actually produces.
+
+    Measured on this corpus with the shipped int8 mDeBERTa-xnli: a sentence copied
+    verbatim out of its own chunk scores median 0.226 / max 0.428; an unrelated
+    paper's sentence scores median 0.099, p90 0.158 — the two distributions overlap,
+    so 0.15 trades a ~0.10-0.15 false-positive rate for 0.70 recall. The old 0.5 was
+    above every positive, so `grounded` was always False and faithfulness read ~0 for
+    every answer. Guards against a future model/threshold change reintroducing that.
+    """
+    import config
+
+    assert 0.099 < config.FAITHFULNESS_THRESHOLD < 0.428, (
+        "threshold outside the measured positive/negative separation — recalibrate "
+        "before changing NLI_MODEL_NAME or FAITHFULNESS_THRESHOLD"
+    )
+
+
+def test_chunks_per_citation_are_capped():
+    """One paper contributing many chunks must not cost one NLI pair each — the
+    per-citation cap is what keeps the faithfulness pass inside the agent budget."""
+    import config
+
+    answer = "The framework uses deep Q-networks for optimization. [1]"
+    chunks = [f"chunk {i} about deep Q-networks" for i in range(8)]
+    metas = [{"title": "One Paper"} for _ in chunks]  # all 8 chunks = citation [1]
+
+    fake_model = _fake_model()
+    with patch("verify._load", return_value=fake_model):
+        verify.check_claims(answer, chunks, metas)
+
+    called_pairs = fake_model.predict.call_args[0][0]
+    assert len(called_pairs) == config.NLI_MAX_CHUNKS_PER_CITATION
+
+
 def test_high_entailment_logit_yields_high_grounded_score():
     answer = "The framework uses deep Q-networks for antenna optimization. [1]"
     chunks = ["The proposed framework uses deep Q-networks to optimize antenna parameters."]

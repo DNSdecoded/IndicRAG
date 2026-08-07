@@ -8,6 +8,14 @@ call sites never change.
 from abc import ABC, abstractmethod
 from typing import Iterator
 
+# Appended to a stream that stopped because it ran out of output tokens. Backends
+# end such streams normally, so every layer above sees a clean finish and the text
+# is the only channel left to tell the user the answer is incomplete.
+TRUNCATION_NOTE = (
+    "\n\n*[Answer truncated — output token limit reached. "
+    "Ask a narrower question or raise `LLM_MAX_TOKENS`.]*"
+)
+
 
 class _FunctionCall:
     def __init__(self, name: str, args: dict):

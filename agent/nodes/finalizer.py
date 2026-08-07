@@ -9,9 +9,11 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # citation-coverage denominator so they don't dilute the figure.
 _MIN_SENT_CHARS = 20
 
-# Faithfulness bar above which we trust what the answer *does* say. Matches the
-# reflexion evaluator's "accept" faithfulness gate.
-_ABSTAIN_FAITH_MIN = 0.75
+# Faithfulness bar above which we trust what the answer *does* say. Shares the
+# reflexion evaluator's "accept" gate (config.AGENT_FAITHFULNESS_ACCEPT) so both
+# move together when the NLI model or its threshold is recalibrated — the old
+# hardcoded 0.75 sat above the score a fully grounded answer can reach, so
+# abstention never fired.
 
 _ABSTAIN_PREFIX = (
     "**Insufficient evidence in the corpus to fully answer this question.** "
@@ -57,7 +59,7 @@ def finalizer_node(state: AgentState) -> dict:
     # Abstention: grounded but incomplete after the reflexion budget is spent — the
     # answer we have is trustworthy, the corpus just doesn't cover the rest. (Low
     # faithfulness is a different failure, already caveated by the reflexion node.)
-    if faith >= _ABSTAIN_FAITH_MIN and comp < config.ABSTAIN_COMPLETENESS_FLOOR:
+    if faith >= config.AGENT_FAITHFULNESS_ACCEPT and comp < config.ABSTAIN_COMPLETENESS_FLOOR:
         missing = last.get("missing_aspects") or ["parts of the question"]
         gaps = "\n".join(f"- {m}" for m in missing)
         answer = f"{_ABSTAIN_PREFIX}{base_answer}\n\n---\n*Not supported by the corpus:*\n{gaps}"

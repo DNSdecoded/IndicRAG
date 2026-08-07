@@ -561,32 +561,19 @@ def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
                 _inflight_paper_ids.discard(paper_id)
             failed += 1
             continue
-        # Save a permanent copy to the papers directory
+        # Save a permanent copy to the papers directory. The filename must be
+        # `{paper_id}.pdf`: /ingest/health derives paper_id from the file stem,
+        # so a title-derived name made the paper list with 0 chunks and "Need
+        # re-index" despite indexing fine, and DELETE /papers/{id} 404'd on it.
         saved_path = None
         try:
             import shutil
-            title = item.get("title", "")
-            if title:
-                safe_name = _re.sub(r'[<>:"/\\|?*]', '_', title)[:120].strip(' ._')
-            else:
-                safe_name = paper_id
-            if not safe_name.endswith('.pdf'):
-                safe_name += '.pdf'
-            dest = config.PAPERS_DIR / safe_name
+            dest = config.PAPERS_DIR / f"{paper_id}.pdf"
             shutil.copy2(path, dest)
             saved_path = dest
             logger.info(f"[Ingest] Saved paper to {dest} (paper_id={paper_id})")
         except Exception as e:
             logger.warning(f"[Ingest] Failed to save paper to disk: {e}", exc_info=True)
-            # Fallback: save with paper_id as filename
-            try:
-                import shutil
-                fallback = config.PAPERS_DIR / (paper_id + ".pdf")
-                shutil.copy2(path, fallback)
-                saved_path = fallback
-                logger.info(f"[Ingest] Saved paper (fallback) to {fallback}")
-            except Exception as e2:
-                logger.warning(f"[Ingest] Fallback save also failed: {e2}", exc_info=True)
         try:
             ingest_path = str(saved_path) if saved_path else path
             logger.info(f"[Ingest] Ingesting from {ingest_path} with paper_id={paper_id}")

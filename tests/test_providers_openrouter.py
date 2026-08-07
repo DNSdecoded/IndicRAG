@@ -42,6 +42,36 @@ def test_generate_returns_shim_with_text():
     assert resp.text == "the answer"
 
 
+def _chunks(texts, finish_reason=None):
+    """OpenAI reports finish_reason on the final choice, alongside an empty delta."""
+    out = [SimpleNamespace(choices=[SimpleNamespace(
+        delta=SimpleNamespace(content=t), finish_reason=None)]) for t in texts]
+    if finish_reason:
+        out.append(SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None), finish_reason=finish_reason)]))
+    return out
+
+
+def _stream_backend(texts, finish_reason=None):
+    b = OpenRouterBackend()
+    b._client = MagicMock()
+    b._client.chat.completions.create.return_value = _chunks(texts, finish_reason)
+    return b
+
+
+def test_stream_appends_truncation_note_on_length():
+    from providers.base import TRUNCATION_NOTE
+    b = _stream_backend(["half an ans", "wer that stops"], "length")
+    out = "".join(b.generate_stream("anthropic/claude-haiku", "q", _cfg()))
+    assert out == "half an answer that stops" + TRUNCATION_NOTE
+
+
+def test_stream_stays_clean_when_model_finishes():
+    b = _stream_backend(["all ", "done"], "stop")
+    out = "".join(b.generate_stream("anthropic/claude-haiku", "q", _cfg()))
+    assert out == "all done"
+
+
 def test_generate_returns_shim_with_function_call():
     import json
     b = OpenRouterBackend()

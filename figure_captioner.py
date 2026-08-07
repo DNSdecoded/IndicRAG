@@ -139,6 +139,10 @@ def _caption_one(region: Dict[str, Any]) -> str:
     import rag
 
     gen_config = types.GenerateContentConfig(
+        system_instruction=(
+            "You are a scientific figure and table analyst: describe what the image "
+            "concretely shows, factually and without preamble."
+        ),
         temperature=0.0,
         max_output_tokens=512,
         safety_settings=config.SAFETY_SETTINGS,

@@ -17,6 +17,7 @@ from tavily import TavilyClient
 
 import rag
 import config
+import llm_client
 
 logger = logging.getLogger(__name__)
 _tavily = None
@@ -55,7 +56,7 @@ def _expand_query_variants(query: str) -> list[str]:
                 max_output_tokens=256,
                 system_instruction="Generate alternative search phrasings that preserve the original query's semantic meaning. Do not add new topics or narrow the scope.",
                 # Short JSON list of paraphrases — thinking off by default (config knob).
-                thinking_config=types.ThinkingConfig(thinking_budget=config.AGENT_THINKING_BUDGET),
+                thinking_config=llm_client.thinking_config_for("agent"),
             ),
         )
         clean = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()

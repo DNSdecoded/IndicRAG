@@ -1419,8 +1419,12 @@ async function sendMessage() {
           } else if (evt.type === 'done') {
             const cites = evt.citations || [];
             if (evt.session_id) sessionId = evt.session_id;
-            $('#streamBody').innerHTML = renderContent(acc);
-            lastAnswerText = acc; lastCites = cites;
+            // Streamed chunks can carry the model's raw [N] markers; when the done
+            // event carries a compacted answer (dense numbering, dangling markers
+            // dropped) it matches the citation panel, so re-render from that.
+            const finalText = evt.answer || acc;
+            $('#streamBody').innerHTML = renderContent(finalText);
+            lastAnswerText = finalText; lastCites = cites;
             turnDiv.querySelector('.asst-meta').innerHTML =
               '<span class="pill ag">Agentic</span>' +
               '<span class="pill">' + esc(evt.language || 'en') + '</span>' +
@@ -1469,8 +1473,12 @@ async function sendMessage() {
           } else if (evt.type === 'done') {
             const cites = evt.citations || [];
             if (evt.session_id) sessionId = evt.session_id;
-            $('#streamBody').innerHTML = renderContent(acc);
-            lastAnswerText = acc; lastCites = cites;
+            // Streamed chunks can carry the model's raw [N] markers; when the done
+            // event carries a compacted answer (dense numbering, dangling markers
+            // dropped) it matches the citation panel, so re-render from that.
+            const finalText = evt.answer || acc;
+            $('#streamBody').innerHTML = renderContent(finalText);
+            lastAnswerText = finalText; lastCites = cites;
             turnDiv.querySelector('.asst-meta').innerHTML =
               '<span class="pill">' + esc(evt.language_name || evt.language || 'en') + '</span>' +
               (cites.length ? '<span class="pill">' + cites.length + ' source' + (cites.length > 1 ? 's' : '') + '</span>' : '') +
