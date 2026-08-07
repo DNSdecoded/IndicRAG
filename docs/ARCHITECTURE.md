@@ -417,10 +417,21 @@ vendor that just failed. `_fallback_model_for` therefore selects the first
 `/`-shaped slug in `LLM_SELECTABLE_MODELS`; keep at least one such slug in that
 list.
 
-Some Gemini models reject `thinking_config` with `thinking_budget=0` and return
-`400 INVALID_ARGUMENT`. `GeminiBackend` records the rejection per model and
-retries once without `thinking_config`; streaming only retries if nothing has
-been emitted yet.
+Gemini 3.x models reject the legacy `thinking_budget` field with
+`400 INVALID_ARGUMENT` — it is superseded by `thinking_level`. `GeminiBackend`
+records the rejection per model and retries once with the budget translated to
+the equivalent level (`0` → `MINIMAL`, `<=1024` → `LOW`, higher → `MEDIUM`,
+`-1` → field dropped, i.e. the model decides); streaming only retries if nothing
+has been emitted yet.
+
+Dropping `thinking_config` is *not* a neutral fallback, which is why the retry
+translates instead: omitting the field means the model's own default, and
+`gemini-3.6-flash` defaults to `MEDIUM`. Those thought tokens are billed and
+come out of `max_output_tokens`, so "thinking off" silently became medium
+thinking with a squeezed answer. `llm_client.thinking_config_for(scope)` builds
+the config up front from `LLM_THINKING_LEVEL` / `AGENT_THINKING_LEVEL`
+(default `minimal`), falling back to a budget only when the level is empty or
+the installed `google-genai` has no `ThinkingLevel` enum.
 
 ### Memory Usage
 

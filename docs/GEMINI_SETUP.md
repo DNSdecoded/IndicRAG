@@ -99,13 +99,27 @@ Rough guidance rather than a fixed list, since model names change often:
   the cost and latency.
 - **Non-Gemini via OpenRouter**: useful as a genuinely independent failover leg.
 
-### Thinking budget
+### Thinking level (and the legacy budget)
 
-Gemini "thinking" models accept `thinking_budget`: `0` disables it, `-1` lets
-the model decide, a positive integer caps it. Some models reject
-`thinking_budget=0` with a 400 — `providers/gemini.py` detects that and retries
-once without `thinking_config` (streaming only retries if nothing was emitted
-yet).
+Gemini 3.x models take a **thinking level**: `minimal`, `low`, `medium`, or
+`high`. Set it with `LLM_THINKING_LEVEL` (standard RAG) and
+`AGENT_THINKING_LEVEL` (agentic pipeline); both default to `minimal`.
+
+```bash
+LLM_THINKING_LEVEL=minimal    # minimal | low | medium | high, or empty for the model default
+AGENT_THINKING_LEVEL=minimal
+```
+
+Leaving these empty is a real choice, not a neutral one: with no level sent,
+`gemini-3.6-flash` thinks at `medium`. Those thought tokens are billed and are
+drawn from `LLM_MAX_TOKENS`, so the answer gets less room.
+
+The older `AGENT_THINKING_BUDGET` (`0` off, `-1` model decides, `N` caps) still
+works on models that accept budgets. Gemini 3.x rejects it with a 400 —
+`providers/gemini.py` detects that per model and retries once with the budget
+translated to the closest level (`0` → `MINIMAL`, `<=1024` → `LOW`, higher →
+`MEDIUM`, `-1` → omit the field so the model decides). Streaming only retries if
+nothing was emitted yet.
 
 ---
 

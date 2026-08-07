@@ -32,7 +32,8 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 ### v2.4 patch — correctness fixes
 
 * **Faithfulness verification restored** — `verify.check_claims` was passing `(index, text)` tuples to the NLI model instead of the chunk text, so every call raised and every answer reported `confidence: 0.0` with no evidence.
-* **Generation restored on `gemini-3.6-flash`** — models that reject `thinking_budget=0` returned `400 INVALID_ARGUMENT`. The Gemini backend now remembers per-model rejections and retries once without `thinking_config`.
+* **Generation restored on `gemini-3.6-flash`** — models that reject `thinking_budget=0` returned `400 INVALID_ARGUMENT`. The Gemini backend now remembers per-model rejections and retries once with the budget translated to a `thinking_level`.
+* **Thinking is actually minimised, not defaulted** — the earlier fix dropped `thinking_config` on rejection, which means the model's *own* default (`medium` on `gemini-3.6-flash`), billed and taken out of `LLM_MAX_TOKENS`. New `LLM_THINKING_LEVEL` / `AGENT_THINKING_LEVEL` knobs (default `minimal`) set the level up front.
 * **Retrieval cache actually populates** — the cacheability check ran after the collection was materialized, so nothing was ever stored. Cached entries are now copied on both read and write so callers can't mutate them.
 * **Tags filter returns results** — tags are stored as one comma-joined metadata string and must be filtered in Python, which needs an over-fetch (`TAGS_OVERFETCH`); without it a tag query returned nothing.
 * **Cross-vendor failover is really cross-vendor** — the OpenRouter fallback was handed a bare Gemini model name, which OpenRouter rewrites to `google/<model>`, routing back to the vendor that just failed. It now picks a `/`-shaped slug from `LLM_SELECTABLE_MODELS`.
@@ -161,7 +162,13 @@ TAVILY_API_KEY=your_tavily_key_here
 # Optional — higher token limit for agent answers (default 8192)
 AGENT_MAX_TOKENS=8192
 
-# Optional — agent thinking tokens: 0=off (cheapest), -1=dynamic, N=cap (default 0)
+# Optional — thinking level (Gemini 3.x): minimal|low|medium|high, empty = model default
+# Empty is not neutral: gemini-3.6-flash then thinks at medium, out of LLM_MAX_TOKENS
+LLM_THINKING_LEVEL=minimal
+AGENT_THINKING_LEVEL=minimal
+
+# Legacy — agent thinking tokens on models that still accept a budget:
+# 0=off (cheapest), -1=dynamic, N=cap (default 0). Gemini 3.x translates it to a level.
 AGENT_THINKING_BUDGET=0
 
 # Optional — retrieval quality boosters (off by default, cost more compute)
