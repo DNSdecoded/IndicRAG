@@ -85,6 +85,27 @@ def ensure_directories():
 # bge-m3: dense + sparse + ColBERT, strong on Indic scripts
 # NOTE: switching from e5-base (768d) requires re-ingesting all documents
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+# int8 ONNX for the embedding model on CPU. Works, but OFF by default — measured,
+# the trade is worse than it is for the cross-encoders:
+#
+#   speed              1.38x faster (the reranker/NLI get ~3-11x)
+#   cosine vs fp32     mean 0.987, min 0.983 across a 24-chunk sample
+#
+# Every vector moves. 0.983 is enough for near-neighbours to reorder, so this can
+# change what retrieval returns — and there is currently no working way to measure
+# that (docs/Eval/run_live.py is blocked on the judgments/corpus mismatch). Trading
+# unmeasurable retrieval quality for 1.38x on an operation that runs once per
+# corpus is a bad deal; the reranker's 3-11x on a per-QUERY path is a good one.
+#
+# Turn it on deliberately, and only with a working eval gate to confirm quality
+# held. Switching it means re-embedding the whole corpus — mixing backends in one
+# collection is the incomparable-vectors problem. Every chunk records which
+# backend produced it (vector_store._provenance_stamp) and a mixed collection is
+# reported at startup; `reindex.py` replays the ingest log to re-embed without
+# re-parsing PDFs.
+#
+# CPU-only regardless: on GPU, fp16 is both faster and more accurate than int8.
+EMBED_ONNX_INT8 = os.getenv("EMBED_ONNX_INT8", "false").lower() == "true"
 EMBEDDING_DIMENSION = 1024  # bge-m3 dimension
 
 # E5 models require specific prefixes for queries and passages

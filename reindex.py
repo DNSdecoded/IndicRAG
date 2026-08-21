@@ -49,6 +49,15 @@ def _drift_report(events: list) -> list:
         problems.append(f"corpus was chunked by MIXED chunker versions: {sorted(chunkers)}")
 
     import vector_store
+    backends = {e.get("embed_backend") for e in events if e.get("embed_backend")}
+    if len(backends) > 1:
+        problems.append(f"corpus was embedded by MIXED backends: {sorted(backends)} — "
+                        "int8 and fp32 output for the same model are not comparable")
+    current_backend = vector_store._embed_backend()
+    if backends and current_backend not in ("unloaded", "unknown") and current_backend not in backends:
+        problems.append(f"configured embedding backend {current_backend!r} differs from the "
+                        f"indexed one(s) {sorted(backends)} — a replay will re-embed")
+
     if chunkers and vector_store.CHUNKER_VERSION not in chunkers:
         problems.append(
             f"configured chunker version {vector_store.CHUNKER_VERSION} differs from the "

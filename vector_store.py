@@ -173,10 +173,30 @@ CHUNKER_VERSION = 1
 SCHEMA_VERSION = 1
 
 
+def _embed_backend() -> str:
+    """Which weights produced the vectors: 'fp32', 'onnx-int8' or 'fp16'.
+
+    The model id alone is not enough. int8-quantized BGE-M3 and fp32 BGE-M3 share
+    a model name but do NOT produce interchangeable vectors, so a stamp recording
+    only `embed_model` would call a mixed collection consistent — exactly the
+    silent failure the stamp exists to prevent.
+
+    Read from the loader rather than sniffed off the model object: the loader
+    knows which branch it took, and inspecting sentence-transformers internals
+    would quietly start returning the wrong answer on a library upgrade.
+    """
+    try:
+        import embeddings
+        return embeddings.EMBED_BACKEND
+    except Exception:
+        return "unknown"
+
+
 def _provenance_stamp() -> Dict[str, Any]:
     return {
         "embed_model": config.EMBEDDING_MODEL_NAME,
         "embed_dim": config.EMBEDDING_DIMENSION,
+        "embed_backend": _embed_backend(),
         "chunker_version": CHUNKER_VERSION,
         "schema_version": SCHEMA_VERSION,
     }
@@ -203,6 +223,7 @@ def index_fingerprint(collection: chromadb.Collection = None) -> Optional[Dict[s
     return {
         "embed_model": m.get("embed_model"),
         "embed_dim": m.get("embed_dim"),
+        "embed_backend": m.get("embed_backend"),
         "chunker_version": m.get("chunker_version"),
         "schema_version": m.get("schema_version"),
     }
@@ -231,6 +252,16 @@ def check_index_compatibility(collection: chromadb.Collection = None) -> Optiona
     if fp["chunker_version"] != CHUNKER_VERSION:
         problems.append(f"chunker version {fp['chunker_version']} indexed vs "
                         f"{CHUNKER_VERSION} configured")
+    # Same model id, different weights. int8 and fp32 vectors are not comparable,
+    # and without this the model-name check above would call the pair consistent.
+    # Only meaningful once the model is loaded — 'unloaded' means we cannot tell
+    # yet, and guessing would produce a spurious warning at import time.
+    current_backend = _embed_backend()
+    if (fp["embed_backend"] and current_backend not in ("unloaded", "unknown")
+            and fp["embed_backend"] != current_backend):
+        problems.append(f"embedding backend {fp['embed_backend']!r} indexed vs "
+                        f"{current_backend!r} configured (same model, different "
+                        "weights — the vectors are not comparable)")
     if not problems:
         return None
     return ("; ".join(problems) +

@@ -114,10 +114,39 @@ def test_unstamped_legacy_chunks_are_reported_not_assumed_compatible():
 
 def test_fingerprint_reads_back_what_was_stamped():
     coll = _Collection(metas=[{
-        "embed_model": "BAAI/bge-m3", "embed_dim": 1024,
+        "embed_model": "BAAI/bge-m3", "embed_dim": 1024, "embed_backend": "fp32",
         "chunker_version": 1, "schema_version": 1,
     }])
     assert vector_store.index_fingerprint(coll) == {
-        "embed_model": "BAAI/bge-m3", "embed_dim": 1024,
+        "embed_model": "BAAI/bge-m3", "embed_dim": 1024, "embed_backend": "fp32",
         "chunker_version": 1, "schema_version": 1,
     }
+
+
+def test_a_changed_embedding_backend_is_reported(monkeypatch):
+    """The gap the model-name check alone leaves open: int8 and fp32 BGE-M3 share
+    a model id but produce vectors that are not comparable."""
+    coll = _Collection(metas=[{
+        "embed_model": config.EMBEDDING_MODEL_NAME,
+        "embed_dim": config.EMBEDDING_DIMENSION,
+        "embed_backend": "fp32",
+        "chunker_version": vector_store.CHUNKER_VERSION,
+        "schema_version": vector_store.SCHEMA_VERSION,
+    }])
+    monkeypatch.setattr(vector_store, "_embed_backend", lambda: "onnx-int8")
+    problem = vector_store.check_index_compatibility(coll)
+    assert problem and "backend" in problem and "not comparable" in problem
+
+
+def test_backend_mismatch_is_not_reported_before_the_model_loads(monkeypatch):
+    """'unloaded' means we cannot tell yet. Warning then would fire on every
+    import and train the operator to ignore a real warning later."""
+    coll = _Collection(metas=[{
+        "embed_model": config.EMBEDDING_MODEL_NAME,
+        "embed_dim": config.EMBEDDING_DIMENSION,
+        "embed_backend": "fp32",
+        "chunker_version": vector_store.CHUNKER_VERSION,
+        "schema_version": vector_store.SCHEMA_VERSION,
+    }])
+    monkeypatch.setattr(vector_store, "_embed_backend", lambda: "unloaded")
+    assert vector_store.check_index_compatibility(coll) is None
