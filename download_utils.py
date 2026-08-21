@@ -140,12 +140,24 @@ def download_pdf(url: str, _redirects_left: int = _MAX_REDIRECTS) -> str | None:
     # under the byte cap. Add a wall-clock ceiling across the whole read loop
     # if this becomes a real self-DoS problem (route is auth'd + rate-limited).
     """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
+    # Parsing is inside the guard too: urlparse() itself raises on a malformed
+    # IPv6 authority ("http://[bad/"), and .port raises on a non-numeric or
+    # out-of-range port — neither of which .hostname does. This function's
+    # contract with its callers is "returns None on failure"; they treat a raise
+    # as a crash, and a background ingest task that raises here skips its
+    # reservation cleanup and its terminal job update, stranding the job as
+    # `running` forever.
+    try:
+        parsed = urlparse(url)
+        scheme = parsed.scheme
+        hostname = parsed.hostname or ""
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError as exc:
+        logger.warning("Rejected malformed URL (%s): %s", exc, url)
+        return None
+    if scheme not in ("http", "https"):
         logger.warning(f"Rejected non-HTTP(S) URL: {url}")
         return None
-    hostname = parsed.hostname or ""
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     pinned_ip = _resolve_public_ip(hostname, port)
     if pinned_ip is None:
         logger.warning(f"Rejected unresolvable or private/loopback URL: {url}")

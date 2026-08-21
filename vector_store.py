@@ -316,18 +316,43 @@ def add_documents(
     #
     # Batching bounds each individual wait, rather than scaling one timeout to
     # the largest corpus anyone might ever ingest, and keeps peak memory flat.
+    # Batching reintroduces a failure mode a single upsert did not have: an
+    # exception on batch 3 leaves batches 1-2 committed, the caller never reaches
+    # its ingest-log write, and a later replay silently omits chunks that are
+    # still searchable in ChromaDB — exactly the divergence the log exists to
+    # prevent. So a failed write is rolled back, restoring all-or-nothing.
     batch = max(1, config.CHROMA_UPSERT_BATCH)
-    for start in range(0, len(ids), batch):
-        sl = slice(start, start + batch)
-        _chroma_call(collection.upsert,
-            documents=texts[sl],
-            embeddings=embeddings_list[sl],
-            metadatas=metadatas[sl],
-            ids=ids[sl],
-            timeout=config.CHROMA_WRITE_TIMEOUT_S,
-        )
-        if len(ids) > batch:
-            logger.info("  upserted %d/%d chunks", min(start + batch, len(ids)), len(ids))
+    written: List[str] = []
+    try:
+        for start in range(0, len(ids), batch):
+            sl = slice(start, start + batch)
+            _chroma_call(collection.upsert,
+                documents=texts[sl],
+                embeddings=embeddings_list[sl],
+                metadatas=metadatas[sl],
+                ids=ids[sl],
+                timeout=config.CHROMA_WRITE_TIMEOUT_S,
+            )
+            written.extend(ids[sl])
+            if len(ids) > batch:
+                logger.info("  upserted %d/%d chunks", len(written), len(ids))
+    except Exception:
+        if written:
+            logger.error("Upsert failed after %d/%d chunks; rolling back so the "
+                         "store cannot hold chunks the ingest log will not record",
+                         len(written), len(ids))
+            try:
+                _chroma_call(collection.delete, ids=written,
+                             timeout=config.CHROMA_WRITE_TIMEOUT_S)
+            except Exception:
+                # Rollback itself failed: say so loudly and name the ids, because
+                # the store now genuinely diverges from the log and only a
+                # reindex can reconcile it.
+                logger.error("ROLLBACK FAILED — %d orphaned chunks remain in the "
+                             "collection and are absent from the ingest log. Run "
+                             "reindex.py --backfill-log, or re-ingest this paper. "
+                             "First ids: %s", len(written), written[:5], exc_info=True)
+        raise
 
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
 

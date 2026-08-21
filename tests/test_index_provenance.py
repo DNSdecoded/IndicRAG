@@ -150,3 +150,44 @@ def test_backend_mismatch_is_not_reported_before_the_model_loads(monkeypatch):
     }])
     monkeypatch.setattr(vector_store, "_embed_backend", lambda: "unloaded")
     assert vector_store.check_index_compatibility(coll) is None
+
+
+def test_a_failed_batch_rolls_back_what_it_already_wrote():
+    """Batched upserts reintroduce partial failure. If batches 1-2 commit and 3
+    raises, the caller never reaches its ingest-log write, so a replay would omit
+    chunks that are still searchable — the exact divergence the log prevents."""
+    import config
+    import pytest
+
+    class _FailsOnThirdBatch:
+        name = "rollback"
+
+        def __init__(self):
+            self.written, self.deleted, self.calls = [], [], 0
+
+        def upsert(self, ids=None, **kw):
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("chroma exploded")
+            self.written.extend(ids)
+
+        def delete(self, ids=None, **kw):
+            self.deleted.extend(ids or [])
+
+        def count(self):
+            return len(self.written) - len(self.deleted)
+
+    coll = _FailsOnThirdBatch()
+    old = config.CHROMA_UPSERT_BATCH
+    config.CHROMA_UPSERT_BATCH = 2
+    try:
+        ids = [f"c{i}" for i in range(6)]
+        with pytest.raises(RuntimeError, match="exploded"):
+            vector_store.add_documents(
+                texts=["t"] * 6, embeddings=np.zeros((6, 4)),
+                metadatas=[{"paper_id": "p"} for _ in range(6)],
+                ids=ids, collection=coll)
+        # Everything committed before the failure is removed again.
+        assert sorted(coll.deleted) == sorted(coll.written)
+    finally:
+        config.CHROMA_UPSERT_BATCH = old

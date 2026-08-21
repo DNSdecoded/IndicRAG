@@ -208,12 +208,18 @@ class _Coll:
         self.name = name
         self._docs = docs
         self.get_calls = 0
+        self.doc_fetches = 0
 
     def count(self):
         return len(self._docs)
 
     def get(self, include=None):
         self.get_calls += 1
+        # The staleness check fetches ids only (include=[]); a rebuild fetches
+        # documents. Counted apart, because "did not re-read the corpus" is about
+        # the text payload, not about touching the collection at all.
+        if include:
+            self.doc_fetches += 1
         return {"ids": list(self._docs), "documents": list(self._docs.values())}
 
 
@@ -231,12 +237,14 @@ def test_index_is_persisted_and_reloaded_without_rereading_the_corpus(_cache_dir
     """The point of persisting: a restart must not re-read every document."""
     coll = _Coll({"a": "antenna optimization", "b": "protein folding"})
     bm25_search.get_or_build_index(coll)
-    assert coll.get_calls == 1
+    assert coll.doc_fetches == 1
 
     bm25_search.invalidate()          # simulate a process restart
     idx = bm25_search.get_or_build_index(coll)
 
-    assert coll.get_calls == 1        # served from disk, corpus not re-read
+    # Served from disk: the id set is re-read to prove the cache still matches
+    # the collection, but the documents — the expensive part — are not.
+    assert coll.doc_fetches == 1
     assert idx.search("antenna", 5)[0] == ["a"]
 
 
@@ -264,7 +272,7 @@ def test_stale_cache_is_ignored_when_the_corpus_changed(_cache_dir):
     coll._docs["b"] = "newly ingested qubit paper"
     idx = bm25_search.get_or_build_index(coll)
 
-    assert coll.get_calls == 2               # rebuilt from the corpus
+    assert coll.doc_fetches == 2             # rebuilt from the corpus
     assert idx.search("qubit", 5)[0] == ["b"]
 
 
@@ -281,7 +289,8 @@ def test_corrupt_cache_falls_back_to_rebuild(_cache_dir):
 
 
 def test_cache_from_an_older_format_is_ignored(_cache_dir):
-    import gzip, json
+    import gzip
+    import json
     coll = _Coll({"a": "antenna"})
     bm25_search.get_or_build_index(coll)
     bm25_search.invalidate()
@@ -294,7 +303,7 @@ def test_cache_from_an_older_format_is_ignored(_cache_dir):
         json.dump(payload, f)
 
     assert bm25_search.get_or_build_index(coll) is not None
-    assert coll.get_calls == 2               # ignored the future-format file
+    assert coll.doc_fetches == 2             # ignored the future-format file
 
 
 def test_persisted_cache_is_not_pickle(_cache_dir):
@@ -352,3 +361,30 @@ def test_get_or_build_index_caches_per_collection():
     second = bm25_search.get_or_build_index(coll)
     assert first is second  # rebuilt once, then served from cache
     bm25_search.invalidate()
+
+
+def test_cache_is_rejected_when_content_changed_but_count_did_not(_cache_dir):
+    """The count-only check could not see this: delete one paper and ingest
+    another of the same size and the count is identical while every chunk
+    differs. Loading that cache serves deleted text and misses its replacement."""
+    coll = _Coll({"a1": "antenna design", "a2": "antenna results"})
+    bm25_search.get_or_build_index(coll)
+    bm25_search.invalidate()
+
+    coll._docs = {"b1": "qubit surface codes", "b2": "qubit syndrome"}   # same count
+    idx = bm25_search.get_or_build_index(coll)
+
+    assert idx.search("antenna", 5)[0] == [], "stale cache served deleted content"
+    assert set(idx.search("qubit", 5)[0]) == {"b1", "b2"}
+
+
+def test_removing_documents_persists_the_index(_cache_dir):
+    """A delete mutates the in-memory index; leaving the disk copy untouched is
+    how it diverges from the collection across a restart."""
+    bm25_search.invalidate()
+    bm25_search._indices["persist"] = _index({"a": "antenna", "b": "qubit"})
+    try:
+        bm25_search.remove_from_index(["a"], "persist")
+        assert bm25_search._cache_path("persist").exists()
+    finally:
+        bm25_search.invalidate()

@@ -431,9 +431,13 @@ def test_bm25_per_collection_isolation():
     assert idx_a is not idx_b
     assert idx_a.n_docs == 2
     assert idx_b.n_docs == 1
-    # Cache hit — collection.get not called a second time
+    # Cache hit — a second call must not touch the collection at all. Asserted as
+    # a delta rather than a fixed total: building an index may legitimately read
+    # the collection more than once (ids for the staleness check, then documents),
+    # and this test is about the in-memory hit, not the build's call pattern.
+    before = coll_a.get.call_count
     assert bm25_search.get_or_build_index(coll_a) is idx_a
-    assert coll_a.get.call_count == 1
+    assert coll_a.get.call_count == before
 
 
 def test_bm25_invalidate_clears_all_collections():

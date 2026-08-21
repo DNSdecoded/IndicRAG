@@ -15,6 +15,7 @@ longer throws the whole index away and leaves the next query paying for a full
 rebuild.
 """
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the on-disk shape changes; an older file is then ignored, not
 # misread — a silently misinterpreted index is worse than a rebuild.
-_CACHE_FORMAT = 1
+_CACHE_FORMAT = 2  # 2: id fingerprint replaced the count-only staleness check
 
 _indices: dict[str, "BM25Index"] = {}
 _lock = threading.Lock()
@@ -177,12 +178,29 @@ def _cache_path(coll_name: str):
     return config.BM25_CACHE_DIR / f"bm25_{safe}.json.gz"
 
 
-def _load_cached(coll_name: str, expected_docs: int) -> Optional["BM25Index"]:
+def _id_fingerprint(ids) -> str:
+    """Order-independent digest of a set of chunk ids.
+
+    Document COUNT is not sufficient to detect staleness: deleting one paper and
+    ingesting another of the same size leaves the count identical while every
+    affected chunk differs, and the cache would then load and serve deleted text
+    while missing its replacement. Comparing id sets catches that; comparing
+    counts cannot.
+    """
+    h = hashlib.sha256()
+    for i in sorted(ids):
+        h.update(i.encode("utf-8", "ignore"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _load_cached(coll_name: str, live_ids) -> Optional["BM25Index"]:
     """Load a persisted index, or None if it is missing, unreadable, or stale.
 
-    Staleness is judged on live document count: the corpus changing under a saved
-    index is exactly when it must not be trusted. A corrupt or version-mismatched
-    file is not an error — it just means rebuild.
+    Staleness is judged by comparing the cached id set against the collection's:
+    the corpus changing under a saved index is exactly when it must not be
+    trusted. A corrupt or version-mismatched file is not an error — it just
+    means rebuild.
     """
     path = _cache_path(coll_name)
     if not path.exists():
@@ -199,9 +217,11 @@ def _load_cached(coll_name: str, expected_docs: int) -> Optional["BM25Index"]:
                                           for t, ps in payload["postings"].items()})
         idx._deleted = set(payload["deleted"])
         idx._total_len = payload["total_len"]
-        if idx.n_docs != expected_docs:
-            logger.info("BM25 cache for '%s' is stale (%d docs on disk vs %d live); rebuilding",
-                        coll_name, idx.n_docs, expected_docs)
+        live_fp = _id_fingerprint(live_ids)
+        if payload.get("id_fingerprint") != live_fp:
+            logger.info("BM25 cache for '%s' does not match the collection "
+                        "(%d docs cached vs %d live); rebuilding",
+                        coll_name, idx.n_docs, len(live_ids))
             return None
         logger.info("BM25 index for '%s' loaded from cache (%d docs)", coll_name, idx.n_docs)
         return idx
@@ -243,6 +263,8 @@ def save_index(coll_name: str = None) -> bool:
                 "postings": {t: [list(p) for p in ps] for t, ps in idx.postings.items()},
                 "deleted": sorted(idx._deleted),
                 "total_len": idx._total_len,
+                "id_fingerprint": _id_fingerprint(
+                    [d for i, d in enumerate(idx.doc_ids) if i not in idx._deleted]),
             }
             tmp = path.with_suffix(".tmp")
             with gzip.open(tmp, "wt", encoding="utf-8") as f:
@@ -280,7 +302,10 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
             return None
 
         if config.BM25_PERSIST:
-            cached = _load_cached(coll_name, count)
+            # ids only — no text payload, so this stays far cheaper than the
+            # rebuild it is deciding whether to skip.
+            live_ids = collection.get(include=[]).get("ids", [])
+            cached = _load_cached(coll_name, live_ids)
             if cached is not None:
                 _indices[coll_name] = cached
                 return cached
@@ -328,6 +353,10 @@ def remove_from_index(ids, collection_name: str = None) -> bool:
         return False
     for idx in targets:
         idx.remove_documents(ids)
+    # Persist: a delete mutates the in-memory index, and leaving the disk copy
+    # untouched is how it diverges from the collection between restarts.
+    if config.BM25_PERSIST:
+        save_index(collection_name)
     return True
 
 

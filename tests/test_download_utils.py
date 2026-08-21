@@ -232,3 +232,21 @@ def test_download_pdf_size_cap_aborts_oversized_response():
         result = download_utils.download_pdf("http://example.com/huge.pdf")
 
     assert result is None
+
+
+@pytest.mark.parametrize("bad_url", [
+    "http://example.com:99999/x.pdf",   # port out of range -> .port raises
+    "http://example.com:abc/x.pdf",     # non-numeric port  -> .port raises
+    "http://[bad/x.pdf",                # malformed IPv6    -> urlparse raises
+    "http://[::1]:70000/x.pdf",
+])
+def test_malformed_url_returns_none_instead_of_raising(bad_url):
+    """download_pdf's contract with its callers is "None on failure".
+
+    urlparse() and .port raise on malformed authorities where .hostname does not.
+    A raise here escapes the background ingest task before it can release its
+    reservation or write its terminal job update, leaving the job stuck on
+    `running` forever — so the parse must be inside the guard, not before it.
+    """
+    import download_utils
+    assert download_utils.download_pdf(bad_url) is None

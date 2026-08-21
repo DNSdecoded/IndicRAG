@@ -248,6 +248,7 @@ def test_an_unrelated_400_still_propagates():
         def generate_content(self, **kw):
             raise RuntimeError("400 INVALID_ARGUMENT. Unsupported MIME type.")
 
-    c = _OtherError(); c.models = c
+    c = _OtherError()
+    c.models = c
     with pytest.raises(RuntimeError, match="MIME"):
         b.generate("gemini-3.7-flash", "q", _level_config(), client=c)
