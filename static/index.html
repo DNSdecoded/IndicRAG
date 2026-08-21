@@ -334,8 +334,12 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
 .scrim{position:fixed;inset:0;background:rgba(20,22,31,.4);backdrop-filter:blur(0px);
   display:flex;opacity:0;visibility:hidden;z-index:100;align-items:flex-start;
   justify-content:center;padding-top:12vh;
+  pointer-events:none;
   transition:opacity .2s ease,backdrop-filter .2s ease,visibility 0s .2s;}
-.scrim.on{opacity:1;visibility:visible;backdrop-filter:blur(3px);transition-delay:0s,0s,0s;}
+/* Two independent guards (visibility + pointer-events): the scrim covers the
+   whole viewport, so a single failed guard would make the app unclickable. */
+.scrim.on{opacity:1;visibility:visible;pointer-events:auto;backdrop-filter:blur(3px);
+  transition-delay:0s,0s,0s;}
 /* Closest single curve to a critically-damped spring (damping 1.0, response ~.3) */
 .scrim>*{transform:scale(.97) translateY(-6px);transition:transform .3s cubic-bezier(.32,.72,0,1);}
 .scrim.on>*{transform:none;}
@@ -963,7 +967,11 @@ $('#evBtn').addEventListener('click', () => {
 
 // ══ COMMAND PALETTE ════════════════════════════════════════
 const scrim = $('#scrim');
-function openPal() { scrim.classList.add('on'); $('#palInput').focus(); }
+function openPal() {
+  scrim.classList.add('on');
+  // Next frame: focusing inside a still-hidden ancestor is ignored.
+  requestAnimationFrame(() => $('#palInput').focus());
+}
 function closePal() { scrim.classList.remove('on'); $('#palInput').value = ''; }
 $('#palBtn').addEventListener('click', openPal);
 scrim.addEventListener('click', e => { if (e.target === scrim) closePal(); });
