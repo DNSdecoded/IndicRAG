@@ -13,7 +13,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import rag
-from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
+from deps import (
+    limiter, verify_api_key, current_owner, owns_session, session_turn_lock,
+    _get_or_create_session, _append_session_messages,
+)
 from routes.query import Citation, build_paper_filter, build_tags_filter, combine_filters
 from sse_utils import sse_stream
 
@@ -69,6 +72,7 @@ async def chat(
     request: Request,
     body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """
     Send a message in a multi-turn conversation.
@@ -83,28 +87,35 @@ async def chat(
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(body.session_id)
-    turn_index = len(messages) // 2  # number of completed user+assistant pairs
+    # The lock spans read-history -> generate -> append: concurrent turns on one
+    # session must not each answer from a history that omits the other's turn.
+    async with session_turn_lock(body.session_id or "new"):
+        try:
+            session_id, messages = _get_or_create_session(body.session_id, owner)
+        except PermissionError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"Session '{body.session_id}' not found.")
+        turn_index = len(messages) // 2  # number of completed user+assistant pairs
 
-    full_messages = list(messages) + [{"role": "user", "content": body.message}]
+        full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
-    try:
-        result = await run_in_threadpool(
-            rag.answer_with_history,
-            messages=full_messages,
-            strategy=body.strategy,
-            top_k=top_k,
-            filter_dict=combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)),
-            model=body.model,
-            provider=body.provider,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
-    except Exception as e:
-        logger.error(f"Error in /chat: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
+        try:
+            result = await run_in_threadpool(
+                rag.answer_with_history,
+                messages=full_messages,
+                strategy=body.strategy,
+                top_k=top_k,
+                filter_dict=combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)),
+                model=body.model,
+                provider=body.provider,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e), "code": "VALIDATION_ERROR"})
+        except Exception as e:
+            logger.error(f"Error in /chat: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
-    _append_session_messages(session_id, body.message, result["answer"])
+        _append_session_messages(session_id, body.message, result["answer"], owner)
 
     processing_time = time.time() - start_time
     logger.info(
@@ -132,54 +143,78 @@ async def chat_stream(
     request: Request,
     body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """Stream a multi-turn chat answer as Server-Sent Events."""
     top_k = body.top_k
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
-    session_id, messages = _get_or_create_session(body.session_id)
-    full_messages = list(messages) + [{"role": "user", "content": body.message}]
+    # Same turn lock as POST /chat, but it has to be acquired manually: the turn
+    # is not finished when this function returns — it ends when the generator
+    # below appends the answer. The generator's `finally` is what releases it,
+    # so a client disconnect mid-stream can't strand the lock.
+    lock = session_turn_lock(body.session_id or "new")
+    await lock.acquire()
+    try:
+        try:
+            session_id, messages = _get_or_create_session(body.session_id, owner)
+        except PermissionError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"Session '{body.session_id}' not found.")
+        full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
-    prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
-                                       combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
-    query_id = str(uuid.uuid4())
+        prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
+                                           combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
+        query_id = str(uuid.uuid4())
 
-    if prepared["chunks_used"] == 0:
-        async def _no_docs():
-            yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'session_id': session_id, 'query_id': query_id})}\n\n"
-            yield "data: [DONE]\n\n"
-        _append_session_messages(session_id, body.message, prepared["no_docs_msg"])
-        return StreamingResponse(_no_docs(), media_type="text/event-stream")
+        if prepared["chunks_used"] == 0:
+            async def _no_docs():
+                yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'session_id': session_id, 'query_id': query_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            # The turn is already complete on this branch (nothing streams from the
+            # model), so release here rather than handing the lock to a generator
+            # that has no answer left to append.
+            _append_session_messages(session_id, body.message, prepared["no_docs_msg"], owner)
+            lock.release()
+            return StreamingResponse(_no_docs(), media_type="text/event-stream")
+    except BaseException:
+        lock.release()
+        raise
 
     async def _stream_and_save():
         full_answer: list[str] = []
         final_answer: str | None = None  # compacted answer from the done event
         hit_error = False
-        async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
-                                       strategy=body.strategy, query_id=query_id,
-                                       model=body.model, provider=body.provider,
-                                       visible_chunks=prepared["chunks_used"]):
-            if event.startswith('data: {"type": "error"'):
-                hit_error = True
-            if event.startswith('data: {"type": "done"'):
-                payload = json.loads(event[6:])
-                payload["session_id"] = session_id
-                final_answer = payload.get("answer")
-                yield f"data: {json.dumps(payload)}\n\n"
-            else:
-                if event.startswith('data: {"type": "chunk"'):
-                    try:
-                        full_answer.append(json.loads(event[6:])["text"])
-                    except Exception:
-                        pass
-                yield event
-        if not hit_error:
-            # Persist the compacted answer, not the raw streamed chunks — otherwise
-            # the follow-up turns inherit gapped and dangling [N] markers.
-            _append_session_messages(
-                session_id, body.message, final_answer or "".join(full_answer))
+        try:
+            async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
+                                           strategy=body.strategy, query_id=query_id,
+                                           model=body.model, provider=body.provider,
+                                           visible_chunks=prepared["chunks_used"]):
+                if event.startswith('data: {"type": "error"'):
+                    hit_error = True
+                if event.startswith('data: {"type": "done"'):
+                    payload = json.loads(event[6:])
+                    payload["session_id"] = session_id
+                    final_answer = payload.get("answer")
+                    yield f"data: {json.dumps(payload)}\n\n"
+                else:
+                    if event.startswith('data: {"type": "chunk"'):
+                        try:
+                            full_answer.append(json.loads(event[6:])["text"])
+                        except Exception:
+                            pass
+                    yield event
+            if not hit_error:
+                # Persist the compacted answer, not the raw streamed chunks — otherwise
+                # the follow-up turns inherit gapped and dangling [N] markers.
+                _append_session_messages(
+                    session_id, body.message, final_answer or "".join(full_answer), owner)
+        finally:
+            # Runs on normal completion, on an error, and on GeneratorExit when the
+            # client disconnects mid-stream — the turn is over in all three cases.
+            lock.release()
 
     return StreamingResponse(_stream_and_save(), media_type="text/event-stream")
 
@@ -202,13 +237,20 @@ class ChatHistoryResponse(BaseModel):
 
 
 @router.get("/chat", response_model=List[ChatSessionSummary], tags=["Chat"])
-async def list_sessions(authenticated: bool = Depends(verify_api_key)):
-    """List saved chat sessions, most-recent first. Global — no per-user isolation."""
+async def list_sessions(authenticated: bool = Depends(verify_api_key),
+                        owner: Optional[str] = Depends(current_owner)):
+    """List the caller's saved chat sessions, most-recent first.
+
+    Scoped by API-key fingerprint. This listing used to be global, so any valid
+    key could read every other user's conversation previews.
+    """
     from deps import _sessions, _sessions_lock, _evict_stale_sessions
     summaries: List[ChatSessionSummary] = []
     with _sessions_lock:
         _evict_stale_sessions()
         for sid, s in _sessions.items():
+            if not owns_session(s, owner):
+                continue
             msgs = s.get("messages", [])
             if not msgs:  # skip empty sessions (created but never used)
                 continue
@@ -225,12 +267,16 @@ async def list_sessions(authenticated: bool = Depends(verify_api_key)):
 
 
 @router.get("/chat/{session_id}", response_model=ChatHistoryResponse, tags=["Chat"])
-async def get_session_history(session_id: str, authenticated: bool = Depends(verify_api_key)):
-    """Return a session's full message history so the UI can reopen the conversation."""
+async def get_session_history(session_id: str, authenticated: bool = Depends(verify_api_key),
+                              owner: Optional[str] = Depends(current_owner)):
+    """Return a session's full message history so the UI can reopen the conversation.
+
+    Another key's session reads as 404, not 403 — a 403 would confirm the id exists.
+    """
     from deps import _sessions, _sessions_lock
     with _sessions_lock:
         s = _sessions.get(session_id)
-        if s is None:
+        if not owns_session(s, owner):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
         return ChatHistoryResponse(
             session_id=session_id,
@@ -244,12 +290,13 @@ async def get_session_history(session_id: str, authenticated: bool = Depends(ver
 async def delete_session(
     session_id: str,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
-    """Delete a chat session and its history."""
+    """Delete a chat session and its history. Only the owning key may delete."""
     import persistence
     from deps import _sessions, _sessions_lock
     with _sessions_lock:
-        if session_id not in _sessions:
+        if not owns_session(_sessions.get(session_id), owner):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found.")
         del _sessions[session_id]
         persistence.delete_session(session_id)

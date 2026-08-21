@@ -8,12 +8,14 @@ so routers can share them without importing api_server and creating a cycle.
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+import asyncio
 import hashlib
 import hmac
 import os
 import threading
 import time
 import uuid
+import weakref
 
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
@@ -173,17 +175,65 @@ def _evict_stale_sessions():
         persistence.delete_session(sid)
 
 
-def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
-    """Return (session_id, messages_list). Creates a new session when id is None."""
+_turn_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+_turn_locks_guard = threading.Lock()
+
+
+def session_turn_lock(session_id: str) -> asyncio.Lock:
+    """One lock per session, serializing a whole conversational turn.
+
+    A turn is read-history -> generate -> append, and generation takes seconds.
+    Two concurrent requests on one session would otherwise both read history at
+    length N, both generate without seeing the other, and both append — so each
+    answer is blind to the turn running beside it (a lost update). Holding this
+    for the full turn makes them queue instead, which is the correct semantics:
+    turns in one conversation are not independent.
+
+    WeakValueDictionary so a lock disappears once no turn holds or awaits it;
+    the strong reference lives in the caller's `async with`.
+    """
+    with _turn_locks_guard:
+        lock = _turn_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _turn_locks[session_id] = lock
+        return lock
+
+
+def owns_session(session: Optional[dict], owner: Optional[str]) -> bool:
+    """True when `owner` may read, append to, or delete `session`.
+
+    Single-tenant (auth disabled, owner None) sees everything. Otherwise the
+    fingerprints must match; a session created before ownership existed carries
+    no owner and stays invisible to ordinary keys rather than defaulting open.
+    """
+    if session is None:
+        return False
+    if owner is None:
+        return True
+    return session.get("owner") == owner
+
+
+def _get_or_create_session(session_id: Optional[str], owner: Optional[str] = None) -> tuple[str, list]:
+    """Return (session_id, messages_list). Creates a new session when id is None.
+
+    Raises PermissionError when `session_id` names an existing session belonging
+    to a different API key — without that check, supplying a guessed id would
+    append to, and then read back, someone else's conversation.
+    """
     with _sessions_lock:
         _evict_stale_sessions()
         if session_id and session_id in _sessions:
-            return session_id, list(_sessions[session_id]["messages"])
+            existing = _sessions[session_id]
+            if not owns_session(existing, owner):
+                raise PermissionError(session_id)
+            return session_id, list(existing["messages"])
         new_id = session_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         _sessions[new_id] = {
             "id": new_id,
             "messages": [],
+            "owner": owner,
             "created_at": now,
             "updated_at": now,
         }
@@ -191,15 +241,19 @@ def _get_or_create_session(session_id: Optional[str]) -> tuple[str, list]:
         return new_id, list(_sessions[new_id]["messages"])
 
 
-def _append_session_messages(session_id: str, user_text: str, assistant_text: str) -> None:
+def _append_session_messages(session_id: str, user_text: str, assistant_text: str,
+                             owner: Optional[str] = None) -> None:
     with _sessions_lock:
         # The session can be evicted (stale-age sweep) between _get_or_create_session
         # and here during a slow generation — re-materialize it rather than KeyError
-        # after the answer has already been computed.
+        # after the answer has already been computed. It has to be re-created with the
+        # same owner, or the resurrected session would be ownerless and drop out of
+        # its owner's listing.
         sess = _sessions.get(session_id)
         if sess is None:
             now = datetime.now(timezone.utc).isoformat()
-            sess = {"id": session_id, "messages": [], "created_at": now, "updated_at": now}
+            sess = {"id": session_id, "messages": [], "owner": owner,
+                    "created_at": now, "updated_at": now}
             _sessions[session_id] = sess
         msgs = sess["messages"]
         msgs.append({"role": "user", "content": user_text})

@@ -19,7 +19,10 @@ import persistence
 import rag
 from agent.state import AgentState
 from agent.nodes.finalizer import citation_coverage
-from deps import limiter, verify_api_key, _get_or_create_session, _append_session_messages
+from deps import (
+    limiter, verify_api_key, current_owner,
+    _get_or_create_session, _append_session_messages,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -91,13 +94,18 @@ async def agent_query(
     request: Request,
     body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """
     Answer a question using the agentic IndicRAG pipeline with reflexion loops.
     Supports the same 10+ languages as /query and /chat.
     """
     start_time = time.time()
-    session_id, messages = _get_or_create_session(body.session_id)
+    try:
+        session_id, messages = _get_or_create_session(body.session_id, owner)
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Session '{body.session_id}' not found.")
 
     initial_state = AgentState(
         original_query=body.question,
@@ -177,7 +185,7 @@ async def agent_query(
     except Exception:
         pass  # fall through to dedup-only logic below
 
-    _append_session_messages(session_id, body.question, final_answer)
+    _append_session_messages(session_id, body.question, final_answer, owner)
     processing_time = time.time() - start_time
 
     logger.info(
@@ -216,6 +224,7 @@ async def agent_query(
             confidence=result.get("answer_confidence") or 0.0,
             coverage=citation_coverage(final_answer),
             created_at=datetime.now(timezone.utc).isoformat(),
+            owner=owner,
         )
     except Exception:
         logger.warning("Failed to log query for feedback correlation", exc_info=True)
@@ -241,6 +250,7 @@ async def agent_stream(
     request: Request,
     body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """Stream agentic query results as Server-Sent Events.
 
@@ -248,7 +258,11 @@ async def agent_stream(
     along with metadata events for sources, tool calls, and timing.
     """
     start_time = time.time()
-    session_id, messages = _get_or_create_session(body.session_id)
+    try:
+        session_id, messages = _get_or_create_session(body.session_id, owner)
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Session '{body.session_id}' not found.")
 
     initial_state = AgentState(
         original_query=body.question,
@@ -319,7 +333,7 @@ async def agent_stream(
         except Exception:
             pass
 
-        _append_session_messages(session_id, body.question, final_answer)
+        _append_session_messages(session_id, body.question, final_answer, owner)
 
         # --- Phase 3b: stream the final answer in chunks ---
         chunk_size = 80  # characters per SSE chunk
@@ -358,6 +372,7 @@ async def agent_stream(
                 confidence=result.get("answer_confidence") or 0.0,
                 coverage=citation_coverage(final_answer),
                 created_at=datetime.now(timezone.utc).isoformat(),
+                owner=owner,
             )
         except Exception:
             pass

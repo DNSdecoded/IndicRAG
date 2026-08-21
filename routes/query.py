@@ -200,7 +200,8 @@ async def health_check(deep: bool = False):
 async def query_question(
     request: Request,
     body: QueryRequest,
-    authenticated: bool = Depends(verify_api_key)
+    authenticated: bool = Depends(verify_api_key),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """
     Answer a question in any language using the RAG system.
@@ -255,6 +256,7 @@ async def query_question(
                 language=result['language'], confidence=result.get('answer_confidence', 0.0),
                 coverage=citation_coverage(result['answer']),
                 created_at=datetime.now(timezone.utc).isoformat(),
+                owner=owner,
             )
         except Exception:
             logger.warning("Failed to log query for feedback correlation", exc_info=True)
