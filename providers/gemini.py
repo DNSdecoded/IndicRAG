@@ -138,6 +138,81 @@ class GeminiBackend(LLMBackend):
         tc = getattr(gen_config, "thinking_config", None)
         return tc is not None and getattr(tc, "thinking_budget", None) is not None
 
+    # Not every model supports every level. gemini-3.7-flash rejects MINIMAL
+    # outright ("Thinking level MINIMAL is not supported for this model"), while
+    # 3.6-flash accepts it — so the configured default cannot be assumed valid for
+    # whatever model is selected. Learned per (model, level), exactly like the
+    # budget rejections above, so a new model generation needs no hardcoded list.
+    _LEVEL_LADDER = ("MINIMAL", "LOW", "MEDIUM", "HIGH")
+    _level_rejected: set = set()
+    _level_lock = threading.Lock()
+
+    @staticmethod
+    def _current_level_name(gen_config):
+        """Name of the thinking_level on this config, or None."""
+        tc = getattr(gen_config, "thinking_config", None)
+        level = getattr(tc, "thinking_level", None) if tc is not None else None
+        if level is None:
+            return None
+        return getattr(level, "name", str(level)).upper()
+
+    def _escalate_level(self, gen_config):
+        """Same config at the next level UP the ladder, or thinking dropped.
+
+        Upwards, never downwards: a rejected level means the model will not think
+        that little, so the only direction that can succeed is more thinking.
+        Running off the end drops thinking_config entirely, which means "model
+        decides" — worse than asking, but better than failing the request.
+        """
+        current = self._current_level_name(gen_config)
+        if current is None:
+            return None
+        try:
+            nxt = self._LEVEL_LADDER[self._LEVEL_LADDER.index(current) + 1]
+        except (ValueError, IndexError):
+            return gen_config.model_copy(update={"thinking_config": None})
+        level = self._thinking_level(nxt)
+        if level is None:
+            return gen_config.model_copy(update={"thinking_config": None})
+        return gen_config.model_copy(update={
+            "thinking_config": genai_types.ThinkingConfig(thinking_level=level),
+        })
+
+    def _skip_rejected_levels(self, model: str, gen_config):
+        """Advance past levels this model already refused, before calling out."""
+        for _ in self._LEVEL_LADDER:
+            name = self._current_level_name(gen_config)
+            if name is None:
+                return gen_config
+            with self._level_lock:
+                if (model, name) not in self._level_rejected:
+                    return gen_config
+            nxt = self._escalate_level(gen_config)
+            if nxt is None:
+                return gen_config
+            gen_config = nxt
+        return gen_config
+
+    def _remember_level_rejection(self, model: str, gen_config, exc: Exception) -> bool:
+        """True if `exc` is this model refusing the requested thinking_level, so
+        the caller can retry one level up. Narrow on purpose, and matched on the
+        message: any other 400 is a genuine bad request that must keep
+        propagating rather than being retried with different thinking."""
+        name = self._current_level_name(gen_config)
+        if not name or not self._is_invalid_argument(exc):
+            return False
+        if "thinking level" not in str(exc).lower():
+            return False
+        with self._level_lock:
+            first_time = (model, name) not in self._level_rejected
+            self._level_rejected.add((model, name))
+        if first_time:
+            logger.warning(
+                "Model %s does not support thinking level %s; using the next level up "
+                "for this model from now on.", model, name,
+            )
+        return True
+
     @staticmethod
     def _is_invalid_argument(exc: Exception) -> bool:
         status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
@@ -187,7 +262,9 @@ class GeminiBackend(LLMBackend):
             known_rejected = model in self._zero_budget_rejected
         if known_rejected and self._has_thinking_budget(call_config):
             call_config = self._translate_thinking(call_config)
-        return call_config
+        # A level this model already refused would 400 again; step past it here so
+        # only the FIRST call per (model, level) pays a round-trip to learn it.
+        return self._skip_rejected_levels(model, call_config)
 
     def _remember_zero_budget_rejection(self, model: str, gen_config, exc: Exception) -> bool:
         """True if `exc` is this model refusing a legacy thinking_budget, so the
@@ -214,11 +291,18 @@ class GeminiBackend(LLMBackend):
         try:
             return client.models.generate_content(model=model, contents=contents, config=call_config)
         except Exception as exc:
-            if not self._remember_zero_budget_rejection(model, call_config, exc):
+            # Two distinct refusals, each retried once: a legacy budget this model
+            # no longer accepts, and a level it does not offer.
+            if self._remember_zero_budget_rejection(model, call_config, exc):
+                retry_config = self._translate_thinking(call_config)
+            elif self._remember_level_rejection(model, call_config, exc):
+                retry_config = self._escalate_level(call_config)
+            else:
+                raise
+            if retry_config is None:
                 raise
             return client.models.generate_content(
-                model=model, contents=contents,
-                config=self._translate_thinking(call_config),
+                model=model, contents=contents, config=retry_config,
             )
 
     def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
@@ -252,9 +336,19 @@ class GeminiBackend(LLMBackend):
             # A zero-budget rejection is refused before any token is produced, so
             # retrying the stream here is safe. Once text has been emitted the
             # error is something else and must propagate.
-            if emitted or not self._remember_zero_budget_rejection(model, call_config, exc):
+            # `emitted` guard: once bytes are out, a retry would duplicate the
+            # answer's opening. Same two refusal kinds as the unary path.
+            if emitted:
                 raise
-            yield from _iter(self._translate_thinking(call_config))
+            if self._remember_zero_budget_rejection(model, call_config, exc):
+                retry_config = self._translate_thinking(call_config)
+            elif self._remember_level_rejection(model, call_config, exc):
+                retry_config = self._escalate_level(call_config)
+            else:
+                raise
+            if retry_config is None:
+                raise
+            yield from _iter(retry_config)
 
         if not emitted:
             raise RuntimeError("No text generated from Gemini stream")

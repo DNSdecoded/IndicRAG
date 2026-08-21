@@ -163,3 +163,91 @@ def test_supports_thinking_gates_gemma():
     b = GeminiBackend()
     assert b.supports_thinking("gemini-3.5-flash")
     assert not b.supports_thinking("gemma-4-26b-a4b-it")
+
+
+# ---------------------------------------------------------------------------
+# Thinking LEVEL rejection (gemini-3.7-flash refuses MINIMAL)
+# ---------------------------------------------------------------------------
+def _level_config(name="MINIMAL"):
+    from google.genai import types
+    return types.GenerateContentConfig(
+        max_output_tokens=32,
+        thinking_config=types.ThinkingConfig(
+            thinking_level=getattr(types.ThinkingLevel, name)),
+    )
+
+
+class _RejectsLevel:
+    """Refuses one named level the way gemini-3.7-flash refuses MINIMAL."""
+
+    def __init__(self, bad="MINIMAL"):
+        self.bad = bad
+        self.levels_seen = []
+        self.models = self
+
+    def generate_content(self, model=None, contents=None, config=None):
+        from providers.gemini import GeminiBackend
+        lvl = GeminiBackend._current_level_name(config)
+        self.levels_seen.append(lvl)
+        if lvl == self.bad:
+            raise RuntimeError(
+                "400 INVALID_ARGUMENT. Thinking level MINIMAL is not supported "
+                "for this model. Please retry with other thinking level.")
+        return types_ns(text="ok")
+
+
+def types_ns(**kw):
+    return type("R", (), kw)()
+
+
+def _fresh_backend():
+    from providers.gemini import GeminiBackend
+    GeminiBackend._level_rejected.clear()
+    return GeminiBackend()
+
+
+def test_unsupported_thinking_level_escalates_and_succeeds():
+    b = _fresh_backend()
+    client = _RejectsLevel()
+    out = b.generate("gemini-3.7-flash", "q", _level_config(), client=client)
+    assert out.text == "ok"
+    # Retried one level UP, not down: a refused level means the model will not
+    # think that little, so less thinking cannot succeed.
+    assert client.levels_seen == ["MINIMAL", "LOW"]
+
+
+def test_the_rejection_is_remembered_so_only_one_call_pays_for_it():
+    from providers.gemini import GeminiBackend
+    b = _fresh_backend()
+    client = _RejectsLevel()
+    b.generate("gemini-3.7-flash", "q", _level_config(), client=client)
+    b.generate("gemini-3.7-flash", "q2", _level_config(), client=client)
+    # Second call skips MINIMAL entirely — three attempts total, not four.
+    assert client.levels_seen == ["MINIMAL", "LOW", "LOW"]
+    assert ("gemini-3.7-flash", "MINIMAL") in GeminiBackend._level_rejected
+
+
+def test_rejection_is_learned_per_model_not_globally():
+    """3.6-flash accepts MINIMAL; 3.7 refusing it must not change 3.6's behavior."""
+    b = _fresh_backend()
+    b.generate("gemini-3.7-flash", "q", _level_config(), client=_RejectsLevel())
+    ok = _RejectsLevel(bad="NOTHING")
+    b.generate("gemini-3.6-flash", "q", _level_config(), client=ok)
+    assert ok.levels_seen == ["MINIMAL"]
+
+
+def test_an_unrelated_400_still_propagates():
+    """Narrowness matters: only a thinking-level refusal may be retried, or a
+    genuinely bad request gets silently re-sent with different thinking."""
+    import pytest
+    b = _fresh_backend()
+
+    class _OtherError:
+        models = None
+
+        def generate_content(self, **kw):
+            raise RuntimeError("400 INVALID_ARGUMENT. Unsupported MIME type.")
+
+    c = _OtherError(); c.models = c
+    with pytest.raises(RuntimeError, match="MIME"):
+        b.generate("gemini-3.7-flash", "q", _level_config(), client=c)

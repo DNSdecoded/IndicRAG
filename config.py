@@ -344,10 +344,12 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # LLM Configuration
 # ============================================================================
 # Google Gemini API configuration
-# Caps thinking + answer together, not just the answer. gemini-3.6-flash rejects
-# thinking_budget=0 and spends 0-4856 thought tokens on identical prompts, so a
-# 2048 cap left as little as 80 tokens for the answer and truncated mid-sentence.
-# Measured: answer <=2100, worst thinking+answer 6926.
+# Caps thinking + answer together, not just the answer. Gemini 3.x Flash models
+# reject thinking_budget=0 and spend a variable number of thought tokens on
+# identical prompts (measured on 3.6-flash: 0-4856), so a 2048 cap left as little
+# as 80 tokens for the answer and truncated mid-sentence.
+# Measured on 3.6-flash: answer <=2100, worst thinking+answer 6926. Keep the
+# headroom for newer Flash models rather than re-tuning per release.
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
 # Thinking budget for ALL agentic-mode LLM calls (query planner, tool routing,
@@ -360,7 +362,7 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 # knobs below, which supersede it). Still honoured by models that accept budgets.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
 # Thinking LEVEL — the Gemini 3.x control, replacing thinking_budget. Google's docs
-# list minimal | low | medium | high for gemini-3.6-flash, defaulting to MEDIUM when
+# list minimal | low | medium | high for Gemini 3.x Flash, defaulting to MEDIUM when
 # nothing is sent. That default is the trap: sending the legacy thinking_budget=0 gets
 # a 400, the backend used to drop the field entirely, and the model then thought at
 # MEDIUM — the opposite of the "thinking off" that was asked for, with those thought
@@ -412,10 +414,13 @@ AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.6-flash")  # Gemini model
+# gemini-3.7-flash is the current Flash generation: built for complex coding,
+# agentic workflows and multi-step execution, which is what the agent pipeline
+# does. 3.6-flash remains selectable as the previous generation.
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
-# gemini-3.6-flash already does IMPLICIT caching for free; explicit caching adds
+# Gemini 3.x Flash already does IMPLICIT caching for free; explicit caching adds
 # guaranteed reuse but is billed per token-hour of storage — so it's OFF by default.
 # Enable only if your system prompts clear the model's min-token cache floor and you
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
@@ -452,7 +457,12 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(
     "LLM_SELECTABLE_MODELS",
-    "gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+    # Current Flash first (the default), then the previous generation, then a
+    # cheap high-throughput option for routine calls, then cross-vendor entries.
+    # The cross-vendor slugs matter beyond user choice: failover picks a "/"-shaped
+    # slug from this list, so an all-Gemini list would leave nothing to fail over to.
+    "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
+    "anthropic/claude-haiku,openai/gpt-5.4-nano",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
 # How long the enriched OpenRouter /models catalog is cached (seconds).
