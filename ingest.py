@@ -175,11 +175,47 @@ def _build_paper_chunks(
 
     return {
         'paper_id': paper_id,
+        'title': title,
+        'content_hash': content_hash or '',
         'chunks': all_chunks,
         'metadatas': all_metadata,
         'ids': all_ids,
         'needs_deletion': needs_deletion,
     }
+
+
+def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
+    """Write one paper's ingest-log row.
+
+    Shared by both ingest paths on purpose. ingest_paper() and ingest_directory()
+    each do their own embed-and-add, so putting the log write in only one of them
+    (as the first version did) silently left the bulk path — the one /ingest/all
+    uses — unlogged, and reindex.py would report an empty log after a perfectly
+    successful ingest.
+
+    Best-effort: a logging failure costs replayability for this paper, not the
+    ingest that already succeeded.
+    """
+    try:
+        import persistence
+        persistence.record_ingest(
+            event_id=prepared['paper_id'],   # one row per paper: the log describes
+                                             # current index contents, not history
+            paper_id=prepared['paper_id'],
+            content_hash=prepared.get('content_hash') or '',
+            title=prepared.get('title') or '',
+            source_path=source_path or prepared.get('source_path') or '',
+            chunks=prepared['chunks'],
+            metadatas=prepared['metadatas'],
+            ids=prepared['ids'],
+            embed_model=config.EMBEDDING_MODEL_NAME,
+            chunker_version=vector_store.CHUNKER_VERSION,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            embed_backend=vector_store._embed_backend(),
+        )
+    except Exception:
+        logger.warning("Could not record ingest log for %s — this paper will not be "
+                       "replayable by reindex.py", prepared.get('paper_id'), exc_info=True)
 
 
 def ingest_paper(
@@ -228,32 +264,10 @@ def ingest_paper(
         collection=collection
     )
 
-    # Record what was indexed, so the vector and lexical indexes can be rebuilt
-    # without re-parsing the PDF or re-calling the VLM captioner. Written AFTER
-    # the indexes, so the log never claims chunks that failed to land — the
-    # reverse order would leave a replay that reinstates nothing real.
-    #
-    # Best-effort: a logging failure must not fail an ingest that already
-    # succeeded. It costs the ability to replay that paper, not the paper itself.
-    try:
-        import persistence
-        persistence.record_ingest(
-            event_id=paper_id,          # one row per paper: the log describes the
-                                        # current index contents, not history
-            paper_id=paper_id,
-            content_hash=_content_hash("".join(text for _, text in sections)),
-            title=title,
-            source_path=source_path or "",
-            chunks=prepared['chunks'],
-            metadatas=prepared['metadatas'],
-            ids=prepared['ids'],
-            embed_model=config.EMBEDDING_MODEL_NAME,
-            chunker_version=vector_store.CHUNKER_VERSION,
-            created_at=datetime.now(timezone.utc).isoformat(),
-        )
-    except Exception:
-        logger.warning("Could not record ingest log for %s — this paper will not be "
-                       "replayable by reindex.py", paper_id, exc_info=True)
+    # Record what was indexed so the indexes can be rebuilt without re-parsing
+    # the PDF. Written AFTER the indexes, so the log never claims chunks that
+    # failed to land.
+    _record_ingest(prepared, source_path)
 
     return len(prepared['chunks'])
 
@@ -508,6 +522,7 @@ def ingest_directory(
                 )
                 if prepared is not None:
                     stats["successful"] += 1
+                    prepared['source_path'] = str(path)
                     prepared_papers.append(prepared)
                 else:
                     # Unchanged or deduplicated — processed fine, just nothing to ingest.
@@ -555,6 +570,10 @@ def ingest_directory(
             collection=collection,
         )
         stats["total_chunks"] = len(all_chunks)
+
+        # Same log write as the single-paper path, after the indexes are written.
+        for p in prepared_papers:
+            _record_ingest(p)
 
     # Print summary
     logger.info("\n" + "=" * 60)

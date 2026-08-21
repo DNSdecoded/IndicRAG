@@ -89,6 +89,10 @@ _ensure_column("query_log", "owner", "TEXT")
 # when that process dies the lease simply expires and the row can be reaped.
 _ensure_column("jobs", "lease_until", "TEXT")
 
+# Which weights produced the vectors. int8 and fp32 output for the SAME model id
+# are not interchangeable, so embed_model alone cannot detect a mixed corpus.
+_ensure_column("ingest_log", "embed_backend", "TEXT")
+
 # Secondary indexes. Every table above declared a PRIMARY KEY and nothing else, so
 # each of these access paths was a full scan: due_watches runs on every scheduler
 # tick, the feedback join runs on every read, and the startup prunes delete by
@@ -399,7 +403,8 @@ def due_watches(now_iso: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
                   source_path: str, chunks: list, metadatas: list, ids: list,
-                  embed_model: str, chunker_version: int, created_at: str) -> None:
+                  embed_model: str, chunker_version: int, created_at: str,
+                  embed_backend: str = None) -> None:
     """Record one ingestion, including the chunks it produced.
 
     Re-ingesting a paper replaces its row rather than appending a second one:
@@ -409,15 +414,16 @@ def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
     with _db_lock:
         _conn.execute(
             "INSERT INTO ingest_log (event_id, paper_id, content_hash, title, source_path, "
-            "chunks, metadatas, ids, embed_model, chunker_version, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "chunks, metadatas, ids, embed_model, chunker_version, created_at, embed_backend) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(event_id) DO UPDATE SET content_hash=excluded.content_hash, "
             "title=excluded.title, source_path=excluded.source_path, chunks=excluded.chunks, "
             "metadatas=excluded.metadatas, ids=excluded.ids, embed_model=excluded.embed_model, "
-            "chunker_version=excluded.chunker_version, created_at=excluded.created_at",
+            "chunker_version=excluded.chunker_version, created_at=excluded.created_at, "
+            "embed_backend=excluded.embed_backend",
             (event_id, paper_id, content_hash, title, source_path,
              json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
-             embed_model, chunker_version, created_at),
+             embed_model, chunker_version, created_at, embed_backend),
         )
         _conn.commit()
 
@@ -432,19 +438,19 @@ def get_ingest_events(paper_id: str = None) -> list[dict]:
         if paper_id is None:
             rows = _conn.execute(
                 "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
-                "metadatas, ids, embed_model, chunker_version, created_at "
+                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
                 "FROM ingest_log ORDER BY created_at ASC").fetchall()
         else:
             rows = _conn.execute(
                 "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
-                "metadatas, ids, embed_model, chunker_version, created_at "
+                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
                 "FROM ingest_log WHERE paper_id = ? ORDER BY created_at ASC",
                 (paper_id,)).fetchall()
     return [{
         "event_id": r[0], "paper_id": r[1], "content_hash": r[2], "title": r[3],
         "source_path": r[4], "chunks": json.loads(r[5]), "metadatas": json.loads(r[6]),
         "ids": json.loads(r[7]), "embed_model": r[8], "chunker_version": r[9],
-        "created_at": r[10],
+        "created_at": r[10], "embed_backend": r[11],
     } for r in rows]
 
 
