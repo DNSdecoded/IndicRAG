@@ -209,6 +209,7 @@ async def agent_query(
     final_answer = result["final_answer"]
     cited_titles: set[str] = set()
     title_to_num: dict[str, int] = {}
+    cits: list = []
     try:
         metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                  for c in all_contexts]
@@ -225,7 +226,7 @@ async def agent_query(
     except Exception:
         pass  # fall through to dedup-only logic below
 
-    _append_session_messages(session_id, body.question, final_answer, owner)
+    _append_session_messages(session_id, body.question, final_answer, owner, cits)
     processing_time = time.time() - start_time
 
     logger.info(
@@ -409,6 +410,7 @@ async def agent_stream(
         all_contexts = result.get("retrieved_contexts", [])
         cited_titles: set = set()
         title_to_num: dict = {}
+        cits: list = []
         try:
             metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
                      for c in all_contexts]
@@ -421,7 +423,7 @@ async def agent_stream(
         except Exception:
             pass
 
-        _append_session_messages(session_id, body.question, final_answer, owner)
+        _append_session_messages(session_id, body.question, final_answer, owner, cits)
 
         # --- Phase 3b: stream the final answer in chunks ---
         chunk_size = 80  # characters per SSE chunk

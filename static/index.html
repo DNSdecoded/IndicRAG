@@ -1119,15 +1119,28 @@ window.openSession = async function (sid) {
     sessionId = sid;
     $('#threadContent').innerHTML = '';
     clearEvidence();
+    let lastCitations = null;
     for (const msg of (data.messages || [])) {
       if (msg.role === 'user') { appendUserTurn(msg.content || ''); }
       else if (msg.role === 'assistant') {
+        const cites = msg.citations || [];
+        if (cites.length) lastCitations = cites;
         const div = document.createElement('div');
         div.className = 'turn-asst';
-        div.innerHTML = '<div class="asst-meta"><span class="pill">History</span><span class="turn-acts">' + COPY_BTN + '</span></div>' +
+        div.innerHTML = '<div class="asst-meta"><span class="pill">History</span>' +
+          (cites.length ? '<span class="pill">' + cites.length + ' source' + (cites.length > 1 ? 's' : '') + '</span>' : '') +
+          '<span class="turn-acts">' + COPY_BTN + '</span></div>' +
           '<div class="asst-body">' + renderContent(msg.content || '') + '</div>';
         $('#threadContent').appendChild(div);
       }
+    }
+    // Reopening a conversation used to leave the evidence panel blank: the panel
+    // was cleared above and nothing repopulated it, because citations were never
+    // stored with the turn. They are now, so redraw from the most recent answer
+    // that had any — matching what the panel showed when that turn was live.
+    if (lastCitations) {
+      lastCites = lastCitations;
+      updateEvidenceSources(lastCitations, {});
     }
     scrollThread();
   } catch (e) { showToast('Could not load conversation', 'error'); }

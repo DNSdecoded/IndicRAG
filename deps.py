@@ -255,7 +255,15 @@ def _get_or_create_session(session_id: Optional[str], owner: Optional[str] = Non
 
 
 def _append_session_messages(session_id: str, user_text: str, assistant_text: str,
-                             owner: Optional[str] = None) -> None:
+                             owner: Optional[str] = None,
+                             citations: Optional[list] = None) -> None:
+    """Append one user/assistant exchange to a session.
+
+    `citations` is stored alongside the answer because reopening a conversation
+    from history otherwise cannot show its sources — only role and content were
+    ever saved, so the evidence panel had nothing to restore. Kept small (number,
+    title, section per source) so a long session's JSON blob stays modest.
+    """
     with _sessions_lock:
         # The session can be evicted (stale-age sweep) between _get_or_create_session
         # and here during a slow generation — re-materialize it rather than KeyError
@@ -270,7 +278,17 @@ def _append_session_messages(session_id: str, user_text: str, assistant_text: st
             _sessions[session_id] = sess
         msgs = sess["messages"]
         msgs.append({"role": "user", "content": user_text})
-        msgs.append({"role": "assistant", "content": assistant_text})
+        answer = {"role": "assistant", "content": assistant_text}
+        if citations:
+            # Only the fields the evidence panel needs to redraw. Chunk text is
+            # deliberately excluded: it would multiply the session blob for data
+            # the history view never renders.
+            answer["citations"] = [
+                {"number": c.get("number"), "title": c.get("title", ""),
+                 "section": c.get("section", "")}
+                for c in citations
+            ]
+        msgs.append(answer)
         max_msgs = config.CHAT_HISTORY_MAX_TURNS * 2
         if len(msgs) > max_msgs:
             del msgs[:len(msgs) - max_msgs]

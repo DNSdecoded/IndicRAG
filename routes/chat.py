@@ -117,7 +117,8 @@ async def chat(
             logger.error(f"Error in /chat: {e}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
-        _append_session_messages(session_id, body.message, result["answer"], owner)
+        _append_session_messages(session_id, body.message, result["answer"], owner,
+                                 result.get("citations"))
 
     processing_time = time.time() - start_time
     logger.info(
@@ -189,6 +190,7 @@ async def chat_stream(
     async def _stream_and_save():
         full_answer: list[str] = []
         final_answer: str | None = None  # compacted answer from the done event
+        final_cites: list = []           # its citations, stored with the turn
         hit_error = False
         try:
             async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
@@ -202,6 +204,9 @@ async def chat_stream(
                     payload = json.loads(event[6:])
                     payload["session_id"] = session_id
                     final_answer = payload.get("answer")
+                    # The done event already carries the resolved citations; keep
+                    # them so reopening this turn from history can redraw sources.
+                    final_cites = payload.get("citations") or []
                     yield f"data: {json.dumps(payload)}\n\n"
                 else:
                     if event.startswith('data: {"type": "chunk"'):
@@ -214,7 +219,8 @@ async def chat_stream(
                 # Persist the compacted answer, not the raw streamed chunks — otherwise
                 # the follow-up turns inherit gapped and dangling [N] markers.
                 _append_session_messages(
-                    session_id, body.message, final_answer or "".join(full_answer), owner)
+                    session_id, body.message, final_answer or "".join(full_answer), owner,
+                    final_cites)
         finally:
             # Runs on normal completion, on an error, and on GeneratorExit when the
             # client disconnects mid-stream — the turn is over in all three cases.
