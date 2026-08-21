@@ -14,14 +14,23 @@ Updates are incremental (`add_documents`, `remove_documents`), so an ingest no
 longer throws the whole index away and leaves the next query paying for a full
 rebuild.
 """
+import gzip
+import json
 import math
+import os
 import regex
 import threading
 import logging
 from collections import Counter, defaultdict
 from typing import List, Dict, Optional, Tuple
 
+import config
+
 logger = logging.getLogger(__name__)
+
+# Bump when the on-disk shape changes; an older file is then ignored, not
+# misread — a silently misinterpreted index is worse than a rebuild.
+_CACHE_FORMAT = 1
 
 _indices: dict[str, "BM25Index"] = {}
 _lock = threading.Lock()
@@ -161,8 +170,96 @@ def rrf(dense_ids: List[str], sparse_ids: List[str], k: int = 60) -> List[str]:
     return sorted(scores, key=scores.get, reverse=True)
 
 
+def _cache_path(coll_name: str) -> "pathlib.Path":
+    safe = regex.sub(r"[^\w.-]", "_", coll_name)
+    return config.BM25_CACHE_DIR / f"bm25_{safe}.pkl"
+
+
+def _load_cached(coll_name: str, expected_docs: int) -> Optional["BM25Index"]:
+    """Load a persisted index, or None if it is missing, unreadable, or stale.
+
+    Staleness is judged on live document count: the corpus changing under a saved
+    index is exactly when it must not be trusted. A corrupt or version-mismatched
+    file is not an error — it just means rebuild.
+    """
+    path = _cache_path(coll_name)
+    if not path.exists():
+        return None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("format") != _CACHE_FORMAT:
+            return None
+        idx = BM25Index(k1=payload["k1"], b=payload["b"])
+        idx.doc_ids = payload["doc_ids"]
+        idx.doc_lens = payload["doc_lens"]
+        idx.postings = defaultdict(list, {t: [tuple(p) for p in ps]
+                                          for t, ps in payload["postings"].items()})
+        idx._deleted = set(payload["deleted"])
+        idx._total_len = payload["total_len"]
+        if idx.n_docs != expected_docs:
+            logger.info("BM25 cache for '%s' is stale (%d docs on disk vs %d live); rebuilding",
+                        coll_name, idx.n_docs, expected_docs)
+            return None
+        logger.info("BM25 index for '%s' loaded from cache (%d docs)", coll_name, idx.n_docs)
+        return idx
+    except Exception:
+        logger.warning("BM25 cache unreadable for '%s'; rebuilding", coll_name, exc_info=True)
+        return None
+
+
+def save_index(coll_name: str = None) -> bool:
+    """Persist an in-memory index so the next process start skips the rebuild.
+
+    Gzipped JSON rather than pickle: this file is read back and trusted at
+    startup, and unpickling attacker-controlled bytes is arbitrary code
+    execution. JSON can only ever produce data. Gzip keeps it compact — the
+    postings dominate the size.
+
+    Best-effort: a failure to save costs a rebuild later, never a request now.
+    Writes to a temp file and replaces atomically, so a crash mid-write cannot
+    leave a half-written index for the next start to load.
+    """
+    with _lock:
+        if coll_name is None:
+            items = list(_indices.items())
+        else:
+            items = [(coll_name, _indices[coll_name])] if coll_name in _indices else []
+    if not items:
+        return False
+    ok = True
+    for name, idx in items:
+        path = _cache_path(name)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "format": _CACHE_FORMAT,
+                "k1": idx.k1,
+                "b": idx.b,
+                "doc_ids": idx.doc_ids,
+                "doc_lens": idx.doc_lens,
+                "postings": {t: [list(p) for p in ps] for t, ps in idx.postings.items()},
+                "deleted": sorted(idx._deleted),
+                "total_len": idx._total_len,
+            }
+            tmp = path.with_suffix(".tmp")
+            with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                json.dump(payload, f, separators=(",", ":"))
+            os.replace(tmp, path)
+            logger.info("BM25 index for '%s' saved to %s (%d docs)", name, path, idx.n_docs)
+        except Exception:
+            logger.warning("Could not persist BM25 index for '%s'", name, exc_info=True)
+            ok = False
+    return ok
+
+
 def get_or_build_index(collection=None) -> Optional[BM25Index]:
-    """Return (and lazily build) the BM25 index for the given collection."""
+    """Return (and lazily build) the BM25 index for the given collection.
+
+    Tries the on-disk cache first: rebuilding reads every document out of
+    ChromaDB, so a restart otherwise pays a full corpus scan on the first query
+    (and the lifespan warm-up pays it on every deploy).
+    """
     global _indices
     if collection is None:
         import vector_store
@@ -180,6 +277,12 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
         if count == 0:
             return None
 
+        if config.BM25_PERSIST:
+            cached = _load_cached(coll_name, count)
+            if cached is not None:
+                _indices[coll_name] = cached
+                return cached
+
         logger.info(f"Building BM25 index for '{coll_name}' from {count} documents...")
         all_docs = collection.get(include=["documents"])
         idx = BM25Index()
@@ -187,6 +290,8 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
         _indices[coll_name] = idx
         logger.info(f"BM25 index built for '{coll_name}'")
 
+    if config.BM25_PERSIST:
+        save_index(coll_name)
     return _indices[coll_name]
 
 

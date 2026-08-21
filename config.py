@@ -148,6 +148,14 @@ MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12")
 # trip the LLM circuit breaker for every other caller.
 FIGURE_CAPTION_WORKERS = int(os.getenv("FIGURE_CAPTION_WORKERS", "4"))
 
+# Persist the BM25 index between runs. Rebuilding reads every document out of
+# ChromaDB, so without this a restart pays a full corpus scan on the first query
+# and the lifespan warm-up pays it on every deploy. The cache is validated
+# against the live document count on load and ignored when it disagrees, so a
+# stale file costs a rebuild rather than wrong results.
+BM25_PERSIST = os.getenv("BM25_PERSIST", "true").lower() == "true"
+BM25_CACHE_DIR = Path(os.getenv("BM25_CACHE_DIR", PROJECT_ROOT / "chroma_db"))
+
 # Phase 5 — contradiction/consensus detection. When on, the answer generator
 # runs pairwise NLI (the same faithfulness model) over the top retrieved passages
 # and, if any pair contradicts above the threshold, instructs the model to

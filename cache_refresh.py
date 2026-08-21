@@ -21,6 +21,9 @@ def _post_ingest_refresh(new_ids=None, new_texts=None):
         import bm25_search
         if new_ids and bm25_search.add_to_index(list(new_ids), list(new_texts or [])):
             logger.debug("BM25 index updated incrementally (+%d chunks)", len(new_ids))
+            # Re-persist off-thread: the in-memory index just moved ahead of the
+            # saved copy, and a stale file only costs a rebuild on next start.
+            threading.Thread(target=bm25_search.save_index, daemon=True).start()
         else:
             # Nothing handed over, or no index built yet: drop it and warm a new one
             # off-thread so the next request doesn't eat the rebuild.

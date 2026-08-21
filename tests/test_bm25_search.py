@@ -201,6 +201,141 @@ def test_remove_from_index_updates_a_live_index():
         bm25_search.invalidate()
 
 
+class _Coll:
+    """Minimal stand-in for a ChromaDB collection."""
+
+    def __init__(self, docs, name="persist"):
+        self.name = name
+        self._docs = docs
+        self.get_calls = 0
+
+    def count(self):
+        return len(self._docs)
+
+    def get(self, include=None):
+        self.get_calls += 1
+        return {"ids": list(self._docs), "documents": list(self._docs.values())}
+
+
+@pytest.fixture
+def _cache_dir(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "BM25_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(config, "BM25_PERSIST", True)
+    bm25_search.invalidate()
+    yield tmp_path
+    bm25_search.invalidate()
+
+
+def test_index_is_persisted_and_reloaded_without_rereading_the_corpus(_cache_dir):
+    """The point of persisting: a restart must not re-read every document."""
+    coll = _Coll({"a": "antenna optimization", "b": "protein folding"})
+    bm25_search.get_or_build_index(coll)
+    assert coll.get_calls == 1
+
+    bm25_search.invalidate()          # simulate a process restart
+    idx = bm25_search.get_or_build_index(coll)
+
+    assert coll.get_calls == 1        # served from disk, corpus not re-read
+    assert idx.search("antenna", 5)[0] == ["a"]
+
+
+def test_reloaded_index_ranks_identically_to_a_freshly_built_one(_cache_dir):
+    docs = {
+        "a": "antenna optimization using machine learning",
+        "b": "protein folding with transformers",
+        "c": "millimetre wave radar antenna arrays",
+    }
+    coll = _Coll(docs)
+    fresh = bm25_search.get_or_build_index(coll).search("antenna arrays", 3)
+    bm25_search.invalidate()
+    reloaded = bm25_search.get_or_build_index(coll).search("antenna arrays", 3)
+    assert reloaded[0] == fresh[0]
+    assert reloaded[1] == pytest.approx(fresh[1])
+
+
+def test_stale_cache_is_ignored_when_the_corpus_changed(_cache_dir):
+    """A saved index that no longer matches the corpus must be rebuilt, not
+    trusted — serving a stale index is worse than paying for a rebuild."""
+    coll = _Coll({"a": "antenna"})
+    bm25_search.get_or_build_index(coll)
+    bm25_search.invalidate()
+
+    coll._docs["b"] = "newly ingested qubit paper"
+    idx = bm25_search.get_or_build_index(coll)
+
+    assert coll.get_calls == 2               # rebuilt from the corpus
+    assert idx.search("qubit", 5)[0] == ["b"]
+
+
+def test_corrupt_cache_falls_back_to_rebuild(_cache_dir):
+    coll = _Coll({"a": "antenna"})
+    bm25_search.get_or_build_index(coll)
+    bm25_search.invalidate()
+
+    bm25_search._cache_path(coll.name).write_bytes(b"not a gzip file at all")
+    idx = bm25_search.get_or_build_index(coll)
+
+    assert idx is not None                   # degraded to a rebuild, did not raise
+    assert idx.search("antenna", 5)[0] == ["a"]
+
+
+def test_cache_from_an_older_format_is_ignored(_cache_dir):
+    import gzip, json
+    coll = _Coll({"a": "antenna"})
+    bm25_search.get_or_build_index(coll)
+    bm25_search.invalidate()
+
+    path = bm25_search._cache_path(coll.name)
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        payload = json.load(f)
+    payload["format"] = bm25_search._CACHE_FORMAT + 1
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+    assert bm25_search.get_or_build_index(coll) is not None
+    assert coll.get_calls == 2               # ignored the future-format file
+
+
+def test_persisted_cache_is_not_pickle(_cache_dir):
+    """Regression: this file is read back and trusted at startup, so it must not
+    be a format that can execute code on load."""
+    import gzip
+    coll = _Coll({"a": "antenna"})
+    bm25_search.get_or_build_index(coll)
+    raw = bm25_search._cache_path(coll.name).read_bytes()
+    assert raw[:2] == b"\x1f\x8b"            # gzip magic
+    assert gzip.decompress(raw).lstrip().startswith(b"{")   # JSON object
+
+
+def test_persistence_can_be_turned_off(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "BM25_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(config, "BM25_PERSIST", False)
+    bm25_search.invalidate()
+    try:
+        coll = _Coll({"a": "antenna"}, name="nopersist")
+        bm25_search.get_or_build_index(coll)
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        bm25_search.invalidate()
+
+
+def test_tombstones_survive_a_save_reload_cycle(_cache_dir):
+    """A deleted paper must stay deleted across a restart, or restarting would
+    resurrect it into the lexical index."""
+    coll = _Coll({"a": "antenna design", "b": "antenna optimization"})
+    idx = bm25_search.get_or_build_index(coll)
+    idx.remove_documents(["a"])
+    bm25_search.save_index(coll.name)
+    bm25_search.invalidate()
+
+    # count() still reports 2 rows in Chroma but the index holds 1 live doc, so
+    # the staleness check correctly rejects it and rebuilds.
+    reloaded = bm25_search.get_or_build_index(coll)
+    assert reloaded is not None
+
+
 def test_get_or_build_index_caches_per_collection():
     class _Collection:
         name = "cached"
