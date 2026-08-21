@@ -170,9 +170,11 @@ def rrf(dense_ids: List[str], sparse_ids: List[str], k: int = 60) -> List[str]:
     return sorted(scores, key=scores.get, reverse=True)
 
 
-def _cache_path(coll_name: str) -> "pathlib.Path":
+def _cache_path(coll_name: str):
+    # .json.gz, because that is what it is — naming a JSON file .pkl invites the
+    # next reader to reach for pickle.load().
     safe = regex.sub(r"[^\w.-]", "_", coll_name)
-    return config.BM25_CACHE_DIR / f"bm25_{safe}.pkl"
+    return config.BM25_CACHE_DIR / f"bm25_{safe}.json.gz"
 
 
 def _load_cached(coll_name: str, expected_docs: int) -> Optional["BM25Index"]:
