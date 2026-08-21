@@ -310,6 +310,15 @@ DISTANCE_METRIC = "cosine"  # cosine similarity for embeddings
 # ef_search is a query-time recall/latency knob. Defaults match ChromaDB's own, so
 # behaviour is unchanged until you deliberately A/B them once the eval set exists.
 HNSW_EF_CONSTRUCTION = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
+# Writes are not queries. The general ChromaDB call timeout (5s) suits a query and
+# is far too short for an upsert of a whole corpus — that combination silently cost
+# a completed 27-minute ingest: the write succeeded, but the caller had already
+# given up and skipped everything after it, including the ingest-log record.
+# Upserts now go in batches, so each wait is bounded by batch size rather than by
+# corpus size and the timeout only has to cover ONE batch.
+CHROMA_UPSERT_BATCH = int(os.getenv("CHROMA_UPSERT_BATCH", "256"))
+CHROMA_WRITE_TIMEOUT_S = float(os.getenv("CHROMA_WRITE_TIMEOUT_S", "120"))
+
 HNSW_EF_SEARCH = int(os.getenv("HNSW_EF_SEARCH", "100"))
 HNSW_M = int(os.getenv("HNSW_M", "16"))
 

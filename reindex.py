@@ -33,6 +33,56 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("reindex")
 
 
+def backfill_log_from_collection(collection_name: str) -> int:
+    """Reconstruct ingest-log rows from chunks already in the collection.
+
+    For corpora indexed before the log existed, or indexed by a run that wrote the
+    chunks but died before recording them — which is exactly what a bulk upsert
+    timing out after a successful write produced. Everything the log stores
+    (chunk text, metadata, ids, provenance) is already on the chunks themselves,
+    so this recovers replayability without re-embedding.
+
+    Not a substitute for logging at ingest time: content_hash and source_path are
+    not recoverable from the collection and are left empty.
+    """
+    from datetime import datetime, timezone
+    import persistence
+    import vector_store
+
+    collection = vector_store.get_or_create_collection(collection_name)
+    got = vector_store._chroma_call(collection.get, include=["documents", "metadatas"],
+                                    timeout=config.CHROMA_WRITE_TIMEOUT_S)
+    ids, docs, metas = got.get("ids", []), got.get("documents", []), got.get("metadatas", [])
+    if not ids:
+        logger.error("Collection '%s' is empty — nothing to backfill.", collection_name)
+        return 0
+
+    papers = {}
+    for cid, doc, meta in zip(ids, docs, metas):
+        pid = (meta or {}).get("paper_id")
+        if not pid:
+            continue
+        papers.setdefault(pid, {"ids": [], "chunks": [], "metadatas": []})
+        papers[pid]["ids"].append(cid)
+        papers[pid]["chunks"].append(doc)
+        papers[pid]["metadatas"].append(meta)
+
+    now = datetime.now(timezone.utc).isoformat()
+    for pid, p in papers.items():
+        first = p["metadatas"][0]
+        persistence.record_ingest(
+            event_id=pid, paper_id=pid, content_hash="", title=first.get("title", ""),
+            source_path="", chunks=p["chunks"], metadatas=p["metadatas"], ids=p["ids"],
+            embed_model=first.get("embed_model") or "",
+            chunker_version=first.get("chunker_version") or 0,
+            created_at=now, embed_backend=first.get("embed_backend"),
+        )
+        logger.info("  backfilled %-28s %4d chunks", pid, len(p["chunks"]))
+    logger.info("Backfilled %d papers / %d chunks into the ingest log.",
+                len(papers), sum(len(p["chunks"]) for p in papers.values()))
+    return len(papers)
+
+
 def _drift_report(events: list) -> list:
     """Differences between what the log recorded and what is configured now."""
     problems = []
@@ -132,9 +182,15 @@ def main() -> int:
     ap.add_argument("--check", action="store_true",
                     help="report drift between the log and the current config, then exit")
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--backfill-log", action="store_true",
+                    help="rebuild the ingest log from chunks already in the collection")
     args = ap.parse_args()
 
     import persistence
+
+    if args.backfill_log:
+        return 0 if backfill_log_from_collection(args.into or config.COLLECTION_NAME) else 2
+
     events = persistence.get_ingest_events()
 
     if args.check:

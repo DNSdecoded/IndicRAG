@@ -305,14 +305,30 @@ def add_documents(
         duplicates = {k: v for k, v in Counter(ids).items() if v > 1}
         logger.error(f"Duplicate IDs detected before upsert: {duplicates}")
     
-    # Add to collection (upsert replaces existing, inserts new)
-    _chroma_call(collection.upsert,
-        documents=texts,
-        embeddings=embeddings_list,
-        metadatas=metadatas,
-        ids=ids
-    )
-    
+    # Add to collection (upsert replaces existing, inserts new).
+    #
+    # Batched, with a write-sized timeout. _chroma_call defaults to 5s, which is
+    # right for a query and badly wrong for a bulk write: a whole corpus in one
+    # upsert (1359 chunks x 1024 dims) blew past it and raised — AFTER ~27
+    # minutes of embedding. The write itself had actually succeeded, because a
+    # timed-out call keeps running and merely stops being waited on, so the data
+    # landed while the caller saw a failure and skipped the ingest-log write.
+    #
+    # Batching bounds each individual wait, rather than scaling one timeout to
+    # the largest corpus anyone might ever ingest, and keeps peak memory flat.
+    batch = max(1, config.CHROMA_UPSERT_BATCH)
+    for start in range(0, len(ids), batch):
+        sl = slice(start, start + batch)
+        _chroma_call(collection.upsert,
+            documents=texts[sl],
+            embeddings=embeddings_list[sl],
+            metadatas=metadatas[sl],
+            ids=ids[sl],
+            timeout=config.CHROMA_WRITE_TIMEOUT_S,
+        )
+        if len(ids) > batch:
+            logger.info("  upserted %d/%d chunks", min(start + batch, len(ids)), len(ids))
+
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
 
 
