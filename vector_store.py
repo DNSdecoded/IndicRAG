@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Any
 import numpy as np
 import logging
 import threading
+import time
 import concurrent.futures
 import config
 
@@ -22,19 +23,64 @@ logger = logging.getLogger(__name__)
 _chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="chroma-timeout")
 
 
+# Circuit breaker, same shape as the per-(provider, model) one in llm_client.py.
+# Without it an unhealthy ChromaDB (disk full, corrupt segment, hung compaction)
+# makes every request pay the full timeout before failing, and each one parks a
+# worker in the pool above that cannot be cancelled — the pool drains in seconds
+# and the failure spreads to requests that would never have touched Chroma.
+_CIRCUIT_COOLDOWN = 60.0
+_CIRCUIT_TRIP_AFTER = 3  # consecutive timeouts before the circuit opens
+_circuit_until = 0.0
+_circuit_failures = 0
+_circuit_lock = threading.Lock()
+
+
+class ChromaUnavailable(RuntimeError):
+    """Raised instead of waiting on a ChromaDB already known to be timing out."""
+
+
+def chroma_circuit_open() -> bool:
+    """True while the breaker is open — callers can degrade without trying."""
+    with _circuit_lock:
+        return time.monotonic() < _circuit_until
+
+
+def _chroma_record_failure() -> None:
+    global _circuit_until, _circuit_failures
+    with _circuit_lock:
+        _circuit_failures += 1
+        if _circuit_failures >= _CIRCUIT_TRIP_AFTER:
+            _circuit_until = time.monotonic() + _CIRCUIT_COOLDOWN
+            logger.error("ChromaDB circuit OPEN for %.0fs after %d consecutive timeouts",
+                         _CIRCUIT_COOLDOWN, _circuit_failures)
+
+
+def _chroma_record_success() -> None:
+    global _circuit_failures
+    if _circuit_failures:
+        with _circuit_lock:
+            _circuit_failures = 0
+
+
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
     """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs.
 
     Note: cancel() cannot stop an already-running call; on timeout the worker
     thread keeps running until the underlying call returns. The large pool above
-    bounds the damage of that leak.
+    bounds the damage of that leak, and the breaker bounds how often we are
+    willing to create one.
     """
+    if chroma_circuit_open():
+        raise ChromaUnavailable("ChromaDB circuit is open; skipping call")
     fut = _chroma_executor.submit(fn, *args, **kwargs)
     try:
-        return fut.result(timeout=timeout)
+        result = fut.result(timeout=timeout)
     except concurrent.futures.TimeoutError as err:
         fut.cancel()
+        _chroma_record_failure()
         raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
+    _chroma_record_success()
+    return result
 
 
 # Global client cache
@@ -267,11 +313,24 @@ def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, 
 def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) -> int:
     """
     Delete all chunks for a specific paper.
+
+    The BM25 index is updated here rather than in the route, because every
+    deletion path routes through this function — doing it per caller meant the
+    lexical index kept serving chunks of deleted papers until something happened
+    to trigger a full rebuild, so deleted papers went on being cited.
     """
     if collection is None:
         collection = get_or_create_collection()
     ids = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[])['ids']
     _chroma_call(collection.delete, where={'paper_id': paper_id})
+    if ids:
+        try:
+            import bm25_search
+            bm25_search.remove_from_index(ids, getattr(collection, "name", None))
+        except Exception:
+            # A stale lexical index is a quality bug, not a correctness one for the
+            # delete itself — never fail the deletion over it.
+            logger.warning("BM25 index not updated after deleting %s", paper_id, exc_info=True)
     return len(ids)
 
 

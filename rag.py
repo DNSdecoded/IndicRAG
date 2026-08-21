@@ -355,7 +355,19 @@ def retrieve_context(
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
-    query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
+    #
+    # A failure here (model OOM, corrupt weights, driver fault) used to fail the
+    # whole request, including queries the in-process BM25 index could have
+    # answered on its own. Degrade to sparse-only instead; the result carries a
+    # `degraded` marker (logged now, surfaced in the API response as follow-up work).
+    try:
+        query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
+    except Exception as e:
+        logger.error(f"Embedding failed, trying sparse-only retrieval: {e}", exc_info=True)
+        sparse = _sparse_only_retrieval(user_query, top_k, collection, chroma_filter_dict, tags_post_filter)
+        if sparse is None:
+            raise  # no BM25 index either — nothing to degrade to
+        return sparse
 
     # A tags post-filter runs AFTER retrieval, so fetching exactly top_k returns
     # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
@@ -503,6 +515,69 @@ def format_context(chunks: List[str], metadatas: List[Dict],
         chunks_used += 1
 
     return "\n".join(context_parts), chunks_used
+
+
+def _sparse_only_retrieval(user_query: str, top_k: int, collection,
+                           filter_dict: Dict[str, Any] = None,
+                           tags_post_filter: list = None) -> Dict[str, Any] | None:
+    """BM25-only retrieval, used when the dense leg is unavailable.
+
+    Returns None when there is nothing to degrade to (hybrid search disabled, or
+    no BM25 index because the corpus is empty) so the caller can re-raise the
+    original failure rather than serve a silently empty answer.
+
+    The result carries `degraded='sparse_only'` and logs at WARNING. Note that no
+    route reads that key yet — surfacing it in the API response is still to do, so
+    for now degradation is visible in the logs but not to the end user.
+    """
+    if not config.USE_HYBRID_SEARCH:
+        return None
+    try:
+        import bm25_search
+        idx = bm25_search.get_or_build_index(collection)
+        if idx is None:
+            return None
+        ids, _scores = idx.search(user_query, top_k=top_k)
+        if not ids:
+            return None
+        got = vector_store._chroma_call(
+            collection.get, ids=ids, include=['documents', 'metadatas'])
+    except Exception as e:
+        logger.error(f"Sparse-only fallback failed too: {e}", exc_info=True)
+        return None
+
+    # collection.get() does not preserve the order of the ids it was handed, and
+    # BM25 rank is the only ranking signal left here — restore it explicitly.
+    by_id = dict(zip(got.get('ids', []), zip(got.get('documents', []), got.get('metadatas', []))))
+    ordered = [(i, *by_id[i]) for i in ids if i in by_id]
+    if not ordered:
+        return None
+
+    results = {
+        'ids': [r[0] for r in ordered],
+        'chunks': [r[1] for r in ordered],
+        'documents': [r[1] for r in ordered],
+        'metadatas': [r[2] for r in ordered],
+        'distances': [1.0] * len(ordered),
+    }
+    if tags_post_filter:
+        results = _apply_tags_post_filter(results, tags_post_filter)
+        for key in _TAGS_POST_FILTER_KEYS:
+            if key in results:
+                results[key] = results[key][:top_k]
+
+    formatted_context, chunks_used = format_context(
+        chunks=results['chunks'], metadatas=results['metadatas'])
+    logger.warning("Serving DEGRADED sparse-only retrieval: %d chunks (dense leg unavailable)",
+                   chunks_used)
+    return {
+        'chunks': results['chunks'],
+        'metadatas': results['metadatas'],
+        'distances': results['distances'],
+        'formatted_context': formatted_context,
+        'chunks_used': chunks_used,
+        'degraded': 'sparse_only',
+    }
 
 
 def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:

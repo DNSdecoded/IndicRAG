@@ -15,6 +15,24 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Thread budget
+# ============================================================================
+# The process already runs a 32-worker ChromaDB timeout pool, FastAPI's ~40-thread
+# default pool, a ProcessPoolExecutor for PDF parsing, and a ThreadPoolExecutor for
+# parallel agent tools. On top of that, torch and ONNX Runtime each default to one
+# intra-op thread PER CORE, so a single reranker pass can fan out across every core
+# while dozens of request threads are already runnable. The result is a ready queue
+# far deeper than the core count, where every stage slows down at once.
+#
+# Pin it: 0 means "leave the library default alone" (opt out); anything else caps
+# intra-op parallelism. Must be set BEFORE torch/onnxruntime are imported, which is
+# why it lives at the top of config.py — the first module everything else imports.
+TORCH_NUM_THREADS = int(os.getenv("TORCH_NUM_THREADS", "4"))
+if TORCH_NUM_THREADS > 0:
+    os.environ.setdefault("OMP_NUM_THREADS", str(TORCH_NUM_THREADS))
+    os.environ.setdefault("MKL_NUM_THREADS", str(TORCH_NUM_THREADS))
+
+# ============================================================================
 # Paths
 # ============================================================================
 PROJECT_ROOT = Path(__file__).parent
@@ -124,6 +142,11 @@ USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
 # per figure at ingest, bounded by MULTIMODAL_MAX_FIGS_PER_DOC.
 ENABLE_MULTIMODAL_INGEST = os.getenv("ENABLE_MULTIMODAL_INGEST", "false").lower() == "true"
 MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12"))
+# Concurrent VLM caption calls per paper; 1 restores the old sequential behavior.
+# Keep this small — the cap bounds requests in flight at the provider, it is not
+# there to saturate the box. Too high just converts a slow ingest into 429s that
+# trip the LLM circuit breaker for every other caller.
+FIGURE_CAPTION_WORKERS = int(os.getenv("FIGURE_CAPTION_WORKERS", "4"))
 
 # Phase 5 — contradiction/consensus detection. When on, the answer generator
 # runs pairwise NLI (the same faithfulness model) over the top retrieved passages
