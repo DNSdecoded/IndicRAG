@@ -47,6 +47,23 @@ _conn.execute(
 )
 
 
+_conn.execute(
+    # Append-only record of what was ingested, and of the chunks that ingestion
+    # produced. This is the system of record; ChromaDB, the BM25 index and the
+    # figure store are derived views over it.
+    #
+    # Without this, the only way to rebuild the vector store was to re-parse every
+    # PDF and re-call the VLM captioner — hours of work, non-reproducible, and
+    # dependent on source files still being present. That made changing the
+    # embedding model or the chunking strategy so expensive it never happened.
+    # With it, reindexing is a replay.
+    "CREATE TABLE IF NOT EXISTS ingest_log ("
+    "event_id TEXT PRIMARY KEY, paper_id TEXT, content_hash TEXT, title TEXT, "
+    "source_path TEXT, chunks TEXT, metadatas TEXT, ids TEXT, "
+    "embed_model TEXT, chunker_version INTEGER, created_at TEXT)"
+)
+
+
 def _ensure_column(table: str, column: str, decl: str) -> None:
     """Add a column to an existing table if it isn't there yet.
 
@@ -85,6 +102,8 @@ _conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_completed ON jobs(completed_a
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at)")
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_watch ON reports(watch_id)")
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_owner ON reports(owner)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_paper ON ingest_log(paper_id)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_hash ON ingest_log(content_hash)")
 
 _conn.commit()
 _db_lock = threading.Lock()
@@ -373,6 +392,78 @@ def due_watches(now_iso: str) -> list[dict]:
             (now_iso,),
         ).fetchall()
     return [json.loads(r[0]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Ingest log — the system of record the search indexes are derived from.
+# ---------------------------------------------------------------------------
+def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
+                  source_path: str, chunks: list, metadatas: list, ids: list,
+                  embed_model: str, chunker_version: int, created_at: str) -> None:
+    """Record one ingestion, including the chunks it produced.
+
+    Re-ingesting a paper replaces its row rather than appending a second one:
+    the log describes the CURRENT contents of the indexes, and keeping
+    superseded versions would make a replay reinstate deleted chunks.
+    """
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO ingest_log (event_id, paper_id, content_hash, title, source_path, "
+            "chunks, metadatas, ids, embed_model, chunker_version, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(event_id) DO UPDATE SET content_hash=excluded.content_hash, "
+            "title=excluded.title, source_path=excluded.source_path, chunks=excluded.chunks, "
+            "metadatas=excluded.metadatas, ids=excluded.ids, embed_model=excluded.embed_model, "
+            "chunker_version=excluded.chunker_version, created_at=excluded.created_at",
+            (event_id, paper_id, content_hash, title, source_path,
+             json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
+             embed_model, chunker_version, created_at),
+        )
+        _conn.commit()
+
+
+def get_ingest_events(paper_id: str = None) -> list[dict]:
+    """Every recorded ingestion, oldest first, or just one paper's.
+
+    Oldest first so a replay reproduces the original ingest order — chunk ids
+    and citation numbering follow insertion order.
+    """
+    with _db_lock:
+        if paper_id is None:
+            rows = _conn.execute(
+                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+                "metadatas, ids, embed_model, chunker_version, created_at "
+                "FROM ingest_log ORDER BY created_at ASC").fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+                "metadatas, ids, embed_model, chunker_version, created_at "
+                "FROM ingest_log WHERE paper_id = ? ORDER BY created_at ASC",
+                (paper_id,)).fetchall()
+    return [{
+        "event_id": r[0], "paper_id": r[1], "content_hash": r[2], "title": r[3],
+        "source_path": r[4], "chunks": json.loads(r[5]), "metadatas": json.loads(r[6]),
+        "ids": json.loads(r[7]), "embed_model": r[8], "chunker_version": r[9],
+        "created_at": r[10],
+    } for r in rows]
+
+
+def ingest_event_count() -> int:
+    with _db_lock:
+        return _conn.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+
+
+def delete_ingest_events(paper_id: str) -> int:
+    """Drop a paper from the log. Returns rows removed.
+
+    Must accompany deleting the paper from the indexes — otherwise a later
+    replay would resurrect it, which is the failure mode a system of record is
+    supposed to prevent.
+    """
+    with _db_lock:
+        cur = _conn.execute("DELETE FROM ingest_log WHERE paper_id = ?", (paper_id,))
+        _conn.commit()
+        return cur.rowcount
 
 
 def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool:

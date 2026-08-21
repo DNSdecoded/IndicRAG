@@ -271,6 +271,46 @@ def test_deleting_a_paper_removes_it_from_both_indexes(pipeline):
     assert "qubit_ec" not in {m["paper_id"] for m in out["metadatas"]}
 
 
+def test_reindex_replays_the_log_into_a_working_collection(pipeline, monkeypatch):
+    """The whole justification for the ingest log: rebuild the vector store from
+    recorded chunks, with no PDFs and no re-captioning, and get a collection that
+    retrieves the same way.
+
+    This is what makes an embedding-model change a routine operation instead of
+    an hours-long non-reproducible one.
+    """
+    import uuid
+    import persistence
+    import reindex
+
+    pid = "replay_" + uuid.uuid4().hex[:8]
+    chunks = [c[3] for c in CORPUS if c[0] == "antenna_ml"]
+    persistence.record_ingest(
+        event_id=pid, paper_id=pid, content_hash="h", title="Replayed Antennas",
+        source_path="", chunks=chunks,
+        metadatas=[{"paper_id": pid, "title": "Replayed Antennas",
+                    "section": "abstract", "chunk_index": i} for i in range(len(chunks))],
+        ids=[f"{pid}_{i}" for i in range(len(chunks))],
+        embed_model=config.EMBEDDING_MODEL_NAME, chunker_version=vector_store.CHUNKER_VERSION,
+        created_at="2026-01-01T00:00:00+00:00")
+    try:
+        rc = reindex.reindex("replayed", dry_run=False, batch_size=8)
+        assert rc == 0
+
+        rebuilt = vector_store.get_or_create_collection("replayed")
+        assert rebuilt.count() == len(chunks)
+
+        # The rebuilt collection must actually retrieve, not merely hold rows.
+        out = rag.retrieve_context("antenna design neural network", top_k=3,
+                                   collection=rebuilt)
+        assert out["chunks_used"] > 0
+        assert out["metadatas"][0]["paper_id"] == pid
+        # And it is stamped with the model that just re-embedded it.
+        assert vector_store.check_index_compatibility(rebuilt) is None
+    finally:
+        persistence.delete_ingest_events(pid)
+
+
 def test_newly_ingested_chunks_are_searchable_without_a_rebuild(pipeline):
     """The incremental BM25 path: an ingest must not require dropping the index."""
     bm25_search.get_or_build_index(pipeline)

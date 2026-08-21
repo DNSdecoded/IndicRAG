@@ -415,6 +415,15 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
             # A stale lexical index is a quality bug, not a correctness one for the
             # delete itself — never fail the deletion over it.
             logger.warning("BM25 index not updated after deleting %s", paper_id, exc_info=True)
+        try:
+            # The ingest log is the system of record a reindex replays from. Leaving
+            # the row behind would make a rebuild resurrect the paper we just
+            # deleted — exactly the inconsistency a system of record must prevent.
+            import persistence
+            persistence.delete_ingest_events(paper_id)
+        except Exception:
+            logger.warning("Ingest log not updated after deleting %s — a reindex would "
+                           "resurrect it", paper_id, exc_info=True)
     return len(ids)
 
 

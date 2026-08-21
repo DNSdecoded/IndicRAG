@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 import logging
 import os
+from datetime import datetime, timezone
 from tqdm import tqdm
 import hashlib
 import concurrent.futures
@@ -188,6 +189,7 @@ def ingest_paper(
     metadata: Optional[Dict[str, Any]] = None,
     collection=None,
     figures: Optional[List[dict]] = None,
+    source_path: Optional[str] = None,
 ) -> int:
     """
     Ingest a single paper into the vector store.
@@ -225,6 +227,33 @@ def ingest_paper(
         ids=prepared['ids'],
         collection=collection
     )
+
+    # Record what was indexed, so the vector and lexical indexes can be rebuilt
+    # without re-parsing the PDF or re-calling the VLM captioner. Written AFTER
+    # the indexes, so the log never claims chunks that failed to land — the
+    # reverse order would leave a replay that reinstates nothing real.
+    #
+    # Best-effort: a logging failure must not fail an ingest that already
+    # succeeded. It costs the ability to replay that paper, not the paper itself.
+    try:
+        import persistence
+        persistence.record_ingest(
+            event_id=paper_id,          # one row per paper: the log describes the
+                                        # current index contents, not history
+            paper_id=paper_id,
+            content_hash=_content_hash("".join(text for _, text in sections)),
+            title=title,
+            source_path=source_path or "",
+            chunks=prepared['chunks'],
+            metadatas=prepared['metadatas'],
+            ids=prepared['ids'],
+            embed_model=config.EMBEDDING_MODEL_NAME,
+            chunker_version=vector_store.CHUNKER_VERSION,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception:
+        logger.warning("Could not record ingest log for %s — this paper will not be "
+                       "replayable by reindex.py", paper_id, exc_info=True)
 
     return len(prepared['chunks'])
 
@@ -327,6 +356,7 @@ def ingest_pdf(
         metadata=metadata,
         collection=collection,
         figures=figures,
+        source_path=str(pdf_path),
     )
     
     logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
