@@ -45,7 +45,10 @@
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html,body{height:100%;}
-body{font-family:'IBM Plex Sans','IBM Plex Sans Devanagari',system-ui,sans-serif;background:var(--paper);color:var(--ink);font-size:14px;line-height:1.55;display:flex;overflow:hidden;-webkit-font-smoothing:antialiased;}
+/* Respect the user's browser text size: a fixed 14px body ignored it entirely.
+   Type is rem so it scales; layout stays px so the shell geometry holds. */
+html{font-size:100%;}
+body{font-family:'IBM Plex Sans','IBM Plex Sans Devanagari',system-ui,sans-serif;background:var(--paper);color:var(--ink);font-size:.875rem;line-height:1.55;display:flex;overflow:hidden;-webkit-font-smoothing:antialiased;}
 :where(:lang(hi),:lang(mr),:lang(ne),.deva){font-family:'IBM Plex Sans Devanagari','IBM Plex Sans',sans-serif;}
 button,input,select,textarea{font:inherit;color:inherit;}
 button{background:none;border:none;cursor:pointer;}
@@ -58,6 +61,26 @@ a{color:var(--indigo);text-decoration:none;}
 ::-webkit-scrollbar{width:9px;height:9px;}
 ::-webkit-scrollbar-thumb{background:var(--rule-hard);border-radius:5px;border:2px solid var(--paper);}
 ::-webkit-scrollbar-track{background:transparent;}
+
+
+/* ── PRESS FEEDBACK ───────────────────────────────────── */
+/* Feedback belongs on the press, not the release: waiting for :hover or a
+   completed click reads as "the computer answered my request" rather than
+   "the thing I touched moved". Transform-only, so it composites. */
+.btn:active,.rail-btn:active,.send:active,.rb:active,.tact:active,
+.iconbtn:active,.ev-tab:active,.searchbtn:active,.cite:active{
+  transform:scale(.97);
+  transition:transform 90ms ease-out;
+}
+/* Large surfaces scale less — the same ratio on a big card reads rubbery. */
+.seed:active,.rb-drop-item:active{transform:scale(.993);transition:transform 90ms ease-out;}
+.degraded-note{
+  display:flex;align-items:flex-start;gap:8px;margin-bottom:14px;padding:9px 11px;
+  border:1px solid var(--amber);background:var(--amber-soft);border-radius:9px;
+  font-size:12.5px;line-height:1.45;color:var(--amber);
+}
+.degraded-note svg{width:15px;height:15px;flex-shrink:0;margin-top:1px;fill:none;
+  stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;}
 
 /* ── NAV RAIL ─────────────────────────────────────────── */
 .rail{width:var(--rail-w);flex-shrink:0;background:var(--paper-2);border-right:1px solid var(--rule);display:flex;flex-direction:column;align-items:center;padding:10px 0 8px;gap:2px;z-index:40;}
@@ -97,7 +120,7 @@ a{color:var(--indigo);text-decoration:none;}
 .page{flex:1;overflow-y:auto;}
 .page-in{max-width:1080px;margin:0 auto;padding:30px 32px 72px;}
 .page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:6px;}
-.page-title{font-family:'Instrument Serif',Georgia,serif;font-size:35px;line-height:1.05;letter-spacing:-.4px;}
+.page-title{font-family:'Instrument Serif',Georgia,serif;font-size:clamp(1.75rem,3.2vw,2.19rem);line-height:1.05;letter-spacing:-.012em;}
 .page-sub{color:var(--ink-3);font-size:13.5px;max-width:66ch;margin-bottom:26px;}
 .eyebrow{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:500;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-4);display:flex;align-items:center;gap:9px;margin-bottom:12px;}
 .eyebrow::after{content:'';flex:1;height:1px;background:var(--rule);}
@@ -118,26 +141,26 @@ select.fld{cursor:pointer;padding-right:26px;}
 .thread{flex:1;overflow-y:auto;padding:26px 0 20px;}
 .thread-in{max-width:730px;margin:0 auto;padding:0 28px;}
 .opener{max-width:640px;margin:min(9vh,80px) auto 0;padding:0 28px;}
-.opener h1{font-family:'Instrument Serif',Georgia,serif;font-size:42px;line-height:1.08;letter-spacing:-.6px;margin-bottom:10px;}
+.opener h1{font-family:'Instrument Serif',Georgia,serif;font-size:clamp(2rem,4vw,2.625rem);line-height:1.08;letter-spacing:-.014em;margin-bottom:10px;}
 .opener h1 em{font-style:italic;color:var(--indigo);}
-.opener p{color:var(--ink-3);font-size:14px;max-width:52ch;margin-bottom:26px;}
+.opener p{color:var(--ink-3);font-size:.875rem;max-width:52ch;margin-bottom:26px;}
 .seed-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
 .seed{text-align:left;border:1px solid var(--rule);border-radius:11px;padding:12px 13px;transition:border-color .15s,background .15s;}
 .seed:hover{border-color:var(--indigo-line);background:var(--indigo-soft);}
 .seed .sk{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-4);display:block;margin-bottom:5px;}
 .seed .sv{font-size:13px;color:var(--ink-2);line-height:1.4;}
 .turn-user{display:flex;justify-content:flex-end;margin:0 0 22px;}
-.turn-user .q{background:var(--indigo);color:#fff;padding:9px 14px;border-radius:13px 13px 3px 13px;font-size:14px;max-width:82%;box-shadow:var(--shadow-sm);word-break:break-word;}
+.turn-user .q{background:var(--indigo);color:#fff;padding:9px 14px;border-radius:13px 13px 3px 13px;font-size:.875rem;max-width:82%;box-shadow:var(--shadow-sm);word-break:break-word;}
 .turn-asst{margin-bottom:32px;}
 .asst-meta{display:flex;align-items:center;gap:8px;margin-bottom:11px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-4);}
 .asst-meta .pill{border:1px solid var(--rule);border-radius:20px;padding:1.5px 7px;letter-spacing:.5px;color:var(--ink-3);}
 .asst-meta .pill.ag{color:var(--indigo);border-color:var(--indigo-line);background:var(--indigo-soft);}
 .asst-body{border-left:2px solid var(--rule);padding-left:18px;position:relative;}
-.asst-body p{margin-bottom:12px;font-size:14.5px;line-height:1.68;color:var(--ink);}
+.asst-body p{margin-bottom:12px;font-size:.906rem;line-height:1.68;color:var(--ink);}
 .asst-body p:last-child{margin-bottom:0;}
 .asst-body h4{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:1.3px;text-transform:uppercase;color:var(--ink-4);font-weight:500;margin:20px 0 9px;}
 .asst-body ul{margin:0 0 12px 17px;}
-.asst-body li{margin-bottom:5px;font-size:14.5px;line-height:1.6;}
+.asst-body li{margin-bottom:5px;font-size:.906rem;line-height:1.6;}
 .asst-body pre{background:var(--paper-3);border-radius:6px;padding:10px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;overflow-x:auto;margin-bottom:12px;color:var(--ink-2);}
 .asst-body code{font-family:'IBM Plex Mono',monospace;font-size:12.5px;background:var(--paper-3);padding:1px 4px;border-radius:3px;}
 .asst-body pre code{background:none;padding:0;}
@@ -149,7 +172,7 @@ select.fld{cursor:pointer;padding-right:26px;}
 .groundbar{display:flex;align-items:center;gap:9px;margin-top:16px;padding-top:13px;border-top:1px dashed var(--rule);flex-wrap:wrap;}
 .groundbar .gl{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--ink-4);}
 .gmeter{flex:1;max-width:130px;height:4px;border-radius:2px;background:var(--paper-3);overflow:hidden;}
-.gmeter i{display:block;height:100%;background:var(--patina);border-radius:2px;}
+.gmeter i{display:block;height:100%;background:var(--patina);border-radius:2px;transition:width .5s cubic-bezier(.32,.72,0,1);}
 .gval{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;color:var(--patina);}
 .turn-acts{display:flex;gap:2px;margin-left:auto;}
 .tact{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--ink-4);transition:background .13s,color .13s;}
@@ -182,7 +205,7 @@ select.fld{cursor:pointer;padding-right:26px;}
 .rb-drop-sep{height:1px;background:var(--rule);margin:4px 6px;}
 .inputbox{border:1px solid var(--rule-hard);border-radius:14px;background:var(--paper);box-shadow:var(--shadow-sm);transition:border-color .16s,box-shadow .16s;display:flex;align-items:flex-end;gap:8px;padding:8px 8px 8px 12px;}
 .inputbox:focus-within{border-color:var(--indigo);box-shadow:0 0 0 3px var(--indigo-soft);}
-.inputbox textarea{flex:1;border:none;background:none;resize:none;outline:none;font-size:14.5px;line-height:1.55;max-height:150px;padding:5px 0;}
+.inputbox textarea{flex:1;border:none;background:none;resize:none;outline:none;font-size:.906rem;line-height:1.55;max-height:150px;padding:5px 0;}
 .inputbox textarea::placeholder{color:var(--ink-4);}
 .send{width:32px;height:32px;border-radius:9px;background:var(--indigo);color:#fff;display:grid;place-items:center;flex-shrink:0;transition:background .14s;}
 .send:hover{background:var(--indigo-2);}
@@ -190,8 +213,15 @@ select.fld{cursor:pointer;padding-right:26px;}
 .foot-note{text-align:center;font-size:10.5px;color:var(--ink-4);margin-top:7px;font-family:'IBM Plex Mono',monospace;letter-spacing:.4px;}
 
 /* ── EVIDENCE RAIL ────────────────────────────────────── */
-.evidence{width:var(--evidence-w);flex-shrink:0;border-left:1px solid var(--rule);background:var(--paper-2);display:flex;flex-direction:column;overflow:hidden;transition:width .2s ease;}
+/* width animates layout on every frame. transform composites — but collapsing
+   must still reclaim the space, so width stays the mechanism and only the
+   *contents* slide, which is the part the eye follows. */
+.evidence{width:var(--evidence-w);flex-shrink:0;border-left:1px solid var(--rule);
+  background:var(--paper-2);display:flex;flex-direction:column;overflow:hidden;
+  transition:width .28s cubic-bezier(.32,.72,0,1);}
+.evidence>*{transition:transform .28s cubic-bezier(.32,.72,0,1),opacity .18s ease;}
 .evidence.ev-collapsed{width:0;border-left:none;}
+.evidence.ev-collapsed>*{transform:translateX(24px);opacity:0;}
 .ev-tabs{display:flex;border-bottom:1px solid var(--rule);flex-shrink:0;padding:0 6px;}
 .ev-tab{padding:11px 10px 9px;font-size:11.5px;font-weight:500;color:var(--ink-3);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .14s;display:flex;align-items:center;gap:5px;}
 .ev-tab:hover{color:var(--ink);}
@@ -299,8 +329,16 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
 .num{font-family:'IBM Plex Mono',monospace;font-size:12.5px;text-align:right;}
 
 /* ── COMMAND PALETTE ──────────────────────────────────── */
-.scrim{position:fixed;inset:0;background:rgba(20,22,31,.4);backdrop-filter:blur(3px);display:none;z-index:100;align-items:flex-start;justify-content:center;padding-top:12vh;}
-.scrim.on{display:flex;}
+/* display isn't animatable, so the dialog used to pop. Blur and scale animate
+   together (§ materialize, don't just fade) so the surface reads as arriving. */
+.scrim{position:fixed;inset:0;background:rgba(20,22,31,.4);backdrop-filter:blur(0px);
+  display:flex;opacity:0;visibility:hidden;z-index:100;align-items:flex-start;
+  justify-content:center;padding-top:12vh;
+  transition:opacity .2s ease,backdrop-filter .2s ease,visibility 0s .2s;}
+.scrim.on{opacity:1;visibility:visible;backdrop-filter:blur(3px);transition-delay:0s,0s,0s;}
+/* Closest single curve to a critically-damped spring (damping 1.0, response ~.3) */
+.scrim>*{transform:scale(.97) translateY(-6px);transition:transform .3s cubic-bezier(.32,.72,0,1);}
+.scrim.on>*{transform:none;}
 [data-theme="dark"] .scrim{background:rgba(0,0,0,.6);}
 .pal{width:min(560px,92vw);background:var(--paper);border:1px solid var(--rule-hard);border-radius:14px;box-shadow:var(--shadow-lg);overflow:hidden;}
 .pal-in{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--rule);}
@@ -348,8 +386,26 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
   .crumb,.searchbtn{display:none;}
   .tbl-wrap{overflow-x:auto;}
 }
+/* Reduced motion means gentler, not none: opacity and colour changes still aid
+   comprehension, so only the vestibular ones (transform, spring, loops) go. */
 @media(prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important;}
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-property:opacity,background-color,border-color,color,box-shadow !important;
+    transition-duration:150ms !important;
+  }
+  .btn:active,.rail-btn:active,.send:active,.rb:active,.tact:active,
+  .iconbtn:active,.seed:active,.scrim>*,.evidence>*{transform:none !important;}
+  .evidence{transition:none !important;}
+}
+@media(prefers-reduced-transparency:reduce){
+  .scrim{backdrop-filter:none !important;background:rgba(20,22,31,.72);}
+  [data-theme="dark"] .scrim{background:rgba(0,0,0,.8);}
+}
+@media(prefers-contrast:more){
+  .btn,.fld,.rb,.seed,.searchbtn{border-color:var(--ink-3);}
+  .asst-meta .pill{border-color:var(--ink-4);}
 }
 </style>
 </head>
@@ -830,8 +886,17 @@ function saveKey() {
   showToast(k ? 'API key saved' : 'API key cleared', 'success');
 }
 // Reopen the key modal on any 401 so the user can fix a wrong/missing key.
+// Also names a 429, which v2.5 made reachable by rate-limiting the endpoints
+// that spend LLM budget (/report, /watch/{id}/run). Without this the user sees
+// a generic failure and retries immediately, which is the worst response.
 function handle401(res) {
   if (res && res.status === 401) { openKeyModal(); showToast('Invalid or missing API key', 'error'); return true; }
+  if (res && res.status === 429) {
+    const retry = res.headers && res.headers.get && res.headers.get('Retry-After');
+    showToast(retry ? ('Rate limit reached — try again in ' + retry + 's')
+                    : 'Rate limit reached — please wait a moment', 'error');
+    return true;
+  }
   return false;
 }
 $('#keyBtn').addEventListener('click', openKeyModal);
@@ -1105,6 +1170,16 @@ function appendAssistantTurn(data) {
   metaParts.push('<span style="margin-left:auto">' + (data.processing_time || 0).toFixed(1) + 's' + (isAgent ? '' : ' · ' + (data.chunks_used || 0) + ' chunks') + '</span>');
 
   const groundedness = data.groundedness || data.grounding_score;
+  // v2.5: the backend flags an answer produced without the dense retrieval leg.
+  // A degraded answer that looks identical to a normal one is worse than an
+  // error, because nothing tells the reader to trust it less.
+  let degradedNote = '';
+  if (data.degraded === 'sparse_only') {
+    degradedNote = '<div class="degraded-note" role="status">' +
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>' +
+      '<span>Keyword search only — semantic retrieval was unavailable, so these results may be less relevant.</span></div>';
+  }
+
   let groundbar = '';
   if (groundedness != null) {
     const pct = Math.round(groundedness * 100);
@@ -1129,7 +1204,7 @@ function appendAssistantTurn(data) {
   div.className = 'turn-asst';
   div.innerHTML = '<div class="asst-meta">' + metaParts.join('') +
     '<span class="turn-acts"><button class="tact" title="Copy" onclick="copyAnswer(this)"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></span></div>' +
-    '<div class="asst-body">' + renderContent(data.answer || '') + toolsHtml + sourcesList + groundbar + '</div>';
+    '<div class="asst-body">' + degradedNote + renderContent(data.answer || '') + toolsHtml + sourcesList + groundbar + '</div>';
   $('#threadContent').appendChild(div);
 
   // Wire citation hover
