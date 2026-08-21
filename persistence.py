@@ -326,6 +326,28 @@ def due_watches(now_iso: str) -> list[dict]:
     return [json.loads(r[0]) for r in rows]
 
 
+def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool:
+    """Atomically claim a due watch. True if this caller won the claim.
+
+    The scheduler runs in-process, so two workers (or two replicas) both see the
+    same watch as due and both run it — duplicate arXiv fetches, duplicate
+    ingests, duplicate LLM spend on the digest. This is a compare-and-set on the
+    row: the UPDATE only matches while next_run is still what the claimer read,
+    so exactly one caller can move it and the losers see rowcount 0.
+
+    `lease_until` parks next_run far enough ahead that a claimer which crashes
+    mid-run doesn't wedge the watch forever — the lease simply expires and the
+    watch becomes due again. run_watch rewrites next_run properly on success.
+    """
+    with _db_lock:
+        cur = _conn.execute(
+            "UPDATE watches SET next_run = ? WHERE id = ? AND next_run = ?",
+            (lease_until, watch_id, expected_next_run),
+        )
+        _conn.commit()
+        return cur.rowcount == 1
+
+
 def delete_watch(watch_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))

@@ -254,6 +254,9 @@ def test_run_due_watches_runs_each_due_and_survives_failures(monkeypatch):
     ran = []
     monkeypatch.setattr(watch_runner.persistence, "due_watches",
                         lambda now: [{"id": "a"}, {"id": "b"}, {"id": "c"}])
+    # Claiming is now part of the sweep; this caller wins every claim.
+    monkeypatch.setattr(watch_runner.persistence, "claim_watch",
+                        lambda wid, expected, lease: True)
 
     def _fake_run(wid):
         if wid == "b":
@@ -266,3 +269,66 @@ def test_run_due_watches_runs_each_due_and_survives_failures(monkeypatch):
 
     assert count == 3            # all due watches attempted
     assert ran == ["a", "c"]     # b failed but a and c still ran
+
+
+def test_run_due_watches_skips_watches_claimed_by_another_worker(monkeypatch):
+    """The schedule loop runs in-process, so every worker sees the same watch as
+    due. Only the one that wins the claim may run it — otherwise each replica
+    re-fetches arXiv, re-ingests, and pays for its own digest."""
+    ran = []
+    monkeypatch.setattr(watch_runner.persistence, "due_watches",
+                        lambda now: [{"id": "a"}, {"id": "b"}])
+    # 'a' was taken by another worker between our read and our claim.
+    monkeypatch.setattr(watch_runner.persistence, "claim_watch",
+                        lambda wid, expected, lease: wid != "a")
+    monkeypatch.setattr(watch_runner, "run_watch", lambda wid: ran.append(wid))
+
+    count = asyncio.run(watch_runner.run_due_watches())
+
+    assert ran == ["b"]
+    assert count == 1  # counts what was claimed and run, not what looked due
+
+
+def _seed_watch(persistence, wid, due_at):
+    persistence.save_watch({
+        "id": wid, "user_id": "u", "owner": None, "topic": "t", "language": "en",
+        "cadence": "weekly", "seen_ids": [], "latest_digest": None,
+        "next_run": due_at, "last_run": None, "created_at": due_at,
+    })
+
+
+def test_claim_watch_is_won_by_exactly_one_caller():
+    """The compare-and-set itself: two workers racing on one row, one winner."""
+    import uuid
+    import persistence
+
+    wid = str(uuid.uuid4())
+    due_at = "2026-01-01T00:00:00+00:00"
+    _seed_watch(persistence, wid, due_at)
+    try:
+        lease = "2026-01-01T01:00:00+00:00"
+        first = persistence.claim_watch(wid, due_at, lease)
+        second = persistence.claim_watch(wid, due_at, lease)
+        assert first is True
+        assert second is False   # next_run already moved; the loser matches no row
+    finally:
+        persistence.delete_watch(wid)
+
+
+def test_claim_parks_next_run_so_a_dead_claimer_cannot_wedge_the_watch():
+    import uuid
+    import persistence
+
+    wid = str(uuid.uuid4())
+    due_at = "2026-01-01T00:00:00+00:00"
+    lease = "2026-01-01T01:00:00+00:00"
+    _seed_watch(persistence, wid, due_at)
+    try:
+        assert persistence.claim_watch(wid, due_at, lease) is True
+        # Not due while the lease holds...
+        assert wid not in {w["id"] for w in persistence.due_watches(due_at)}
+        # ...but due again once it expires, so a crashed claimer costs one delayed
+        # run rather than a permanently stuck watch.
+        assert wid in {w["id"] for w in persistence.due_watches("2026-01-01T02:00:00+00:00")}
+    finally:
+        persistence.delete_watch(wid)

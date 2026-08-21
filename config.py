@@ -183,6 +183,11 @@ WATCH_ENABLE = os.getenv("WATCH_ENABLE", "false").lower() == "true"
 WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|weekly|monthly
 WATCH_MAX_RESULTS = int(os.getenv("WATCH_MAX_RESULTS", "10"))  # papers fetched per watch run
 WATCH_POLL_INTERVAL = int(os.getenv("WATCH_POLL_INTERVAL", "3600"))  # seconds between schedule-loop sweeps
+# How long a claimed watch is parked before it becomes due again. Must comfortably
+# exceed a real run (arXiv search + ingest + digest generation), or a slow run
+# could be picked up a second time while the first is still going. It also bounds
+# how long a watch stays stuck if the claimer dies mid-run.
+WATCH_LEASE_SECONDS = int(os.getenv("WATCH_LEASE_SECONDS", "3600"))
 
 # Phase 7 — literature-review report workflow. POST /report decomposes a topic
 # into sections, synthesizes a cited section per part from the corpus, and

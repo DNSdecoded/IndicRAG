@@ -152,19 +152,35 @@ def run_watch(watch_id: str) -> dict:
 
 
 async def run_due_watches() -> int:
-    """Run every watch whose next_run has arrived. Returns how many were run.
+    """Run every watch whose next_run has arrived. Returns how many were claimed
+    and run — not how many looked due, since another worker may take some.
 
     run_watch blocks (network + ingest), so each runs in a worker thread to keep
     the event loop free. One watch failing does not abort the sweep.
+
+    Each watch is claimed first (compare-and-set on next_run). The schedule loop
+    runs inside the API process, so with more than one worker or replica every
+    watch would otherwise be picked up by all of them at once — duplicate arXiv
+    fetches, duplicate ingests, and duplicate LLM spend on the digest. Only the
+    claimer proceeds; the rest skip it.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    lease_until = (now_dt + timedelta(seconds=config.WATCH_LEASE_SECONDS)).isoformat()
     due = persistence.due_watches(now)
+    ran = 0
     for w in due:
+        if not persistence.claim_watch(w["id"], w.get("next_run"), lease_until):
+            logger.debug("[Watch] %s claimed by another worker, skipping", w["id"])
+            continue
+        ran += 1
         try:
             await asyncio.to_thread(run_watch, w["id"])
         except Exception as e:
+            # next_run stays parked at the lease, so a failed run retries once the
+            # lease expires rather than being retried on every poll interval.
             logger.error(f"[Watch] scheduled run failed for {w['id']}: {e}")
-    return len(due)
+    return ran
 
 
 async def watch_loop() -> None:
