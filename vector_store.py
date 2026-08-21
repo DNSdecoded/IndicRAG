@@ -53,6 +53,11 @@ def _chroma_record_failure() -> None:
             _circuit_until = time.monotonic() + _CIRCUIT_COOLDOWN
             logger.error("ChromaDB circuit OPEN for %.0fs after %d consecutive timeouts",
                          _CIRCUIT_COOLDOWN, _circuit_failures)
+            try:
+                import metrics
+                metrics.record_circuit_trip("chromadb")
+            except Exception:
+                pass  # a metrics failure must never worsen an outage
 
 
 def _chroma_record_success() -> None:
@@ -161,6 +166,78 @@ def get_or_create_collection(
     return collection
 
 
+# Bump CHUNKER_VERSION whenever chunk boundaries change (section sizes, splitter
+# rules): the vectors stay valid but stop being comparable to older chunks of the
+# same document. SCHEMA_VERSION covers the metadata shape itself.
+CHUNKER_VERSION = 1
+SCHEMA_VERSION = 1
+
+
+def _provenance_stamp() -> Dict[str, Any]:
+    return {
+        "embed_model": config.EMBEDDING_MODEL_NAME,
+        "embed_dim": config.EMBEDDING_DIMENSION,
+        "chunker_version": CHUNKER_VERSION,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
+def index_fingerprint(collection: chromadb.Collection = None) -> Optional[Dict[str, Any]]:
+    """Provenance of the chunks already in the collection, or None if empty.
+
+    Samples one chunk: a mixed collection is the failure this is meant to catch,
+    and one disagreeing sample is enough to know something is wrong. Chunks
+    written before stamping existed report embed_model=None (unknown), which is
+    reported rather than assumed compatible.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    try:
+        sample = _chroma_call(collection.peek, limit=1)
+    except Exception:
+        return None
+    metas = sample.get("metadatas") or []
+    if not metas:
+        return None
+    m = metas[0] or {}
+    return {
+        "embed_model": m.get("embed_model"),
+        "embed_dim": m.get("embed_dim"),
+        "chunker_version": m.get("chunker_version"),
+        "schema_version": m.get("schema_version"),
+    }
+
+
+def check_index_compatibility(collection: chromadb.Collection = None) -> Optional[str]:
+    """Return a human-readable problem description, or None when consistent.
+
+    Called at startup so a model or chunker change is loud instead of silent.
+    Unstamped legacy chunks are reported (they may predate any change) but are
+    not treated as a hard mismatch — there is nothing to compare them against.
+    """
+    fp = index_fingerprint(collection)
+    if fp is None:
+        return None  # empty collection: nothing to be incompatible with
+    if fp["embed_model"] is None:
+        return ("indexed chunks carry no embedding provenance (written before "
+                "version stamping); re-ingest to make future model changes detectable")
+    problems = []
+    if fp["embed_model"] != config.EMBEDDING_MODEL_NAME:
+        problems.append(f"embedding model {fp['embed_model']!r} indexed vs "
+                        f"{config.EMBEDDING_MODEL_NAME!r} configured")
+    if fp["embed_dim"] != config.EMBEDDING_DIMENSION:
+        problems.append(f"embedding dimension {fp['embed_dim']} indexed vs "
+                        f"{config.EMBEDDING_DIMENSION} configured")
+    if fp["chunker_version"] != CHUNKER_VERSION:
+        problems.append(f"chunker version {fp['chunker_version']} indexed vs "
+                        f"{CHUNKER_VERSION} configured")
+    if not problems:
+        return None
+    return ("; ".join(problems) +
+            " — queries will compare vectors from different embedding spaces, "
+            "which silently degrades retrieval. Re-ingest the corpus.")
+
+
 def add_documents(
     texts: List[str],
     embeddings: np.ndarray,
@@ -180,7 +257,14 @@ def add_documents(
     """
     if collection is None:
         collection = get_or_create_collection()
-    
+
+    # Stamp provenance on every chunk. Nothing recorded WHICH model produced a
+    # vector, so swapping the embedding model — or changing the per-section chunk
+    # sizes — silently mixed incompatible vectors into one collection. Cosine
+    # distance between two different embedding spaces is meaningless but never
+    # errors, so retrieval quality just quietly degrades. See check_index_compatibility.
+    metadatas = [{**m, **_provenance_stamp()} for m in metadatas]
+
     # Convert embeddings to list of lists
     embeddings_list = embeddings.tolist()
     
