@@ -635,7 +635,9 @@ ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"
 # ============================================================================
 # Version
 # ============================================================================
-VERSION = "2.3.0-dev"
+# Surfaced in the OpenAPI spec and /health, so it is what an operator reads when
+# asking "which build is this?" — it had drifted two releases behind the README.
+VERSION = "2.5.0-dev"
 
 # ============================================================================
 # Chat / Session
