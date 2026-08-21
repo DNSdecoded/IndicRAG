@@ -64,6 +64,8 @@ class ChatResponse(BaseModel):
     citations: List[Citation]
     processing_time: float
     timestamp: str
+    # 'sparse_only' when the dense retrieval leg was unavailable — see QueryResponse.
+    degraded: Optional[str] = None
 
 
 @router.post("/chat", response_model=ChatResponse, tags=["Chat"])
@@ -134,6 +136,7 @@ async def chat(
         citations=[Citation(**c) for c in result["citations"]],
         processing_time=processing_time,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        degraded=result.get("degraded"),
     )
 
 
@@ -191,7 +194,8 @@ async def chat_stream(
             async for event in sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
                                            strategy=body.strategy, query_id=query_id,
                                            model=body.model, provider=body.provider,
-                                           visible_chunks=prepared["chunks_used"]):
+                                           visible_chunks=prepared["chunks_used"],
+                                           degraded=prepared.get("degraded")):
                 if event.startswith('data: {"type": "error"'):
                     hit_error = True
                 if event.startswith('data: {"type": "done"'):

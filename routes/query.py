@@ -113,6 +113,10 @@ class QueryResponse(BaseModel):
     timestamp: str
     confidence: float = 0.0
     evidence: List[dict] = []
+    # None on the normal path. 'sparse_only' means the dense retrieval leg was
+    # unavailable and this answer came from BM25 alone — lower quality, and the
+    # client should say so rather than presenting it as a normal answer.
+    degraded: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -272,6 +276,7 @@ async def query_question(
             timestamp=datetime.now(timezone.utc).isoformat(),
             confidence=result.get('answer_confidence', 0.0),
             evidence=result.get('faithfulness', []),
+            degraded=result.get('degraded'),
         )
 
     except ValueError as e:
@@ -318,7 +323,8 @@ async def query_stream(
         sse_stream(prepared["prompt"], prepared["metadatas"], prepared["detected_lang"],
                    strategy=body.strategy, query_id=query_id,
                    model=body.model, provider=body.provider,
-                   visible_chunks=prepared["chunks_used"]),
+                   visible_chunks=prepared["chunks_used"],
+                   degraded=prepared.get("degraded")),
         media_type="text/event-stream",
     )
 

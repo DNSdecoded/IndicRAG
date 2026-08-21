@@ -808,7 +808,8 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
     prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
                           target_lang=detected_lang, strategy=strategy)
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
-            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
+            "lang_name": lang_name, "degraded": context_data.get("degraded")}
 
 
 def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None,
@@ -870,7 +871,8 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
         prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
 
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
-            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
+            "lang_name": lang_name, "degraded": context_data.get("degraded")}
 
 
 generate_with_failover = llm_client.generate_with_failover
@@ -995,7 +997,10 @@ def answer_question_strategy_a(
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
-        'citations': citations
+        'citations': citations,
+        # None on the normal path; 'sparse_only' when the dense leg was
+        # unavailable and this answer came from BM25 alone.
+        'degraded': context_data.get('degraded'),
     }
     faith_result = _run_faithfulness(
         answer, context_data.get('chunks', []), context_data.get('metadatas', []))
@@ -1096,7 +1101,8 @@ def answer_question_strategy_b(
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
-        'english_answer': english_answer
+        'english_answer': english_answer,
+        'degraded': context_data.get('degraded'),
     }
     faith_result = _run_faithfulness(
         english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
@@ -1246,6 +1252,7 @@ def answer_with_history(
         "language_name": lang_name,
         "chunks_used": context_data["chunks_used"],
         "citations": citations,
+        "degraded": context_data.get("degraded"),
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer
