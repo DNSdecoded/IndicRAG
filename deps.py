@@ -135,12 +135,25 @@ _jobs_lock = threading.Lock()
 _last_job_eviction = 0.0
 
 
+def job_lease() -> str:
+    """A fresh lease deadline for a job this process is actively working on."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=config.JOB_LEASE_SECONDS)).isoformat()
+
+
 def _update_job(job_id: str, **kwargs):
-    """Thread-safe update of a job's fields; evicts completed jobs once per hour."""
+    """Thread-safe update of a job's fields; evicts completed jobs once per hour.
+
+    Every update to an unfinished job doubles as a lease heartbeat. A job that
+    stops heartbeating is one whose process died, which is what lets the startup
+    reaper tell an abandoned job from a slow one — previously a crash left the
+    row saying `running` forever and clients polled it indefinitely.
+    """
     global _last_job_eviction
     with _jobs_lock:
         _jobs[job_id].update(kwargs)
-        persistence.save_job(job_id, _jobs[job_id])
+        finished = _jobs[job_id].get("status") in ("success", "failed")
+        persistence.save_job(job_id, _jobs[job_id],
+                             lease_until=None if finished else job_lease())
         now = time.monotonic()
         if now - _last_job_eviction >= 3600:
             _last_job_eviction = now

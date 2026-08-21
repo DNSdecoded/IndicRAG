@@ -68,6 +68,10 @@ _ensure_column("feedback", "owner", "TEXT")
 _ensure_column("reports", "owner", "TEXT")
 _ensure_column("query_log", "owner", "TEXT")
 
+# Job leases. An in-flight job is owned by whichever process is heartbeating it;
+# when that process dies the lease simply expires and the row can be reaped.
+_ensure_column("jobs", "lease_until", "TEXT")
+
 # Secondary indexes. Every table above declared a PRIMARY KEY and nothing else, so
 # each of these access paths was a full scan: due_watches runs on every scheduler
 # tick, the feedback join runs on every read, and the startup prunes delete by
@@ -135,15 +139,60 @@ def delete_job(job_id: str) -> None:
         _conn.commit()
 
 
-def save_job(job_id: str, job: dict) -> None:
+def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
+    """Persist a job. `lease_until` renews the caller's claim on an in-flight job.
+
+    Every update to a running job is also a heartbeat: it pushes the lease
+    forward, which is how a still-alive worker distinguishes itself from a dead
+    one. See reap_stale_jobs.
+    """
     with _db_lock:
         _conn.execute(
-            "INSERT INTO jobs (id, data, status, submitted_at, completed_at) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO jobs (id, data, status, submitted_at, completed_at, lease_until) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET data=excluded.data, status=excluded.status, "
-            "completed_at=excluded.completed_at",
-            (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"), job.get("completed_at")),
+            "completed_at=excluded.completed_at, lease_until=excluded.lease_until",
+            (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"),
+             job.get("completed_at"), lease_until),
         )
         _conn.commit()
+
+
+def reap_stale_jobs(now_iso: str) -> list[dict]:
+    """Fail jobs left in-flight by a process that died. Returns what was reaped.
+
+    Ingest and report jobs run inside the API process, so a restart, crash or
+    OOM mid-job left the row saying `running` forever — nothing ever moved it,
+    and a client polling /ingest/status or /report/status waited on a job that
+    no longer existed anywhere.
+
+    Reaping is by expired lease rather than by "not mine": a live worker renews
+    its lease on every progress update, so an expired lease is real evidence the
+    owner is gone. A job with no lease at all predates this and is also reaped —
+    it cannot be running, because running jobs heartbeat.
+    """
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT id, data FROM jobs WHERE status IN ('pending', 'running') "
+            "AND (lease_until IS NULL OR lease_until < ?)",
+            (now_iso,),
+        ).fetchall()
+        reaped = []
+        for jid, data in rows:
+            job = json.loads(data)
+            job["status"] = "failed"
+            job["error"] = ("Abandoned: the process running this job exited before it "
+                            "finished. Resubmit to try again.")
+            job["completed_at"] = now_iso
+            _conn.execute(
+                "UPDATE jobs SET data = ?, status = 'failed', completed_at = ?, "
+                "lease_until = NULL WHERE id = ?",
+                (json.dumps(job), now_iso, jid),
+            )
+            reaped.append(job)
+        if reaped:
+            _conn.commit()
+    return reaped
 
 
 def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, created_at: str,

@@ -189,6 +189,12 @@ WATCH_POLL_INTERVAL = int(os.getenv("WATCH_POLL_INTERVAL", "3600"))  # seconds b
 # how long a watch stays stuck if the claimer dies mid-run.
 WATCH_LEASE_SECONDS = int(os.getenv("WATCH_LEASE_SECONDS", "3600"))
 
+# How long a job's lease stays valid without a heartbeat. Every progress update
+# renews it, so this only has to exceed the longest gap BETWEEN updates — not the
+# job's total runtime. Too low and a slow step gets its job reaped out from under
+# it; too high and a crashed job takes that long to be marked failed.
+JOB_LEASE_SECONDS = int(os.getenv("JOB_LEASE_SECONDS", "900"))
+
 # Phase 7 — literature-review report workflow. POST /report decomposes a topic
 # into sections, synthesizes a cited section per part from the corpus, and
 # stores a downloadable Markdown artifact as an async job. Off by default: a
