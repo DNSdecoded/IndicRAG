@@ -88,6 +88,46 @@ class AgentQueryResponse(BaseModel):
     query_id: str = ""
 
 
+# What each graph node is actually doing, in the user's terms. Node names are an
+# implementation detail; "tool_executor" means nothing to someone waiting for an
+# answer. A node with no label here simply produces no progress line, so adding a
+# node to the graph cannot leak a raw internal name into the UI.
+_NODE_LABELS = {
+    "query_planner": "Planning the query",
+    "tool_selector": "Choosing tools",
+    "tool_executor": "Searching the corpus",
+    "answer_generator": "Writing the answer",
+    "reflexion_evaluator": "Checking the answer against sources",
+    "finalizer": "Finishing up",
+}
+
+
+def _sources_preview(contexts: list, limit: int = 8) -> list:
+    """Distinct papers from retrieved contexts, for the mid-run evidence preview.
+
+    Deliberately not the final citation list: numbering is only decided after the
+    answer exists and its markers are compacted. This is "what was retrieved",
+    shown early so the wait has visible content, and the done event replaces it
+    with the authoritative cited set.
+    """
+    seen, out = set(), []
+    for ctx in contexts or []:
+        title = (ctx.get("title") or "").strip()
+        if not title or title in seen or title in ("Unknown", "No results"):
+            continue
+        seen.add(title)
+        out.append({
+            "number": len(out) + 1,
+            "title": title,
+            "section": ctx.get("section", ""),
+            "year": ctx.get("year", ""),
+            "authors": ctx.get("authors", ""),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 @router.post("/agent/query", response_model=AgentQueryResponse, tags=["Agent"])
 @limiter.limit("10/minute")
 async def agent_query(
@@ -284,22 +324,70 @@ async def agent_stream(
     )
 
     async def _run_and_stream():
-        # --- Phase 1: run the agent pipeline ---
-        thinking_msg = json.dumps({"type": "thinking", "text": "Running agent pipeline…"})
-        yield f"data: {thinking_msg}\n\n"
+        # --- Phase 1: run the agent pipeline, reporting progress as it goes ---
+        #
+        # This used to be a single invoke() behind run_in_threadpool: one
+        # "Running agent pipeline…" line, then total silence for as long as the
+        # run took (measured: 145s, of which ~85s showed the client nothing but a
+        # caret). A wait that reports nothing is indistinguishable from a hang.
+        #
+        # graph.stream(stream_mode="updates") yields {node: delta} as each node
+        # finishes, which is real progress rather than a spinner. AgentState is a
+        # plain TypedDict with no reducers, so replaying the deltas with
+        # dict.update() reproduces exactly what invoke() would have returned.
+        q: asyncio.Queue = asyncio.Queue(maxsize=64)
+        loop = asyncio.get_running_loop()
 
+        def _enqueue(item):
+            # Block until there is room, so a terminal event is never dropped.
+            asyncio.run_coroutine_threadsafe(q.put(item), loop).result(timeout=30)
+
+        def _run_graph():
+            merged = dict(initial_state)
+            try:
+                for update in _get_agent_graph().stream(initial_state, stream_mode="updates"):
+                    for node, delta in (update or {}).items():
+                        if isinstance(delta, dict):
+                            merged.update(delta)
+                        _enqueue(("node", node, dict(merged)))
+                _enqueue(("done", None, merged))
+            except Exception as exc:  # mirrors the old except-Exception path
+                _enqueue(("error", str(exc)[:200], None))
+
+        threading.Thread(target=_run_graph, daemon=True, name="agent-graph").start()
+
+        result = None
+        sources_sent = False
+        deadline = time.monotonic() + float(config.AGENT_TIMEOUT)
         try:
-            result = await asyncio.wait_for(
-                run_in_threadpool(_get_agent_graph().invoke, initial_state),
-                timeout=float(config.AGENT_TIMEOUT),
-            )
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                kind, payload, state = await asyncio.wait_for(q.get(), timeout=remaining)
+
+                if kind == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'message': payload})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                if kind == "done":
+                    result = state
+                    break
+
+                label = _NODE_LABELS.get(payload)
+                if label:
+                    yield f"data: {json.dumps({'type': 'progress', 'node': payload, 'text': label})}\n\n"
+
+                # Retrieval finishes long before the answer is written, so send the
+                # sources as soon as they exist and let the evidence rail fill during
+                # generation instead of staying blank for the whole wait.
+                if not sources_sent and state and state.get("retrieved_contexts"):
+                    preview = _sources_preview(state["retrieved_contexts"])
+                    if preview:
+                        sources_sent = True
+                        yield f"data: {json.dumps({'type': 'sources_preview', 'sources': preview})}\n\n"
         except asyncio.TimeoutError:
             err = json.dumps({"type": "error", "message": "Agent pipeline timed out."})
-            yield f"data: {err}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-        except Exception as e:
-            err = json.dumps({"type": "error", "message": str(e)[:200]})
             yield f"data: {err}\n\n"
             yield "data: [DONE]\n\n"
             return

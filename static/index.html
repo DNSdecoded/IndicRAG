@@ -63,6 +63,29 @@ a{color:var(--indigo);text-decoration:none;}
 ::-webkit-scrollbar-track{background:transparent;}
 
 
+/* ── AGENT PROGRESS ───────────────────────────────────── */
+/* An agentic run takes 1-3 minutes. It previously showed a bare caret for most
+   of that, which is indistinguishable from a hang. These steps arrive from the
+   graph as each node finishes, so the wait reports what is actually happening. */
+.agent-progress{border:1px solid var(--rule);border-radius:11px;padding:12px 14px;background:var(--paper-2);}
+.ap-head{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
+.ap-label{font-size:13px;font-weight:500;color:var(--ink);flex:1;}
+.ap-time{font-size:11px;color:var(--ink-4);font-variant-numeric:tabular-nums;}
+.ap-steps{display:flex;flex-direction:column;gap:5px;}
+.ap-step{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-3);}
+.ap-step .dot{width:6px;height:6px;border-radius:50%;background:var(--rule-hard);flex-shrink:0;
+  transition:background .2s ease;}
+.ap-step.done{color:var(--ink-2);}
+.ap-step.done .dot{background:var(--patina);}
+.ap-step.active{color:var(--indigo);font-weight:500;}
+.ap-step.active .dot{background:var(--indigo);}
+.ap-note{margin-top:10px;padding-top:9px;border-top:1px dashed var(--rule);
+  font-size:11px;color:var(--ink-4);line-height:1.4;}
+/* Bounded, non-vestibular: a slow pulse rather than a spinner that implies
+   imminent completion. 1.4s is well clear of the ~0.2Hz discomfort range. */
+.ap-spin{width:9px;height:9px;border-radius:50%;background:var(--indigo);flex-shrink:0;
+  animation:pulse 1.4s ease-in-out infinite;}
+
 /* ── PRESS FEEDBACK ───────────────────────────────────── */
 /* Feedback belongs on the press, not the release: waiting for :hover or a
    completed click reads as "the computer answered my request" rather than
@@ -1245,6 +1268,28 @@ function clearEvidence() {
   currentRunId = null;
 }
 
+function renderSourcePreview(sources) {
+  // Mid-run preview: what retrieval found, shown while the answer is still being
+  // written. Deliberately NOT the final list — citation numbers are only decided
+  // once the answer exists, and some of these may not end up cited at all. So no
+  // scores and no spectrum here: inventing a relevance number for a provisional
+  // list would be worse than showing none. updateEvidenceSources() replaces this
+  // wholesale on the done event.
+  if (!sources.length) return;
+  $('#evSrcCount').textContent = sources.length;
+  $('#chunksList').innerHTML =
+    '<div class="ap-note" style="margin:0 0 8px;padding:0;border:none">Retrieved — ' +
+    'still checking which are cited</div>' +
+    sources.map(s =>
+      '<div class="chunk" style="opacity:.72">' +
+        '<div class="chunk-top">' +
+          '<span class="chunk-n">' + esc(String(s.number)) + '</span>' +
+          '<span class="chunk-src">' + esc(s.title || '') +
+            (s.section ? ' · ' + esc(s.section) : '') + '</span>' +
+        '</div>' +
+      '</div>').join('');
+}
+
 function updateEvidenceSources(cites, data) {
   // Sources
   const srcCount = cites.length;
@@ -1443,8 +1488,12 @@ function fbButtons(qid) {
   return '<button class="tact good" title="Accurate" onclick="sendFeedback(\'' + qid + '\',\'up\',this)"><svg viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.3a2 2 0 0 0 2-1.7l1.4-9a2 2 0 0 0-2-2.3z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button><button class="tact bad" title="Not supported" onclick="sendFeedback(\'' + qid + '\',\'down\',this)"><svg viewBox="0 0 24 24"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.7a2 2 0 0 0-2 1.7l-1.4 9a2 2 0 0 0 2 2.3z"/><path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg></button>';
 }
 
+let agentProgressTimer = null;
+function stopAgentTimer() { if (agentProgressTimer) { clearInterval(agentProgressTimer); agentProgressTimer = null; } }
+
 async function sendMessage() {
   if (isLoading) return;
+  stopAgentTimer();   // a previous run's timer must never outlive its turn
   const input = $('#ta');
   const text = input.value.trim();
   if (!text) return;
@@ -1471,9 +1520,28 @@ async function sendMessage() {
       // Build streaming turn
       const turnDiv = document.createElement('div');
       turnDiv.className = 'turn-asst';
-      turnDiv.innerHTML = '<div class="asst-meta"><span class="pill ag">Agentic</span><span class="pill">Streaming</span></div><div class="asst-body" id="streamBody"><span style="opacity:.35">▍</span></div>';
+      turnDiv.innerHTML = '<div class="asst-meta"><span class="pill ag">Agentic</span><span class="pill">Streaming</span></div>' +
+        '<div class="asst-body" id="streamBody">' +
+        '<div class="agent-progress" id="agentProgress" role="status" aria-live="polite">' +
+          '<div class="ap-head"><span class="ap-spin"></span>' +
+            '<span class="ap-label" id="apLabel">Starting the agent…</span>' +
+            '<span class="ap-time mono" id="apTime">0s</span></div>' +
+          '<div class="ap-steps" id="apSteps"></div>' +
+          '<div class="ap-note">Agentic mode plans the query, searches your corpus and external sources, ' +
+            'then checks the answer against what it found. This usually takes 1&ndash;3 minutes.</div>' +
+        '</div></div>';
       $('#threadContent').appendChild(turnDiv);
       scrollThread();
+
+      // An unbounded wait is far worse than a long one. The elapsed counter turns
+      // "is this broken?" into "it has been running 40 seconds", which the note
+      // above gives the user a scale for.
+      const runStart = Date.now();
+      agentProgressTimer = setInterval(() => {
+        const el = document.getElementById('apTime');
+        if (el) el.textContent = Math.round((Date.now() - runStart) / 1000) + 's';
+      }, 1000);
+      const stopTimer = stopAgentTimer;
 
       let acc = '', buf = '';
       const reader = res.body.getReader(), dec = new TextDecoder();
@@ -1487,19 +1555,43 @@ async function sendMessage() {
           const raw = ln.slice(6);
           if (raw === '[DONE]') break outer;
           let evt; try { evt = JSON.parse(raw); } catch { continue; }
-          if (evt.type === 'thinking') {
+          if (evt.type === 'progress') {
+            // One line per graph node, as it finishes. The previous step is marked
+            // done so the list reads as a route travelled, not a spinner.
+            const steps = document.getElementById('apSteps');
+            const label = document.getElementById('apLabel');
+            if (steps) {
+              const prev = steps.querySelector('.ap-step.active');
+              if (prev) { prev.classList.remove('active'); prev.classList.add('done'); }
+              const row = document.createElement('div');
+              row.className = 'ap-step active';
+              row.innerHTML = '<span class="dot"></span><span></span>';
+              row.lastChild.textContent = evt.text;
+              steps.appendChild(row);
+              scrollThread();
+            }
+            if (label) label.textContent = evt.text;
+          } else if (evt.type === 'sources_preview') {
+            // Retrieval is done well before the answer is written; showing what was
+            // found turns dead waiting time into something the user can read.
+            renderSourcePreview(evt.sources || []);
+          } else if (evt.type === 'thinking') {
             // Show thinking as a subtle indicator
             const thinkEl = turnDiv.querySelector('.asst-meta');
             if (thinkEl && !thinkEl.querySelector('.pill.think')) {
               thinkEl.innerHTML += '<span class="pill think" style="opacity:.7">' + esc(evt.text) + '</span>';
             }
           } else if (evt.type === 'chunk') {
+            // First real token: the progress panel has done its job, replace it.
             acc += evt.text;
+            stopTimer();
             $('#streamBody').innerHTML = renderContent(acc) + '<span style="opacity:.35">▍</span>';
             scrollThread();
           } else if (evt.type === 'error') {
+            stopTimer();
             throw new Error(evt.message);
           } else if (evt.type === 'done') {
+            stopTimer();
             const cites = evt.citations || [];
             if (evt.session_id) sessionId = evt.session_id;
             // Streamed chunks can carry the model's raw [N] markers; when the done
@@ -1582,6 +1674,9 @@ async function sendMessage() {
     $('#threadContent').appendChild(errDiv);
     scrollThread();
   } finally {
+    // Covers every exit: done, error, and the Stop button (AbortError returns
+    // from the catch above without reaching the rest of the happy path).
+    stopAgentTimer();
     resetSendBtn();
     input.focus();
   }
