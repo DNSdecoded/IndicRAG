@@ -11,6 +11,7 @@ import vector_store
 import lang_utils
 import translation
 import llm_client
+import metrics
 from google.genai import types
 
 logger = logging.getLogger(__name__)
@@ -378,20 +379,23 @@ def retrieve_context(
         search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
 
     # Search vector store (dense)
-    results = vector_store.search(
-        query_embedding=query_embedding,
-        top_k=search_k,
-        filter_dict=chroma_filter_dict,
-        collection=collection
-    )
+    with metrics.stage("retrieval_dense"):
+        results = vector_store.search(
+            query_embedding=query_embedding,
+            top_k=search_k,
+            filter_dict=chroma_filter_dict,
+            collection=collection
+        )
 
     # Hybrid: fuse dense results with BM25 lexical search
     if config.USE_HYBRID_SEARCH and results['documents'] and not chroma_filter_dict:
         try:
             import bm25_search
-            bm25_idx = bm25_search.get_or_build_index(collection)
+            with metrics.stage("bm25_index_load"):
+                bm25_idx = bm25_search.get_or_build_index(collection)
             if bm25_idx is not None:
-                sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
+                with metrics.stage("retrieval_bm25"):
+                    sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
                 fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
                 id_to_doc = dict(zip(results['ids'], results['documents']))
                 id_to_meta = dict(zip(results['ids'], results['metadatas']))
@@ -439,14 +443,16 @@ def retrieve_context(
         import colbert_rerank
         dense_sims = [1.0 - d for d in dists]  # cosine distance -> similarity
         colbert_top_k = min(len(docs), config.MAX_CONTEXT_CHUNKS * 3)
-        docs, metas, dists = colbert_rerank.rerank(
-            user_query, docs, metas, dense_sims,
-            top_k=colbert_top_k, weight=config.COLBERT_WEIGHT)
+        with metrics.stage("rerank_colbert"):
+            docs, metas, dists = colbert_rerank.rerank(
+                user_query, docs, metas, dense_sims,
+                top_k=colbert_top_k, weight=config.COLBERT_WEIGHT)
 
     if config.USE_RERANKER and docs:
         import rerank
-        docs, metas, scores = rerank.rerank(
-            user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        with metrics.stage("rerank_cross_encoder"):
+            docs, metas, scores = rerank.rerank(
+                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
         dists = scores
 
     # Format context for LLM
@@ -905,7 +911,8 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
     """
     try:
         import verify
-        results = verify.check_claims(answer, chunks, metadatas)
+        with metrics.stage("nli_verify"):
+            results = verify.check_claims(answer, chunks, metadatas)
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
