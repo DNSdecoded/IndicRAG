@@ -15,6 +15,24 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Thread budget
+# ============================================================================
+# The process already runs a 32-worker ChromaDB timeout pool, FastAPI's ~40-thread
+# default pool, a ProcessPoolExecutor for PDF parsing, and a ThreadPoolExecutor for
+# parallel agent tools. On top of that, torch and ONNX Runtime each default to one
+# intra-op thread PER CORE, so a single reranker pass can fan out across every core
+# while dozens of request threads are already runnable. The result is a ready queue
+# far deeper than the core count, where every stage slows down at once.
+#
+# Pin it: 0 means "leave the library default alone" (opt out); anything else caps
+# intra-op parallelism. Must be set BEFORE torch/onnxruntime are imported, which is
+# why it lives at the top of config.py — the first module everything else imports.
+TORCH_NUM_THREADS = int(os.getenv("TORCH_NUM_THREADS", "4"))
+if TORCH_NUM_THREADS > 0:
+    os.environ.setdefault("OMP_NUM_THREADS", str(TORCH_NUM_THREADS))
+    os.environ.setdefault("MKL_NUM_THREADS", str(TORCH_NUM_THREADS))
+
+# ============================================================================
 # Paths
 # ============================================================================
 PROJECT_ROOT = Path(__file__).parent
@@ -67,6 +85,27 @@ def ensure_directories():
 # bge-m3: dense + sparse + ColBERT, strong on Indic scripts
 # NOTE: switching from e5-base (768d) requires re-ingesting all documents
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+# int8 ONNX for the embedding model on CPU. Works, but OFF by default — measured,
+# the trade is worse than it is for the cross-encoders:
+#
+#   speed              1.38x faster (the reranker/NLI get ~3-11x)
+#   cosine vs fp32     mean 0.987, min 0.983 across a 24-chunk sample
+#
+# Every vector moves. 0.983 is enough for near-neighbours to reorder, so this can
+# change what retrieval returns — and there is currently no working way to measure
+# that (docs/Eval/run_live.py is blocked on the judgments/corpus mismatch). Trading
+# unmeasurable retrieval quality for 1.38x on an operation that runs once per
+# corpus is a bad deal; the reranker's 3-11x on a per-QUERY path is a good one.
+#
+# Turn it on deliberately, and only with a working eval gate to confirm quality
+# held. Switching it means re-embedding the whole corpus — mixing backends in one
+# collection is the incomparable-vectors problem. Every chunk records which
+# backend produced it (vector_store._provenance_stamp) and a mixed collection is
+# reported at startup; `reindex.py` replays the ingest log to re-embed without
+# re-parsing PDFs.
+#
+# CPU-only regardless: on GPU, fp16 is both faster and more accurate than int8.
+EMBED_ONNX_INT8 = os.getenv("EMBED_ONNX_INT8", "false").lower() == "true"
 EMBEDDING_DIMENSION = 1024  # bge-m3 dimension
 
 # E5 models require specific prefixes for queries and passages
@@ -124,6 +163,19 @@ USE_HYDE = os.getenv("USE_HYDE", "false").lower() == "true"
 # per figure at ingest, bounded by MULTIMODAL_MAX_FIGS_PER_DOC.
 ENABLE_MULTIMODAL_INGEST = os.getenv("ENABLE_MULTIMODAL_INGEST", "false").lower() == "true"
 MULTIMODAL_MAX_FIGS_PER_DOC = int(os.getenv("MULTIMODAL_MAX_FIGS_PER_DOC", "12"))
+# Concurrent VLM caption calls per paper; 1 restores the old sequential behavior.
+# Keep this small — the cap bounds requests in flight at the provider, it is not
+# there to saturate the box. Too high just converts a slow ingest into 429s that
+# trip the LLM circuit breaker for every other caller.
+FIGURE_CAPTION_WORKERS = int(os.getenv("FIGURE_CAPTION_WORKERS", "4"))
+
+# Persist the BM25 index between runs. Rebuilding reads every document out of
+# ChromaDB, so without this a restart pays a full corpus scan on the first query
+# and the lifespan warm-up pays it on every deploy. The cache is validated
+# against the live document count on load and ignored when it disagrees, so a
+# stale file costs a rebuild rather than wrong results.
+BM25_PERSIST = os.getenv("BM25_PERSIST", "true").lower() == "true"
+BM25_CACHE_DIR = Path(os.getenv("BM25_CACHE_DIR", PROJECT_ROOT / "chroma_db"))
 
 # Phase 5 — contradiction/consensus detection. When on, the answer generator
 # runs pairwise NLI (the same faithfulness model) over the top retrieved passages
@@ -152,6 +204,17 @@ WATCH_ENABLE = os.getenv("WATCH_ENABLE", "false").lower() == "true"
 WATCH_DEFAULT_CADENCE = os.getenv("WATCH_DEFAULT_CADENCE", "weekly")  # daily|weekly|monthly
 WATCH_MAX_RESULTS = int(os.getenv("WATCH_MAX_RESULTS", "10"))  # papers fetched per watch run
 WATCH_POLL_INTERVAL = int(os.getenv("WATCH_POLL_INTERVAL", "3600"))  # seconds between schedule-loop sweeps
+# How long a claimed watch is parked before it becomes due again. Must comfortably
+# exceed a real run (arXiv search + ingest + digest generation), or a slow run
+# could be picked up a second time while the first is still going. It also bounds
+# how long a watch stays stuck if the claimer dies mid-run.
+WATCH_LEASE_SECONDS = int(os.getenv("WATCH_LEASE_SECONDS", "3600"))
+
+# How long a job's lease stays valid without a heartbeat. Every progress update
+# renews it, so this only has to exceed the longest gap BETWEEN updates — not the
+# job's total runtime. Too low and a slow step gets its job reaped out from under
+# it; too high and a crashed job takes that long to be marked failed.
+JOB_LEASE_SECONDS = int(os.getenv("JOB_LEASE_SECONDS", "900"))
 
 # Phase 7 — literature-review report workflow. POST /report decomposes a topic
 # into sections, synthesizes a cited section per part from the corpus, and
@@ -247,6 +310,15 @@ DISTANCE_METRIC = "cosine"  # cosine similarity for embeddings
 # ef_search is a query-time recall/latency knob. Defaults match ChromaDB's own, so
 # behaviour is unchanged until you deliberately A/B them once the eval set exists.
 HNSW_EF_CONSTRUCTION = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
+# Writes are not queries. The general ChromaDB call timeout (5s) suits a query and
+# is far too short for an upsert of a whole corpus — that combination silently cost
+# a completed 27-minute ingest: the write succeeded, but the caller had already
+# given up and skipped everything after it, including the ingest-log record.
+# Upserts now go in batches, so each wait is bounded by batch size rather than by
+# corpus size and the timeout only has to cover ONE batch.
+CHROMA_UPSERT_BATCH = int(os.getenv("CHROMA_UPSERT_BATCH", "256"))
+CHROMA_WRITE_TIMEOUT_S = float(os.getenv("CHROMA_WRITE_TIMEOUT_S", "120"))
+
 HNSW_EF_SEARCH = int(os.getenv("HNSW_EF_SEARCH", "100"))
 HNSW_M = int(os.getenv("HNSW_M", "16"))
 
@@ -281,10 +353,12 @@ TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
 # LLM Configuration
 # ============================================================================
 # Google Gemini API configuration
-# Caps thinking + answer together, not just the answer. gemini-3.6-flash rejects
-# thinking_budget=0 and spends 0-4856 thought tokens on identical prompts, so a
-# 2048 cap left as little as 80 tokens for the answer and truncated mid-sentence.
-# Measured: answer <=2100, worst thinking+answer 6926.
+# Caps thinking + answer together, not just the answer. Gemini 3.x Flash models
+# reject thinking_budget=0 and spend a variable number of thought tokens on
+# identical prompts (measured on 3.6-flash: 0-4856), so a 2048 cap left as little
+# as 80 tokens for the answer and truncated mid-sentence.
+# Measured on 3.6-flash: answer <=2100, worst thinking+answer 6926. Keep the
+# headroom for newer Flash models rather than re-tuning per release.
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))  # maximum tokens to generate
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit for agentic pipeline
 # Thinking budget for ALL agentic-mode LLM calls (query planner, tool routing,
@@ -297,7 +371,7 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "8192"))  # higher limit fo
 # knobs below, which supersede it). Still honoured by models that accept budgets.
 AGENT_THINKING_BUDGET = int(os.getenv("AGENT_THINKING_BUDGET", "0"))
 # Thinking LEVEL — the Gemini 3.x control, replacing thinking_budget. Google's docs
-# list minimal | low | medium | high for gemini-3.6-flash, defaulting to MEDIUM when
+# list minimal | low | medium | high for Gemini 3.x Flash, defaulting to MEDIUM when
 # nothing is sent. That default is the trap: sending the legacy thinking_budget=0 gets
 # a 400, the backend used to drop the field entirely, and the model then thought at
 # MEDIUM — the opposite of the "thinking off" that was asked for, with those thought
@@ -349,10 +423,13 @@ AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.6-flash")  # Gemini model
+# gemini-3.7-flash is the current Flash generation: built for complex coding,
+# agentic workflows and multi-step execution, which is what the agent pipeline
+# does. 3.6-flash remains selectable as the previous generation.
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
-# gemini-3.6-flash already does IMPLICIT caching for free; explicit caching adds
+# Gemini 3.x Flash already does IMPLICIT caching for free; explicit caching adds
 # guaranteed reuse but is billed per token-hour of storage — so it's OFF by default.
 # Enable only if your system prompts clear the model's min-token cache floor and you
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
@@ -389,7 +466,12 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(
     "LLM_SELECTABLE_MODELS",
-    "gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano",
+    # Current Flash first (the default), then the previous generation, then a
+    # cheap high-throughput option for routine calls, then cross-vendor entries.
+    # The cross-vendor slugs matter beyond user choice: failover picks a "/"-shaped
+    # slug from this list, so an all-Gemini list would leave nothing to fail over to.
+    "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
+    "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
 # How long the enriched OpenRouter /models catalog is cached (seconds).
@@ -562,7 +644,9 @@ ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"
 # ============================================================================
 # Version
 # ============================================================================
-VERSION = "2.3.0-dev"
+# Surfaced in the OpenAPI spec and /health, so it is what an operator reads when
+# asking "which build is this?" — it had drifted two releases behind the README.
+VERSION = "2.5.0-dev"
 
 # ============================================================================
 # Chat / Session

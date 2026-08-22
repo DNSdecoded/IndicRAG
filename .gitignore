@@ -84,6 +84,11 @@ graphify-out/
 # Local tool state
 .mimocode/
 .serena/
+.agents/
+.claude/
+.commandcode/
+skills-lock.json
+repo.md
 
 # Local test scratch output
 test_output.txt
@@ -91,3 +96,4 @@ test_output.txt
 # Generated eval artifacts — timestamped, noisy diffs; regenerate via docs/Eval/evaluate.py
 docs/Eval/eval_report.json
 docs/Eval/eval_history/
+.gstack/

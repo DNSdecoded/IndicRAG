@@ -11,6 +11,7 @@ import vector_store
 import lang_utils
 import translation
 import llm_client
+import metrics
 from google.genai import types
 
 logger = logging.getLogger(__name__)
@@ -355,7 +356,19 @@ def retrieve_context(
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
-    query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
+    #
+    # A failure here (model OOM, corrupt weights, driver fault) used to fail the
+    # whole request, including queries the in-process BM25 index could have
+    # answered on its own. Degrade to sparse-only instead; the result carries a
+    # `degraded` marker (logged now, surfaced in the API response as follow-up work).
+    try:
+        query_embedding = _hyde_embedding(user_query) if use_hyde else embeddings.embed_query(user_query)
+    except Exception as e:
+        logger.error(f"Embedding failed, trying sparse-only retrieval: {e}", exc_info=True)
+        sparse = _sparse_only_retrieval(user_query, top_k, collection, chroma_filter_dict, tags_post_filter)
+        if sparse is None:
+            raise  # no BM25 index either — nothing to degrade to
+        return sparse
 
     # A tags post-filter runs AFTER retrieval, so fetching exactly top_k returns
     # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
@@ -366,20 +379,23 @@ def retrieve_context(
         search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
 
     # Search vector store (dense)
-    results = vector_store.search(
-        query_embedding=query_embedding,
-        top_k=search_k,
-        filter_dict=chroma_filter_dict,
-        collection=collection
-    )
+    with metrics.stage("retrieval_dense"):
+        results = vector_store.search(
+            query_embedding=query_embedding,
+            top_k=search_k,
+            filter_dict=chroma_filter_dict,
+            collection=collection
+        )
 
     # Hybrid: fuse dense results with BM25 lexical search
     if config.USE_HYBRID_SEARCH and results['documents'] and not chroma_filter_dict:
         try:
             import bm25_search
-            bm25_idx = bm25_search.get_or_build_index(collection)
+            with metrics.stage("bm25_index_load"):
+                bm25_idx = bm25_search.get_or_build_index(collection)
             if bm25_idx is not None:
-                sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
+                with metrics.stage("retrieval_bm25"):
+                    sparse_ids, _ = bm25_idx.search(user_query, top_k=search_k)
                 fused_ids = bm25_search.rrf(results['ids'], sparse_ids, k=config.RRF_K)
                 id_to_doc = dict(zip(results['ids'], results['documents']))
                 id_to_meta = dict(zip(results['ids'], results['metadatas']))
@@ -427,14 +443,16 @@ def retrieve_context(
         import colbert_rerank
         dense_sims = [1.0 - d for d in dists]  # cosine distance -> similarity
         colbert_top_k = min(len(docs), config.MAX_CONTEXT_CHUNKS * 3)
-        docs, metas, dists = colbert_rerank.rerank(
-            user_query, docs, metas, dense_sims,
-            top_k=colbert_top_k, weight=config.COLBERT_WEIGHT)
+        with metrics.stage("rerank_colbert"):
+            docs, metas, dists = colbert_rerank.rerank(
+                user_query, docs, metas, dense_sims,
+                top_k=colbert_top_k, weight=config.COLBERT_WEIGHT)
 
     if config.USE_RERANKER and docs:
         import rerank
-        docs, metas, scores = rerank.rerank(
-            user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        with metrics.stage("rerank_cross_encoder"):
+            docs, metas, scores = rerank.rerank(
+                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
         dists = scores
 
     # Format context for LLM
@@ -503,6 +521,78 @@ def format_context(chunks: List[str], metadatas: List[Dict],
         chunks_used += 1
 
     return "\n".join(context_parts), chunks_used
+
+
+def _sparse_only_retrieval(user_query: str, top_k: int, collection,
+                           filter_dict: Dict[str, Any] = None,
+                           tags_post_filter: list = None) -> Dict[str, Any] | None:
+    """BM25-only retrieval, used when the dense leg is unavailable.
+
+    Returns None when there is nothing to degrade to (hybrid search disabled, or
+    no BM25 index because the corpus is empty) so the caller can re-raise the
+    original failure rather than serve a silently empty answer.
+
+    The result carries `degraded='sparse_only'` and logs at WARNING; /query and
+    /chat pass it through to the response and the SSE done event, so a degraded
+    answer is never mistaken for a normal one.
+    """
+    if not config.USE_HYBRID_SEARCH:
+        return None
+    try:
+        import bm25_search
+        idx = bm25_search.get_or_build_index(collection)
+        if idx is None:
+            return None
+        # Tags are post-filtered, so ask BM25 for the same widened set the dense
+        # path uses; taking exactly top_k here would leave too few after filtering.
+        search_k = top_k
+        if tags_post_filter:
+            search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+        ids, _scores = idx.search(user_query, top_k=search_k)
+        if not ids:
+            return None
+        # BM25 knows nothing about metadata filters — a paper-scoped or
+        # tag-filtered query must not quietly widen just because the dense leg
+        # is down, so the filter is applied on the fetch.
+        got = vector_store._chroma_call(
+            collection.get, ids=ids, where=filter_dict or None,
+            include=['documents', 'metadatas'])
+    except Exception as e:
+        logger.error(f"Sparse-only fallback failed too: {e}", exc_info=True)
+        return None
+
+    # collection.get() does not preserve the order of the ids it was handed, and
+    # BM25 rank is the only ranking signal left here — restore it explicitly.
+    by_id = dict(zip(got.get('ids', []), zip(got.get('documents', []), got.get('metadatas', []))))
+    ordered = [(i, *by_id[i]) for i in ids if i in by_id]
+    if not ordered:
+        return None
+
+    results = {
+        'ids': [r[0] for r in ordered],
+        'chunks': [r[1] for r in ordered],
+        'documents': [r[1] for r in ordered],
+        'metadatas': [r[2] for r in ordered],
+        'distances': [1.0] * len(ordered),
+    }
+    if tags_post_filter:
+        results = _apply_tags_post_filter(results, tags_post_filter)
+        for key in _TAGS_POST_FILTER_KEYS:
+            if key in results:
+                results[key] = results[key][:top_k]
+
+    formatted_context, chunks_used = format_context(
+        chunks=results['chunks'], metadatas=results['metadatas'])
+    logger.warning("Serving DEGRADED sparse-only retrieval: %d chunks (dense leg unavailable)",
+                   chunks_used)
+    return {
+        'chunks': results['chunks'],
+        'metadatas': results['metadatas'],
+        'distances': results['distances'],
+        'formatted_context': formatted_context,
+        'chunks_used': chunks_used,
+        'degraded': 'sparse_only',
+    }
 
 
 def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
@@ -733,7 +823,8 @@ def prepare_query_for_stream(user_query: str, strategy: str = "A", top_k: int = 
     prompt = build_prompt(user_query=prompt_query, context=context_data["formatted_context"],
                           target_lang=detected_lang, strategy=strategy)
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
-            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
+            "lang_name": lang_name, "degraded": context_data.get("degraded")}
 
 
 def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A", top_k: int = None,
@@ -795,7 +886,8 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
         prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
 
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
-            "metadatas": context_data["metadatas"], "detected_lang": detected_lang, "lang_name": lang_name}
+            "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
+            "lang_name": lang_name, "degraded": context_data.get("degraded")}
 
 
 generate_with_failover = llm_client.generate_with_failover
@@ -828,7 +920,8 @@ def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = No
     """
     try:
         import verify
-        results = verify.check_claims(answer, chunks, metadatas)
+        with metrics.stage("nli_verify"):
+            results = verify.check_claims(answer, chunks, metadatas)
         for r in results:
             if not r["grounded"]:
                 logger.warning(f"Ungrounded claim (score={r['support']:.2f}): {r['claim'][:120]}")
@@ -920,7 +1013,16 @@ def answer_question_strategy_a(
         'language': detected_lang,
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
-        'citations': citations
+        'citations': citations,
+        # The exact context this answer was written from. Callers that need to
+        # resolve a citation marker back to a chunk (the eval harness) must use
+        # this and not a second retrieve_context call — strategy B retrieves on
+        # the TRANSLATED query, so a re-run does not reproduce it.
+        'context': {'metadatas': context_data.get('metadatas', []),
+                    'chunks': context_data.get('chunks', [])},
+        # None on the normal path; 'sparse_only' when the dense leg was
+        # unavailable and this answer came from BM25 alone.
+        'degraded': context_data.get('degraded'),
     }
     faith_result = _run_faithfulness(
         answer, context_data.get('chunks', []), context_data.get('metadatas', []))
@@ -1021,7 +1123,10 @@ def answer_question_strategy_b(
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
-        'english_answer': english_answer
+        'english_answer': english_answer,
+        'context': {'metadatas': context_data.get('metadatas', []),
+                    'chunks': context_data.get('chunks', [])},
+        'degraded': context_data.get('degraded'),
     }
     faith_result = _run_faithfulness(
         english_answer, context_data.get('chunks', []), context_data.get('metadatas', []))
@@ -1171,6 +1276,7 @@ def answer_with_history(
         "language_name": lang_name,
         "chunks_used": context_data["chunks_used"],
         "citations": citations,
+        "degraded": context_data.get("degraded"),
     }
     if strategy == "B" and answer != english_answer:
         result["english_answer"] = english_answer

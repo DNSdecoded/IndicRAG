@@ -5,15 +5,54 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.6%20Flash-blueviolet.svg)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.7%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.4-blue.svg)
+![Version](https://img.shields.io/badge/version-2.5-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
 A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
 
 Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini + OpenRouter), **topic watches**, and **literature review reports**.
+
+---
+
+## What's New in v2.5
+
+| Area | v2.4 | v2.5 |
+|------|------|------|
+| **Default model** | gemini-3.6-flash | **gemini-3.7-flash** — current Flash generation, built for agentic multi-step work |
+| **Data isolation** | Advertised, but only jobs enforced it | **Actually enforced** — sessions, watches, feedback, reports and prefs are scoped by API-key fingerprint |
+| **BM25** | Linear scan, dropped on every ingest | **Inverted index** (9x faster), incremental add/remove, persisted to disk (8x faster cold start) |
+| **Failure modes** | A sick ChromaDB or embedder failed every request | **Circuit breaker + sparse-only degraded mode**, surfaced as a `degraded` response field |
+| **Background jobs** | Left `running` forever after a crash | **Leased and reaped** — abandoned jobs are failed at startup with an actionable error |
+| **Watch scheduler** | Every worker ran every due watch | **Claimed** via compare-and-set, so replicas cannot duplicate ingests or LLM spend |
+| **Index provenance** | Nothing recorded which model made a vector | **Stamped** with model, dimension, backend and chunker version; mismatches reported at startup |
+| **Reindexing** | Re-parse every PDF, re-caption every figure | **`reindex.py`** replays an ingest log — reproducible, and works without the source PDFs |
+| **Observability** | HTTP latency only | **Per-stage metrics** — retrieval, rerank, NLI, cache hits, tokens, breaker trips, failover hops |
+| **Tests** | Every boundary mocked | **+ integration suite** over a real ChromaDB, covering the seams between stages |
+
+### v2.5 — security fixes
+
+* **Cross-user data exposure closed.** `GET /chat` and `GET /chat/{id}` listed and returned *every* user's conversations, and `DELETE /chat/{id}` deleted any of them. `GET /watch` took `user_id` as a query parameter, so omitting it returned all users' watches and supplying someone else's returned theirs. Feedback and report listings had no owner column at all — and the feedback join exposes the original question and answer text. Ownership is now the API-key fingerprint, never client input, and another key's record reads as `404` rather than `403` (a 403 confirms the id exists).
+* **SSRF DNS rebinding closed.** The private-IP guard and `urlopen`'s own lookup were two separate DNS queries, so a rebinding resolver could answer public for the check and `169.254.169.254` for the fetch. Resolution now happens once and the connection is pinned to that address; TLS still validates against the hostname.
+* **Unbounded LLM spend closed.** `POST /report` and `POST /watch/{id}/run` each start a full LLM workload and had no rate limit; either could drain the shared quota for every other user.
+* **Concurrent turns no longer lose each other.** Two requests on one session both read history at length N and both appended, so each answer was blind to the other. A per-session lock now spans read → generate → append.
+
+### v2.5 patch — correctness fixes
+
+* **A timed-out upsert no longer escapes rollback.** The ChromaDB write timeout cannot cancel work already in flight, so a batch that timed out could still commit after the failure handler ran, leaving chunks searchable that no ingest-log record covers. Batch ids are now recorded *before* the call, so rollback covers the in-flight batch.
+* **Rollback stopped deleting pre-existing chunks.** A failed batch rolled back every id it had written, including ids that already held content from an earlier ingest — deleting rows the ingest log still records. A pre-flight probe now separates rows this call created (deleted) from rows it overwrote (kept, and logged loudly for re-ingest).
+* **A failed watch run no longer wedges the watch forever.** Scheduling read `next_run` from the JSON blob while claiming compared the column, so one failure left the two divergent and every later claim failed. Both are now updated in a single statement.
+* **BM25 index integrity.** Misaligned `ids`/`texts` raise instead of being silently truncated by `zip()`; `save_index` snapshots under the index lock; and `invalidate()` deletes the persisted caches, since chunk ids are positional and a reused id would otherwise resurrect stale text.
+* **Tags filtering works in degraded mode.** Sparse-only retrieval fetched exactly `top_k` ids and filtered afterwards, so a tag query could come back empty; it now over-fetches and pushes the filter into ChromaDB.
+* **The Gemini thinking-config ladder is bounded.** Retries classify the rejection before climbing and cannot loop.
+* **SSRF guard inspects every DNS answer**, not just the first.
+* **Agent streams hold the session turn lock** for the whole stream, and a disconnect stops the graph instead of letting it run on.
+
+### v2.5 — breaking change
+
+`POST /watch` no longer treats `user_id` as an identity. It is a display label; authorization comes from the API key. Clients that relied on reading another user's watches by passing their `user_id` will now receive `[]` — that is the fix, not a regression.
 
 ---
 
@@ -66,11 +105,12 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 
 ### 🔍 Hybrid Retrieval Pipeline
 
-* **Dense + sparse** — BGE-M3 (1024d) fused with BM25 via Reciprocal Rank Fusion (RRF)
+* **Dense + sparse** — BGE-M3 (1024d) fused with a BM25 **inverted index** via Reciprocal Rank Fusion (RRF). Scoring touches only the documents containing a query term, so cost tracks term frequency rather than corpus size (measured on 20k chunks: 25.9 ms → 2.9 ms per query). Updates are incremental — an ingest folds new chunks in instead of dropping the index and making the next query rebuild it (2.93 s → 3.8 ms), and the index persists across restarts
 * **Two-stage reranking** — `BAAI/bge-reranker-v2-m3` cross-encoder, with optional **ColBERT** multi-vector MaxSim rerank on the narrowed candidate set
 * **Optional HyDE** — generate a hypothetical answer, embed it, and retrieve against it for recall on sparse queries
 * **Faithfulness verification** — a multilingual NLI cross-encoder (`NLI_MODEL_NAME`, int8 ONNX on CPU) scores entailment per claim against its cited chunks; unsupported assertions flagged, stripped, or regenerated (`FAITHFULNESS_ENFORCE`). The threshold is **model-specific and calibrated**, not a taste setting — see `FAITHFULNESS_THRESHOLD`
 * **Citation integrity** — the answer's `[N]` markers are renumbered to a dense `1..M` matching the cited-only source panel, and markers are resolved against **only the chunks that reached the prompt**. The context is truncated by chunk count and by length, so numbering against everything retrieved let a marker the model invented resolve to a real paper it was never shown — a phantom citation that reads as legitimate. Unresolvable markers are dropped rather than left dangling
+* **Graceful degradation** — ChromaDB sits behind a circuit breaker (3 consecutive timeouts → fail fast for 60s), so an unhealthy store cannot make every request pay the full timeout and exhaust the thread pool. An embedding failure degrades to BM25-only rather than failing the query, and the response carries `degraded: "sparse_only"` so a reduced answer is never presented as a normal one
 * **HNSW tuning knobs** — `ef_search`, `ef_construction`, `M` all env-configurable
 
 ### 📥 Smart Ingestion
@@ -80,6 +120,8 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Metadata enrichment** — auto-fetch authors, year, DOI from arXiv by fuzzy title match at ingest time
 * **Title dedup** — near-duplicate papers rejected by `SequenceMatcher` ratio (`DEDUP_TITLE_THRESHOLD`)
 * **MD5 content dedup** + parallel extraction, Indic-aware chunking
+* **Index provenance** — every chunk records the embedding model, dimension, backend (`fp32` / `fp16` / `onnx-int8`) and chunker version that produced it. Cosine distance between two embedding spaces is meaningless but never raises, so a model swap otherwise shows up only as retrieval quality quietly getting worse; mismatches are reported at startup instead
+* **Replayable ingest log** — each ingestion records the chunks it produced, making the vector and lexical indexes derived views. `reindex.py` rebuilds them from that log without re-parsing PDFs or re-captioning figures, which is what turns an embedding-model change from an unreproducible afternoon into a routine replay
 
 ### 🌍 True Multilingual Support
 
@@ -91,12 +133,17 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 ### 🛡️ Production-Ready Infrastructure
 
 * **SQLite session/job persistence** — restarts don't drop in-flight state (`SESSIONS_DB_PATH`)
+* **Leased jobs, reaped on restart** — jobs heartbeat while running, and startup fails the ones whose lease expired. A crash used to leave the row saying `running` forever while clients polled a job that no longer existed in any process. Reaping on an expired lease (rather than "not started by me") keeps it safe with multiple workers: a live worker's jobs are never taken from under it
+* **Claimed watch scheduling** — the schedule loop runs in-process, so every worker sees the same watch as due. A compare-and-set claim means only one runs it, instead of each replica repeating the arXiv fetch, the ingest and the digest spend
 * **SSE streaming** — token-by-token answers and live ingest progress; the `done` event carries the citation-corrected answer, since chunks stream before numbering can be resolved
 * Thread-safe model init (double-checked locking on all singletons)
 * Startup warm-up via FastAPI lifespan (embeddings, vector store, reranker, BM25) — no cold first request
-* Request-ID correlation across log lines; Prometheus metrics
-* API-key auth, env-driven CORS, Pydantic v2 validation, path-traversal + URL-scheme guards
-* **int8 quantized ONNX** cross-encoders for CPU — lower memory, faster inference
+* Request-ID correlation across log lines
+* **Per-stage Prometheus metrics** — `indicrag_stage_seconds` across dense retrieval, BM25, ColBERT, cross-encoder and NLI, plus counters for cache hits, LLM tokens, failover hops, breaker trips, reflexion iterations and answer outcomes. Route-level latency answers "is /query slow"; these answer "why". Timing is recorded on the error path too, since a stage that fails after 30s is the one worth seeing
+* API-key auth with per-key data isolation, env-driven CORS, Pydantic v2 validation, path-traversal + URL-scheme guards
+* **SSRF-hardened outbound fetches** — scheme allow-list, DNS resolved once with the connection pinned to that address (closing the rebinding window), per-hop redirect re-validation, and a 50 MB streaming cap. TLS still validates against the hostname, not the pinned IP
+* **int8 quantized ONNX** cross-encoders for CPU — lower memory, faster inference (~3x reranker, ~11x NLI). Optionally the embedding model too (`EMBED_ONNX_INT8`), though that one is more modest (see `EMBED_ONNX_INT8` in the configuration table) and shifts every vector, so it ships off
+* **Tested across the seams** — an integration suite runs a real ChromaDB through ingest, retrieval, citation compaction, caching and delete consistency. The unit suite mocks every boundary, and all three v2.4 correctness bugs lived in the seams between stages, where a mock cannot reach
 
 ### 📡 Topic Watches & Literature Reports
 
@@ -163,7 +210,9 @@ TAVILY_API_KEY=your_tavily_key_here
 AGENT_MAX_TOKENS=8192
 
 # Optional — thinking level (Gemini 3.x): minimal|low|medium|high, empty = model default
-# Empty is not neutral: gemini-3.6-flash then thinks at medium, out of LLM_MAX_TOKENS
+# Empty is not neutral: the model then thinks at its own default (medium), out of
+# LLM_MAX_TOKENS. Not every model offers every level — gemini-3.7-flash rejects
+# minimal, and the backend escalates one level up rather than failing the call.
 LLM_THINKING_LEVEL=minimal
 AGENT_THINKING_LEVEL=minimal
 
@@ -289,9 +338,9 @@ for src in data['sources']:
 | `/query/stream` | POST | Same, streamed token-by-token (SSE) |
 | `/chat` | POST | Multi-turn chat with persisted session history |
 | `/chat/stream` | POST | Streamed multi-turn chat (SSE) |
-| `/chat/{session_id}` | DELETE | Clear a chat session |
-| `/chat` | GET | List persisted chat sessions |
-| `/chat/{session_id}` | GET | Fetch one session's history |
+| `/chat/{session_id}` | DELETE | Clear a chat session (owner only) |
+| `/chat` | GET | List **your own** persisted chat sessions |
+| `/chat/{session_id}` | GET | Fetch one session's history (owner only; other keys get 404) |
 | `/agent/query` | POST | Agentic pipeline with reflexion loops (timeout → 504) |
 | `/agent/stream` | POST | Agentic pipeline, streamed step-by-step (SSE) |
 | `/compare` | POST | Kick off a multi-model answer comparison (async, returns `job_id`) |
@@ -312,26 +361,43 @@ for src in data['sources']:
 | `/papers` | GET | List uploaded PDFs |
 | `/papers/{paper_id}` | PATCH | Edit paper metadata (title, authors, year, tags) |
 | `/papers/{paper_id}` | DELETE | Delete a single paper |
-| `/watch` | GET/POST | List or create topic watches |
-| `/watch/{id}` | GET/DELETE | Read or delete a watch |
-| `/watch/{id}/run` | POST | Trigger a watch run immediately |
+| `/watch` | GET/POST | List or create topic watches (scoped to your key; `user_id` is a label) |
+| `/watch/{id}` | GET/DELETE | Read or delete a watch (owner only) |
+| `/watch/{id}/run` | POST | Trigger a watch run immediately — **rate-limited 5/min** (spends LLM budget) |
 | `/watch/{id}/digest` | GET | Fetch persisted digest for a watch |
-| `/report` | POST | Kick off a literature review report |
+| `/report` | POST | Kick off a literature review report — **rate-limited 5/min** (spends LLM budget) |
 | `/report/status/{job_id}` | GET | Report generation status |
 | `/report/{job_id}/download` | GET | Download completed report (Markdown) |
-| `/reports` | GET | List saved reports |
-| `/reports/{report_id}` | GET | Fetch one saved report |
+| `/reports` | GET | List **your own** saved reports |
+| `/reports/{report_id}` | GET | Fetch one saved report (owner only) |
 | `/feedback` | POST | Submit answer feedback |
-| `/feedback` | GET | List submitted feedback |
-| `/feedback/stats` | GET | Aggregate feedback counts |
-| `/prefs/{user_id}` | GET / PUT | Read / update user preferences |
+| `/feedback` | GET | List **your own** feedback, joined with its query context |
+| `/feedback/stats` | GET | Aggregate feedback counts for your key |
+| `/prefs/{user_id}` | GET / PUT | Read / update preferences (stored against your key, not the path label) |
 | `/stats` | GET | Vector store statistics |
 | `/quality` | GET | Index quality signals (chunk/metadata coverage) |
 | `/cache/stats` | GET | Cache hit rates, sizes, TTL config |
 | `/cache` | DELETE | Clear all caches |
-| `/health` | GET | Health check |
+| `/health` | GET | Health check (`?deep=true` for component checks) |
+| `/metrics` | GET | Prometheus metrics incl. per-stage timings (API key required) |
 | `/purge/papers` | DELETE | Delete all PDFs (admin key) |
 | `/purge/database` | DELETE | Clear vector database (admin key) |
+
+### Ownership and scoping
+
+Every read and delete listed above is scoped by a SHA-256 fingerprint of the caller's
+`X-API-Key`. A record owned by another key responds `404`, never `403` — a 403 would
+confirm the id exists. Records written before scoping existed carry no owner and are
+not visible to ordinary keys.
+
+When `API_KEYS` is unset the server is single-tenant, there is nothing to scope
+against, and all records are visible to the anonymous caller.
+
+### Response fields added in v2.5
+
+| Field | Where | Meaning |
+|---|---|---|
+| `degraded` | `QueryResponse`, `ChatResponse`, SSE `done` event | `null` normally. `"sparse_only"` means the dense retrieval leg was unavailable and the answer came from BM25 alone — lower quality, and clients should say so rather than presenting it as a normal answer. |
 
 ---
 
@@ -375,7 +441,9 @@ IndicRAG/
 │   ├── cache.py                     # Thread-safe TTL LRU cache (LLM/retrieval/tool)
 │   ├── watch_runner.py              # Background topic-watch digest loop
 │   ├── report_runner.py             # Async literature-review report generation
-│   └── purge.py                     # CLI cleanup (papers, db, models)
+│   ├── purge.py                     # CLI cleanup (papers, db, models)
+│   ├── reindex.py                   # Rebuild indexes by replaying the ingest log
+│   └── metrics.py                   # Per-stage Prometheus timings and counters
 │
 ├── 🔌 providers/                     # LLM provider backends
 │   ├── base.py                      # LLMBackend interface
@@ -432,9 +500,9 @@ Key settings (all overridable via environment variables):
 | `LLM_PROVIDER` | `gemini` | Primary LLM provider: `gemini` or `openrouter` |
 | `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down |
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
-| `LLM_MODEL_NAME` | `gemini-3.6-flash` | Gemini model for generation |
+| `LLM_MODEL_NAME` | `gemini-3.7-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
@@ -443,7 +511,7 @@ Key settings (all overridable via environment variables):
 | `AGENT_REFLEXION_BUDGET_S` | `90` | Wall-clock budget for reflexion **loops** — blocks starting another cycle, from iteration 2 onwards |
 | `AGENT_EVAL_RESERVE_S` | `90` | Room that must remain under `AGENT_TIMEOUT` to attempt an evaluation at all. Can skip iteration 1, but only when finishing would overrun the timeout and discard the draft |
 | `AGENT_THINKING_BUDGET` | `0` | **Legacy.** Agent thinking tokens: `0`=off, `-1`=dynamic, `N`=cap. Gemini 3.x models reject this field; the backend translates it to a level |
-| `LLM_THINKING_LEVEL` | `minimal` | Thinking level for standard RAG — the Gemini 3.x control. `minimal`, `low`, `medium`, `high`, or empty to accept the model default. **Not neutral:** `gemini-3.6-flash` defaults to `medium`, and those thought tokens come out of `LLM_MAX_TOKENS`, squeezing the answer |
+| `LLM_THINKING_LEVEL` | `minimal` | Thinking level for standard RAG — the Gemini 3.x control. `minimal`, `low`, `medium`, `high`, or empty to accept the model default. **Not neutral:** the model's own default is `medium`, and those thought tokens come out of `LLM_MAX_TOKENS`, squeezing the answer. Not every model offers every level — `gemini-3.7-flash` rejects `minimal`; the backend learns that per model and escalates one level up rather than failing |
 | `AGENT_THINKING_LEVEL` | `minimal` | Same, for the agentic pipeline |
 | `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
 | `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
@@ -469,6 +537,13 @@ Key settings (all overridable via environment variables):
 | `ENRICH_METADATA` | `true` | Auto-fetch arXiv metadata at ingest |
 | `DEDUP_PAPERS` | `true` | Reject near-duplicate titles |
 | `DEDUP_TITLE_THRESHOLD` | `0.9` | Title similarity cutoff for dedup |
+| `EMBED_ONNX_INT8` | `false` | int8 ONNX embeddings on CPU. 1.4x on a small synthetic batch, **1.9x on a real bulk ingest** (batch 32, long chunks) — an 84-minute corpus embed dropped to ~45. But it shifts every vector (cosine ~0.987 vs fp32), so near-neighbours can reorder and retrieval may change. Switching requires re-embedding the whole corpus; every chunk records its backend so a mixed one is flagged at startup. Opt in deliberately, ideally with a working eval gate |
+| `TORCH_NUM_THREADS` | `4` | Caps torch/ONNX intra-op threads; `0` leaves library defaults alone. The process already runs several pools, and each library otherwise takes one thread per core. Raise it (or set `0`) for a bulk ingest on a many-core box, where one job wants everything |
+| `BM25_PERSIST` | `true` | Save the BM25 index to disk so a restart skips the rebuild (8x faster cold start). Validated against the live document count and ignored when stale |
+| `BM25_CACHE_DIR` | `chroma_db/` | Where that index cache lives |
+| `JOB_LEASE_SECONDS` | `900` | How long an in-flight job's lease survives without a heartbeat. Only has to exceed the gap *between* progress updates, not the job's total runtime |
+| `WATCH_LEASE_SECONDS` | `3600` | How long a claimed watch is parked before becoming due again. Must exceed a real run, and bounds how long a watch stalls if its claimer dies |
+| `FIGURE_CAPTION_WORKERS` | `4` | Concurrent VLM caption calls per paper; `1` restores sequential. Keep small — unbounded fan-out trades slow ingest for 429s |
 | `HNSW_EF_SEARCH` | `100` | ChromaDB HNSW query-time search breadth |
 | `HNSW_EF_CONSTRUCTION` | `100` | HNSW build-time breadth (index quality vs. ingest speed) |
 | `HNSW_M` | `16` | HNSW graph connectivity |
@@ -633,13 +708,53 @@ python purge.py --models      # Remove cached models
 python purge.py --all --yes   # Clear everything
 ```
 
+### Reindexing
+
+The search indexes are derived views over the ingest log, so a rebuild is a replay
+rather than a re-ingest:
+
+```bash
+python reindex.py --check          # report drift between the log and current config
+python reindex.py --dry-run        # show what a rebuild would do
+python reindex.py --yes            # rebuild the live collection (destructive)
+python reindex.py --into staging   # rebuild elsewhere, verify, then switch
+```
+
+A rebuild resets the target collection before replaying, so rebuilding the *live*
+collection without `--yes` refuses and says so. `--into staging` needs no flag.
+
+Replay **re-embeds** recorded chunks; it does not re-chunk. So it implements an
+embedding-model change and **not** a chunker change — a chunker change needs a real
+re-ingest from the PDFs, and `--check` says so rather than letting you believe you
+migrated when you did not. Papers ingested before the log existed are not replayable;
+`--check` reports that too.
+
+### Retrieval evaluation
+
+```bash
+cd docs/Eval
+python run_live.py                 # run judged queries through the live pipeline
+python evaluate.py --ci --threshold 0.85
+```
+
+`evaluate.py` scores whatever sits in `answers_and_citations.json`. That file was
+originally hand-written, so the CI gate scored a frozen snapshot and no code change
+could move the number. `run_live.py` regenerates it from the real pipeline, which is
+what makes the gate able to fail. It refuses to run when the judged papers are not in
+the indexed corpus, since that produces a uniform 0.000 indistinguishable from
+"retrieval is completely broken".
+
 ---
 
 ## 🤝 Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-**v2.4 highlights:** gemini-3.6-flash default model · multi-user data isolation with per-API-key scoping · configurable session management · dedicated admin API key · clean CI linting. Full history in the git log and `docs/`.
+**v2.5 highlights:** gemini-3.7-flash default · per-API-key data isolation actually enforced · SSRF DNS pinning · BM25 inverted index with incremental updates and disk persistence · ChromaDB circuit breaker and sparse-only degraded mode · leased jobs reaped on restart · claimed watch scheduling · index provenance stamps · replayable ingest log and `reindex.py` · per-stage Prometheus metrics · integration test suite.
+
+**v2.4 highlights:** gemini-3.6-flash default model · multi-user data isolation with per-API-key scoping · configurable session management · dedicated admin API key · clean CI linting.
+
+Full history in the git log and `docs/` — see [ARCHITECTURE_REVIEW_v2.4.md](docs/ARCHITECTURE_REVIEW_v2.4.md) for the review that drove most of v2.5, including what was deliberately deferred and why.
 
 ---
 

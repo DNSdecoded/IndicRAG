@@ -23,26 +23,40 @@ logger = logging.getLogger(__name__)
 class TTLCache:
     """Thread-safe LRU cache with per-entry TTL expiration."""
 
-    def __init__(self, max_size: int = 256, ttl_seconds: float = 300):
+    def __init__(self, max_size: int = 256, ttl_seconds: float = 300, name: str = "cache"):
         self._max_size = max_size
         self._ttl = ttl_seconds
+        self._name = name
         self._store: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
 
+    def _record(self, hit: bool) -> None:
+        """Export hit/miss to Prometheus. GET /cache/stats already exposes these
+        counters, but only as a point-in-time reading, and nothing scrapes it —
+        so there is no history to compare a bad day against."""
+        try:
+            import metrics
+            metrics.record_cache(self._name, hit)
+        except Exception:
+            pass  # instrumentation must never break a cache lookup
+
     def get(self, key: str) -> Optional[Any]:
         with self._lock:
             if key not in self._store:
                 self._misses += 1
+                self._record(False)
                 return None
             value, ts = self._store[key]
             if time.monotonic() - ts > self._ttl:
                 del self._store[key]
                 self._misses += 1
+                self._record(False)
                 return None
             self._store.move_to_end(key)
             self._hits += 1
+            self._record(True)
             return value
 
     def put(self, key: str, value: Any) -> None:
@@ -83,8 +97,8 @@ def make_key(*args) -> str:
 # ── Shared cache instances ──────────────────────────────────────────────────
 # Sizes and TTLs are configurable via environment variables (see config.py).
 
-llm_cache = TTLCache(max_size=_cfg.LLM_CACHE_SIZE, ttl_seconds=_cfg.LLM_CACHE_TTL)
+llm_cache = TTLCache(max_size=_cfg.LLM_CACHE_SIZE, ttl_seconds=_cfg.LLM_CACHE_TTL, name="llm")
 
-retrieval_cache = TTLCache(max_size=_cfg.RETRIEVAL_CACHE_SIZE, ttl_seconds=_cfg.RETRIEVAL_CACHE_TTL)
+retrieval_cache = TTLCache(max_size=_cfg.RETRIEVAL_CACHE_SIZE, ttl_seconds=_cfg.RETRIEVAL_CACHE_TTL, name="retrieval")
 
-tool_cache = TTLCache(max_size=_cfg.TOOL_CACHE_SIZE, ttl_seconds=_cfg.TOOL_CACHE_TTL)
+tool_cache = TTLCache(max_size=_cfg.TOOL_CACHE_SIZE, ttl_seconds=_cfg.TOOL_CACHE_TTL, name="tool")
