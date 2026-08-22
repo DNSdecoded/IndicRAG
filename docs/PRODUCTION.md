@@ -184,8 +184,8 @@ and it must keep at least one `vendor/model` slug, because cross-vendor
 failover picks the first slug in that list.
 
 ```bash
-LLM_MODEL_NAME=gemini-3.6-flash
-LLM_SELECTABLE_MODELS=gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku
+LLM_MODEL_NAME=gemini-3.7-flash
+LLM_SELECTABLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free
 ```
 
 A bare name routes to Gemini; anything containing `/` routes to OpenRouter and

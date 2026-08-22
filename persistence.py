@@ -45,6 +45,70 @@ _conn.execute(
     "CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, watch_id TEXT, topic TEXT, "
     "language TEXT, markdown TEXT, citation_count INTEGER, created_at TEXT)"
 )
+
+
+_conn.execute(
+    # Append-only record of what was ingested, and of the chunks that ingestion
+    # produced. This is the system of record; ChromaDB, the BM25 index and the
+    # figure store are derived views over it.
+    #
+    # Without this, the only way to rebuild the vector store was to re-parse every
+    # PDF and re-call the VLM captioner — hours of work, non-reproducible, and
+    # dependent on source files still being present. That made changing the
+    # embedding model or the chunking strategy so expensive it never happened.
+    # With it, reindexing is a replay.
+    "CREATE TABLE IF NOT EXISTS ingest_log ("
+    "event_id TEXT PRIMARY KEY, paper_id TEXT, content_hash TEXT, title TEXT, "
+    "source_path TEXT, chunks TEXT, metadatas TEXT, ids TEXT, "
+    "embed_model TEXT, chunker_version INTEGER, created_at TEXT)"
+)
+
+
+def _ensure_column(table: str, column: str, decl: str) -> None:
+    """Add a column to an existing table if it isn't there yet.
+
+    `CREATE TABLE IF NOT EXISTS` silently keeps an old database's old shape, so a
+    column added in a later release never appears on an already-deployed instance
+    and the first query referencing it fails with `no such column`. This is the
+    whole migration story for now: idempotent, runs at import, no framework.
+    Replace it with a versioned runner once a change needs to backfill or
+    transform data rather than just append a nullable column.
+    """
+    cols = {row[1] for row in _conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+# `owner` is the SHA-256 fingerprint of the caller's API key (deps.current_owner).
+# NULL means "written before ownership existed, or written while auth was disabled".
+_ensure_column("feedback", "owner", "TEXT")
+_ensure_column("reports", "owner", "TEXT")
+_ensure_column("query_log", "owner", "TEXT")
+
+# Job leases. An in-flight job is owned by whichever process is heartbeating it;
+# when that process dies the lease simply expires and the row can be reaped.
+_ensure_column("jobs", "lease_until", "TEXT")
+
+# Which weights produced the vectors. int8 and fp32 output for the SAME model id
+# are not interchangeable, so embed_model alone cannot detect a mixed corpus.
+_ensure_column("ingest_log", "embed_backend", "TEXT")
+
+# Secondary indexes. Every table above declared a PRIMARY KEY and nothing else, so
+# each of these access paths was a full scan: due_watches runs on every scheduler
+# tick, the feedback join runs on every read, and the startup prunes delete by
+# timestamp.
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_watches_next_run ON watches(next_run)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_watches_user ON watches(user_id)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_query ON feedback(query_id)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_owner ON feedback(owner)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_completed ON jobs(completed_at)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_watch ON reports(watch_id)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_owner ON reports(owner)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_paper ON ingest_log(paper_id)")
+_conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_hash ON ingest_log(content_hash)")
+
 _conn.commit()
 _db_lock = threading.Lock()
 
@@ -98,38 +162,85 @@ def delete_job(job_id: str) -> None:
         _conn.commit()
 
 
-def save_job(job_id: str, job: dict) -> None:
+def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
+    """Persist a job. `lease_until` renews the caller's claim on an in-flight job.
+
+    Every update to a running job is also a heartbeat: it pushes the lease
+    forward, which is how a still-alive worker distinguishes itself from a dead
+    one. See reap_stale_jobs.
+    """
     with _db_lock:
         _conn.execute(
-            "INSERT INTO jobs (id, data, status, submitted_at, completed_at) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO jobs (id, data, status, submitted_at, completed_at, lease_until) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET data=excluded.data, status=excluded.status, "
-            "completed_at=excluded.completed_at",
-            (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"), job.get("completed_at")),
+            "completed_at=excluded.completed_at, lease_until=excluded.lease_until",
+            (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"),
+             job.get("completed_at"), lease_until),
         )
         _conn.commit()
 
 
-def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, created_at: str) -> None:
+def reap_stale_jobs(now_iso: str) -> list[dict]:
+    """Fail jobs left in-flight by a process that died. Returns what was reaped.
+
+    Ingest and report jobs run inside the API process, so a restart, crash or
+    OOM mid-job left the row saying `running` forever — nothing ever moved it,
+    and a client polling /ingest/status or /report/status waited on a job that
+    no longer existed anywhere.
+
+    Reaping is by expired lease rather than by "not mine": a live worker renews
+    its lease on every progress update, so an expired lease is real evidence the
+    owner is gone. A job with no lease at all predates this and is also reaped —
+    it cannot be running, because running jobs heartbeat.
+    """
+    with _db_lock:
+        rows = _conn.execute(
+            "SELECT id, data FROM jobs WHERE status IN ('pending', 'running') "
+            "AND (lease_until IS NULL OR lease_until < ?)",
+            (now_iso,),
+        ).fetchall()
+        reaped = []
+        for jid, data in rows:
+            job = json.loads(data)
+            job["status"] = "failed"
+            job["error"] = ("Abandoned: the process running this job exited before it "
+                            "finished. Resubmit to try again.")
+            job["completed_at"] = now_iso
+            _conn.execute(
+                "UPDATE jobs SET data = ?, status = 'failed', completed_at = ?, "
+                "lease_until = NULL WHERE id = ?",
+                (json.dumps(job), now_iso, jid),
+            )
+            reaped.append(job)
+        if reaped:
+            _conn.commit()
+    return reaped
+
+
+def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, created_at: str,
+                  owner: str | None = None) -> None:
     with _db_lock:
         _conn.execute(
-            "INSERT INTO feedback (id, query_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?)",
-            (feedback_id, query_id, rating, comment, created_at),
+            "INSERT INTO feedback (id, query_id, rating, comment, created_at, owner) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (feedback_id, query_id, rating, comment, created_at, owner),
         )
         _conn.commit()
 
 
 def log_query(query_id: str, question: str, answer: str, mode: str,
               model: str, language: str, confidence: float, coverage: float,
-              created_at: str) -> None:
+              created_at: str, owner: str | None = None) -> None:
     """Persist a query/answer record so feedback can be correlated with it."""
     with _db_lock:
         _conn.execute(
             "INSERT INTO query_log "
-            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(query_id, question, answer, mode, model, language, confidence, coverage, created_at, owner) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(query_id) DO UPDATE SET "
             "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
-            (query_id, question, answer, mode, model, language, confidence, coverage, created_at),
+            (query_id, question, answer, mode, model, language, confidence, coverage, created_at, owner),
         )
         _conn.commit()
 
@@ -140,15 +251,25 @@ _FEEDBACK_CONTEXT_COLUMNS = [
 ]
 
 
-def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
-    """Return feedback joined with its query context, newest first."""
+def get_feedback_with_context(limit: int = 50, offset: int = 0,
+                              owner: str | None = None) -> list[dict]:
+    """Return feedback joined with its query context, newest first.
+
+    `owner` scopes the result to one caller's submissions. None means unscoped —
+    only pass None when auth is disabled (single-tenant) or for an admin read;
+    an authenticated multi-user route must always pass the caller's fingerprint,
+    or every user reads every other user's feedback and query text.
+    """
+    where = "" if owner is None else "WHERE f.owner = ? "
+    params = (limit, offset) if owner is None else (owner, limit, offset)
     with _db_lock:
         rows = _conn.execute(
             "SELECT f.id, f.query_id, f.rating, f.comment, f.created_at, "
             "q.question, q.answer, q.mode, q.model, q.language, q.confidence, q.coverage "
             "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
+            f"{where}"
             "ORDER BY f.created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            params,
         ).fetchall()
     return [
         dict(zip(_FEEDBACK_CONTEXT_COLUMNS, r))
@@ -156,16 +277,27 @@ def get_feedback_with_context(limit: int = 50, offset: int = 0) -> list[dict]:
     ]
 
 
-def feedback_stats() -> dict:
-    """Aggregate feedback totals and per-language approval rate."""
+def feedback_stats(owner: str | None = None) -> dict:
+    """Aggregate feedback totals and per-language approval rate, optionally per owner."""
+    where = "" if owner is None else " WHERE owner = ?"
+    join_where = "" if owner is None else " WHERE f.owner = ?"
+    args: tuple = () if owner is None else (owner,)
     with _db_lock:
-        total = _conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
-        up = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='up'").fetchone()[0]
-        down = _conn.execute("SELECT COUNT(*) FROM feedback WHERE rating='down'").fetchone()[0]
+        total = _conn.execute(f"SELECT COUNT(*) FROM feedback{where}", args).fetchone()[0]
+        up = _conn.execute(
+            f"SELECT COUNT(*) FROM feedback WHERE rating='up'{'' if owner is None else ' AND owner = ?'}",
+            args,
+        ).fetchone()[0]
+        down = _conn.execute(
+            f"SELECT COUNT(*) FROM feedback WHERE rating='down'{'' if owner is None else ' AND owner = ?'}",
+            args,
+        ).fetchone()[0]
         by_lang = _conn.execute(
             "SELECT COALESCE(q.language, 'unknown'), COUNT(*), AVG(CASE WHEN f.rating='up' THEN 1.0 ELSE 0.0 END) "
             "FROM feedback f LEFT JOIN query_log q ON f.query_id = q.query_id "
-            "GROUP BY COALESCE(q.language, 'unknown')"
+            f"{join_where} "
+            "GROUP BY COALESCE(q.language, 'unknown')",
+            args,
         ).fetchall()
     return {
         "total": total, "up": up, "down": down,
@@ -217,8 +349,14 @@ def get_watch(watch_id: str) -> dict | None:
     return json.loads(row[0]) if row else None
 
 
-def list_watches(user_id: str | None = None) -> list[dict]:
-    """All watches, or just one user's, newest first."""
+def list_watches(user_id: str | None = None, owner: str | None = None) -> list[dict]:
+    """All watches, or just one user's, newest first.
+
+    `user_id` is a caller-supplied label and is NOT an authorization boundary —
+    anyone can pass anyone's. `owner` is the API-key fingerprint and is the real
+    scope; when it is not None, only that key's watches are returned regardless
+    of what user_id says.
+    """
     with _db_lock:
         if user_id is None:
             rows = _conn.execute(
@@ -229,7 +367,24 @@ def list_watches(user_id: str | None = None) -> list[dict]:
                 "SELECT data FROM watches WHERE user_id = ? ORDER BY created_at DESC",
                 (user_id,),
             ).fetchall()
-    return [json.loads(r[0]) for r in rows]
+    watches = [json.loads(r[0]) for r in rows]
+    if owner is not None:
+        watches = [w for w in watches if w.get("owner") == owner]
+    return watches
+
+
+def owns_watch(watch: dict | None, owner: str | None) -> bool:
+    """True when `owner` may act on `watch`.
+
+    Single-tenant (auth disabled, owner None) sees everything. Otherwise the
+    fingerprints must match; a watch created before ownership existed has no
+    owner and is treated as admin-only, i.e. not visible to an ordinary key.
+    """
+    if watch is None:
+        return False
+    if owner is None:
+        return True
+    return watch.get("owner") == owner
 
 
 def due_watches(now_iso: str) -> list[dict]:
@@ -241,6 +396,107 @@ def due_watches(now_iso: str) -> list[dict]:
             (now_iso,),
         ).fetchall()
     return [json.loads(r[0]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Ingest log — the system of record the search indexes are derived from.
+# ---------------------------------------------------------------------------
+def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
+                  source_path: str, chunks: list, metadatas: list, ids: list,
+                  embed_model: str, chunker_version: int, created_at: str,
+                  embed_backend: str = None) -> None:
+    """Record one ingestion, including the chunks it produced.
+
+    Re-ingesting a paper replaces its row rather than appending a second one:
+    the log describes the CURRENT contents of the indexes, and keeping
+    superseded versions would make a replay reinstate deleted chunks.
+    """
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO ingest_log (event_id, paper_id, content_hash, title, source_path, "
+            "chunks, metadatas, ids, embed_model, chunker_version, created_at, embed_backend) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(event_id) DO UPDATE SET content_hash=excluded.content_hash, "
+            "title=excluded.title, source_path=excluded.source_path, chunks=excluded.chunks, "
+            "metadatas=excluded.metadatas, ids=excluded.ids, embed_model=excluded.embed_model, "
+            "chunker_version=excluded.chunker_version, created_at=excluded.created_at, "
+            "embed_backend=excluded.embed_backend",
+            (event_id, paper_id, content_hash, title, source_path,
+             json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
+             embed_model, chunker_version, created_at, embed_backend),
+        )
+        _conn.commit()
+
+
+def get_ingest_events(paper_id: str = None) -> list[dict]:
+    """Every recorded ingestion, oldest first, or just one paper's.
+
+    Oldest first so a replay reproduces the original ingest order — chunk ids
+    and citation numbering follow insertion order.
+    """
+    with _db_lock:
+        if paper_id is None:
+            rows = _conn.execute(
+                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
+                "FROM ingest_log ORDER BY created_at ASC").fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
+                "FROM ingest_log WHERE paper_id = ? ORDER BY created_at ASC",
+                (paper_id,)).fetchall()
+    return [{
+        "event_id": r[0], "paper_id": r[1], "content_hash": r[2], "title": r[3],
+        "source_path": r[4], "chunks": json.loads(r[5]), "metadatas": json.loads(r[6]),
+        "ids": json.loads(r[7]), "embed_model": r[8], "chunker_version": r[9],
+        "created_at": r[10], "embed_backend": r[11],
+    } for r in rows]
+
+
+def ingest_event_count() -> int:
+    with _db_lock:
+        return _conn.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+
+
+def delete_ingest_events(paper_id: str) -> int:
+    """Drop a paper from the log. Returns rows removed.
+
+    Must accompany deleting the paper from the indexes — otherwise a later
+    replay would resurrect it, which is the failure mode a system of record is
+    supposed to prevent.
+    """
+    with _db_lock:
+        cur = _conn.execute("DELETE FROM ingest_log WHERE paper_id = ?", (paper_id,))
+        _conn.commit()
+        return cur.rowcount
+
+
+def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool:
+    """Atomically claim a due watch. True if this caller won the claim.
+
+    The scheduler runs in-process, so two workers (or two replicas) both see the
+    same watch as due and both run it — duplicate arXiv fetches, duplicate
+    ingests, duplicate LLM spend on the digest. This is a compare-and-set on the
+    row: the UPDATE only matches while next_run is still what the claimer read,
+    so exactly one caller can move it and the losers see rowcount 0.
+
+    `lease_until` parks next_run far enough ahead that a claimer which crashes
+    mid-run doesn't wedge the watch forever — the lease simply expires and the
+    watch becomes due again. run_watch rewrites next_run properly on success.
+    """
+    with _db_lock:
+        # The JSON copy moves with the column. due_watches reads the row but
+        # claim_watch compares the column, so leaving data.next_run behind after a
+        # failed run means every later claim compares the stale value against the
+        # lease and fails — the watch never runs again.
+        cur = _conn.execute(
+            "UPDATE watches SET next_run = ?, data = json_set(data, '$.next_run', ?) "
+            "WHERE id = ? AND next_run = ?",
+            (lease_until, lease_until, watch_id, expected_next_run),
+        )
+        _conn.commit()
+        return cur.rowcount == 1
 
 
 def delete_watch(watch_id: str) -> None:
@@ -255,45 +511,55 @@ def delete_watch(watch_id: str) -> None:
 # review" needs to survive indefinitely and be regenerated in place.
 # ---------------------------------------------------------------------------
 def save_report(report_id: str, watch_id: str, topic: str, language: str,
-                markdown: str, citation_count: int, created_at: str) -> None:
+                markdown: str, citation_count: int, created_at: str,
+                owner: str | None = None) -> None:
     """Insert or update a report. Re-saving the same report_id overwrites in place
     (that's how a watch-owned living review gets regenerated)."""
     with _db_lock:
         _conn.execute(
-            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO reports (id, watch_id, topic, language, markdown, citation_count, created_at, owner) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
             "markdown=excluded.markdown, citation_count=excluded.citation_count, "
-            "created_at=excluded.created_at",
-            (report_id, watch_id, topic, language, markdown, citation_count, created_at),
+            "created_at=excluded.created_at, owner=excluded.owner",
+            (report_id, watch_id, topic, language, markdown, citation_count, created_at, owner),
         )
         _conn.commit()
 
 
-def get_report(report_id: str) -> dict | None:
+def get_report(report_id: str, owner: str | None = None) -> dict | None:
+    """One report, or None. When `owner` is set, a report belonging to another key
+    reads as missing — a 404 rather than a 403, so the response can't be used to
+    probe which report ids exist."""
     with _db_lock:
         row = _conn.execute(
-            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at "
+            "SELECT id, watch_id, topic, language, markdown, citation_count, created_at, owner "
             "FROM reports WHERE id = ?", (report_id,),
         ).fetchone()
     if not row:
+        return None
+    if owner is not None and row[7] != owner:
         return None
     return {"id": row[0], "watch_id": row[1], "topic": row[2], "language": row[3],
             "markdown": row[4], "citation_count": row[5], "created_at": row[6]}
 
 
-def list_reports(watch_id: str | None = None) -> list[dict]:
-    """Summary rows (no markdown body) — newest first, or scoped to one watch."""
+def list_reports(watch_id: str | None = None, owner: str | None = None) -> list[dict]:
+    """Summary rows (no markdown body) — newest first, optionally scoped to one
+    watch and/or one owner."""
+    clauses, args = [], []
+    if watch_id:
+        clauses.append("watch_id = ?")
+        args.append(watch_id)
+    if owner is not None:
+        clauses.append("owner = ?")
+        args.append(owner)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     with _db_lock:
-        if watch_id:
-            rows = _conn.execute(
-                "SELECT id, watch_id, topic, language, citation_count, created_at "
-                "FROM reports WHERE watch_id = ? ORDER BY created_at DESC", (watch_id,),
-            ).fetchall()
-        else:
-            rows = _conn.execute(
-                "SELECT id, watch_id, topic, language, citation_count, created_at "
-                "FROM reports ORDER BY created_at DESC",
-            ).fetchall()
+        rows = _conn.execute(
+            "SELECT id, watch_id, topic, language, citation_count, created_at "
+            f"FROM reports {where}ORDER BY created_at DESC",
+            tuple(args),
+        ).fetchall()
     return [{"id": r[0], "watch_id": r[1], "topic": r[2], "language": r[3],
              "citation_count": r[4], "created_at": r[5]} for r in rows]

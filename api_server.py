@@ -39,7 +39,35 @@ async def lifespan(app):
     import embeddings
     import vector_store
     embeddings.load_embedding_model()
-    vector_store.get_or_create_collection()
+    collection = vector_store.get_or_create_collection()
+
+    # Loud at startup rather than silent at query time: comparing vectors from two
+    # different embedding spaces is meaningless but never raises, so a model or
+    # chunker swap otherwise shows up only as retrieval quality quietly getting
+    # worse — which is nearly undebuggable from the outside.
+    problem = vector_store.check_index_compatibility(collection)
+    if problem:
+        logger.warning("INDEX PROVENANCE: %s", problem)
+
+    # Jobs run inside this process, so anything left in-flight by the previous
+    # one is dead — but the row still said `running`, and clients polled it
+    # forever. Reap by expired lease, so a job another live worker is still
+    # heartbeating is left alone.
+    from datetime import datetime, timezone
+    import persistence
+    import deps
+    reaped = persistence.reap_stale_jobs(datetime.now(timezone.utc).isoformat())
+    if reaped:
+        # deps._jobs was hydrated from SQLite at import, before this ran, so the
+        # in-memory copies still say `running`. Status is served from memory, so
+        # both have to move or the API would keep reporting the stale state.
+        with deps._jobs_lock:
+            for job in reaped:
+                jid = job.get("job_id")
+                if jid in deps._jobs:
+                    deps._jobs[jid].update(job)
+        logger.warning("Reaped %d job(s) abandoned by a previous process: %s",
+                       len(reaped), ", ".join(j.get("job_id", "?") for j in reaped))
     if config.USE_RERANKER:
         import rerank
         rerank._load()

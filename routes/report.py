@@ -13,12 +13,13 @@ from typing import Optional
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 import config
 import persistence
-from deps import verify_api_key, _jobs, _jobs_lock, _update_job
+from deps import (limiter, verify_api_key, current_owner, _jobs, _jobs_lock, _update_job,
+                  touch_job_lease)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,11 +65,18 @@ def _make_progress_cb(job_id: str):
                 job["progress_current"] = current
                 job["progress_total"] = total
                 job["progress_message"] = message
+        # Keep the SQLite lease alive: without this a long run is reaped as
+        # abandoned while it is still making progress.
+        touch_job_lease(job_id)
     return _cb
 
 
-def _run_report_job(job_id: str, topic: str, language: str):
-    """Background worker: build the report and store the Markdown on the job."""
+def _run_report_job(job_id: str, topic: str, language: str, owner: Optional[str] = None):
+    """Background worker: build the report and store the Markdown on the job.
+
+    `owner` is carried through so the persisted artifact is scoped to the key that
+    requested it — GET /reports filters on it.
+    """
     import report_runner
     _update_job(job_id, status="running")
     try:
@@ -85,7 +93,7 @@ def _run_report_job(job_id: str, topic: str, language: str):
         persistence.save_report(
             report_id=job_id, watch_id="", topic=topic, language=language,
             markdown=result["markdown"], citation_count=result["citation_count"],
-            created_at=completed_at,
+            created_at=completed_at, owner=owner,
         )
         logger.info(f"[Report] job {job_id} finished ({len(result['sections'])} sections)")
     except Exception as e:
@@ -95,45 +103,58 @@ def _run_report_job(job_id: str, topic: str, language: str):
 
 
 @router.post("/report", response_model=ReportJobResponse, status_code=202, tags=["Report"])
-async def create_report(body: ReportRequest, background_tasks: BackgroundTasks,
-                        authenticated: bool = Depends(verify_api_key)):
-    """Start a literature-review report job. Returns 202 with a job_id to poll."""
+@limiter.limit("5/minute")
+async def create_report(request: Request, body: ReportRequest, background_tasks: BackgroundTasks,
+                        authenticated: bool = Depends(verify_api_key),
+                        owner: Optional[str] = Depends(current_owner)):
+    """Start a literature-review report job. Returns 202 with a job_id to poll.
+
+    Rate-limited: each call decomposes a topic and synthesizes every section, so
+    an unbounded loop here drains the shared LLM quota for every other user.
+    """
     _require_enabled()
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {
-            "job_id": job_id, "status": "pending",
+            "job_id": job_id, "status": "pending", "owner": owner,
             "topic": body.topic, "language": body.language,
             "sections": None, "citation_count": None, "markdown": None, "error": None,
             "submitted_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
             "progress_current": 0, "progress_total": None, "progress_message": "Queued",
         }
-    background_tasks.add_task(_run_report_job, job_id, body.topic, body.language)
+    background_tasks.add_task(_run_report_job, job_id, body.topic, body.language, owner)
     logger.info(f"[Report] job {job_id} queued topic={body.topic!r}")
     return ReportJobResponse(job_id=job_id, status="pending",
                              message="Report started. Poll /report/status/{job_id}.")
 
 
-def _get_report_job(job_id: str) -> dict:
+def _get_report_job(job_id: str, owner: Optional[str] = None) -> dict:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if job is None or "topic" not in job:  # 'topic' distinguishes a report job from an ingest job
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Report job '{job_id}' not found.")
+    # 404 rather than 403 on an ownership mismatch, matching the ingest-job rule in
+    # routes/query.py — a 403 would confirm the job id exists.
+    if owner is not None and job.get("owner") != owner:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Report job '{job_id}' not found.")
     return job
 
 
 @router.get("/report/status/{job_id}", response_model=ReportStatusResponse, tags=["Report"])
-async def get_report_status(job_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_report_status(job_id: str, authenticated: bool = Depends(verify_api_key),
+                            owner: Optional[str] = Depends(current_owner)):
     _require_enabled()
-    job = _get_report_job(job_id)
-    return ReportStatusResponse(**{k: v for k, v in job.items() if k != "markdown"})
+    job = _get_report_job(job_id, owner)
+    return ReportStatusResponse(**{k: v for k, v in job.items()
+                                   if k not in ("markdown", "owner")})
 
 
 @router.get("/report/{job_id}/download", tags=["Report"])
-async def download_report(job_id: str, authenticated: bool = Depends(verify_api_key)):
+async def download_report(job_id: str, authenticated: bool = Depends(verify_api_key),
+                          owner: Optional[str] = Depends(current_owner)):
     """Download the finished report as a Markdown attachment."""
     _require_enabled()
-    job = _get_report_job(job_id)
+    job = _get_report_job(job_id, owner)
     if job.get("status") != "success" or not job.get("markdown"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail=f"Report not ready (status: {job.get('status')}).")
@@ -145,19 +166,24 @@ async def download_report(job_id: str, authenticated: bool = Depends(verify_api_
 
 
 @router.get("/reports", tags=["Report"])
-async def list_persisted_reports(watch_id: str = None, authenticated: bool = Depends(verify_api_key)):
+async def list_persisted_reports(watch_id: str = None, authenticated: bool = Depends(verify_api_key),
+                                 owner: Optional[str] = Depends(current_owner)):
     """List durably-stored reports (survives restart), newest first.
 
     Distinct from GET /report/status/{job_id}: that's the in-memory job store
     for a report still being generated; this is the persisted artifact,
     including watch-owned living reviews that get regenerated in place.
+
+    Scoped to the caller's own reports — a report body is generated from that
+    user's topic and corpus and is not shared across keys.
     """
-    return persistence.list_reports(watch_id)
+    return persistence.list_reports(watch_id, owner=owner)
 
 
 @router.get("/reports/{report_id}", tags=["Report"])
-async def get_persisted_report(report_id: str, authenticated: bool = Depends(verify_api_key)):
-    report = persistence.get_report(report_id)
+async def get_persisted_report(report_id: str, authenticated: bool = Depends(verify_api_key),
+                               owner: Optional[str] = Depends(current_owner)):
+    report = persistence.get_report(report_id, owner=owner)
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Report '{report_id}' not found.")
     return report

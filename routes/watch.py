@@ -12,13 +12,13 @@ from typing import Optional
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 import config
 import persistence
-from deps import verify_api_key
+from deps import limiter, verify_api_key, current_owner
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,8 +73,14 @@ def _to_response(w: dict) -> WatchResponse:
 
 
 @router.post("/watch", response_model=WatchResponse, tags=["Watch"])
-async def create_watch(body: WatchCreateRequest, authenticated: bool = Depends(verify_api_key)):
-    """Register a topic watch. Runs on POST /watch/{id}/run (or the schedule loop)."""
+async def create_watch(body: WatchCreateRequest, authenticated: bool = Depends(verify_api_key),
+                       owner: Optional[str] = Depends(current_owner)):
+    """Register a topic watch. Runs on POST /watch/{id}/run (or the schedule loop).
+
+    `user_id` is a caller-chosen display label only. Authorization is the API-key
+    fingerprint stored in `owner`; it used to be `user_id`, which the caller
+    supplies and can therefore set to anyone's.
+    """
     _require_enabled()
     now = datetime.now(timezone.utc)
     cadence = body.cadence or config.WATCH_DEFAULT_CADENCE
@@ -83,6 +89,7 @@ async def create_watch(body: WatchCreateRequest, authenticated: bool = Depends(v
     watch = {
         "id": str(uuid.uuid4()),
         "user_id": body.user_id,
+        "owner": owner,
         "topic": body.topic,
         "language": body.language,
         "cadence": cadence,
@@ -97,29 +104,49 @@ async def create_watch(body: WatchCreateRequest, authenticated: bool = Depends(v
     return _to_response(watch)
 
 
+def _owned_watch_or_404(watch_id: str, owner: Optional[str]) -> dict:
+    """Fetch a watch the caller owns, or raise 404.
+
+    404 rather than 403 on a mismatch: a 403 would confirm the id exists.
+    """
+    w = persistence.get_watch(watch_id)
+    if not persistence.owns_watch(w, owner):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
+    return w
+
+
 @router.get("/watch", response_model=list[WatchResponse], tags=["Watch"])
-async def list_watches(user_id: Optional[str] = None, authenticated: bool = Depends(verify_api_key)):
-    """List all watches, or just one user's when user_id is supplied."""
+async def list_watches(user_id: Optional[str] = None, authenticated: bool = Depends(verify_api_key),
+                       owner: Optional[str] = Depends(current_owner)):
+    """List the caller's watches, optionally narrowed to one of their user_id labels.
+
+    `user_id` filters within what the caller already owns — it is not a way to
+    read another key's watches, which is what it used to be.
+    """
     _require_enabled()
-    return [_to_response(w) for w in persistence.list_watches(user_id)]
+    return [_to_response(w) for w in persistence.list_watches(user_id, owner=owner)]
 
 
 @router.get("/watch/{watch_id}", response_model=WatchResponse, tags=["Watch"])
-async def get_watch(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_watch(watch_id: str, authenticated: bool = Depends(verify_api_key),
+                    owner: Optional[str] = Depends(current_owner)):
     _require_enabled()
-    w = persistence.get_watch(watch_id)
-    if w is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
-    return _to_response(w)
+    return _to_response(_owned_watch_or_404(watch_id, owner))
 
 
 @router.post("/watch/{watch_id}/run", tags=["Watch"])
-async def run_watch_now(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+@limiter.limit("5/minute")
+async def run_watch_now(request: Request, watch_id: str,
+                        authenticated: bool = Depends(verify_api_key),
+                        owner: Optional[str] = Depends(current_owner)):
     """Run a watch immediately: search the topic, ingest new papers, refresh the digest.
 
     Synchronous — ingest blocks, so it runs in a threadpool to keep the event loop free.
+    Rate-limited because each call spends LLM budget (digest generation) and can
+    trigger ingestion; unlimited, it drains the shared quota for every other user.
     """
     _require_enabled()
+    _owned_watch_or_404(watch_id, owner)
     import watch_runner  # lazy: keeps arxiv/ingest imports off the request-path cold start
     try:
         return await run_in_threadpool(watch_runner.run_watch, watch_id)
@@ -128,19 +155,18 @@ async def run_watch_now(watch_id: str, authenticated: bool = Depends(verify_api_
 
 
 @router.get("/watch/{watch_id}/digest", tags=["Watch"])
-async def get_watch_digest(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+async def get_watch_digest(watch_id: str, authenticated: bool = Depends(verify_api_key),
+                           owner: Optional[str] = Depends(current_owner)):
     """Return the watch's latest stored digest (persists between runs)."""
     _require_enabled()
-    w = persistence.get_watch(watch_id)
-    if w is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
+    w = _owned_watch_or_404(watch_id, owner)
     return {"watch_id": watch_id, "digest": w.get("latest_digest"), "last_run": w.get("last_run")}
 
 
 @router.delete("/watch/{watch_id}", tags=["Watch"])
-async def delete_watch(watch_id: str, authenticated: bool = Depends(verify_api_key)):
+async def delete_watch(watch_id: str, authenticated: bool = Depends(verify_api_key),
+                       owner: Optional[str] = Depends(current_owner)):
     _require_enabled()
-    if persistence.get_watch(watch_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watch not found")
+    _owned_watch_or_404(watch_id, owner)
     persistence.delete_watch(watch_id)
     return {"status": "deleted", "id": watch_id}

@@ -23,7 +23,7 @@ INTERRUPTED_NOTE = (
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
                       max_tokens: int = None, query_id: str = None,
                       model: str = None, provider: str = None,
-                      visible_chunks: int = None):
+                      visible_chunks: int = None, degraded: str = None):
     """Async SSE generator: bridges sync llm_generate_stream via asyncio.Queue.
 
     Strategy B + Indic target language: buffers all chunks, translates the full
@@ -104,7 +104,9 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                 pass  # fall back to English
             yield f"data: {json.dumps({'type': 'chunk', 'text': compacted})}\n\n"
 
-        yield f"data: {json.dumps({'type': 'done', 'answer': compacted, 'citations': citations, 'language': language, 'query_id': query_id})}\n\n"
+        # `degraded` rides on the done event so a streaming client learns the answer
+        # came from a reduced pipeline — it has no other way to find out.
+        yield f"data: {json.dumps({'type': 'done', 'answer': compacted, 'citations': citations, 'language': language, 'query_id': query_id, 'degraded': degraded})}\n\n"
         yield "data: [DONE]\n\n"
     finally:
         stop_event.set()

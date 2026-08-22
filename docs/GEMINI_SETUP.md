@@ -4,7 +4,7 @@ IndicRAG dispatches generation through `llm_client.py`, which supports two
 backends:
 
 - **Gemini** (`providers/gemini.py`) — any bare model name, e.g. `gemini-3.6-flash`
-- **OpenRouter** (`providers/openrouter.py`) — any `vendor/model` slug, e.g. `anthropic/claude-haiku`
+- **OpenRouter** (`providers/openrouter.py`) — any `vendor/model` slug, e.g. `google/gemma-4-31b-it:free`
 
 Everything else in the pipeline (embeddings, vector store, reranking, NLI
 verification) runs locally. Only generation is remote.
@@ -85,7 +85,7 @@ Model choice is not hard-coded. Two settings control it:
 | `LLM_SELECTABLE_MODELS` | Comma-separated dropdown exposed to the UI (`GET /models`); **first entry is the default** |
 
 Routing rule: a **bare name** (`gemini-3.6-flash`) goes to Gemini; anything
-containing a **`/`** (`anthropic/claude-haiku`) goes to OpenRouter.
+containing a **`/`** (`google/gemma-4-31b-it:free`) goes to OpenRouter.
 
 **Keep at least one `/` slug in `LLM_SELECTABLE_MODELS`.** Cross-vendor
 failover picks the first slug in that list, and OpenRouter silently rewrites a
@@ -141,8 +141,8 @@ several times a classic query because it makes multiple LLM turns.
 Set these in `.env` (defaults live in `config.py`):
 
 ```bash
-LLM_MODEL_NAME=gemini-3.6-flash
-LLM_SELECTABLE_MODELS=gemini-3.6-flash,gemini-3.5-flash,anthropic/claude-haiku
+LLM_MODEL_NAME=gemini-3.7-flash
+LLM_SELECTABLE_MODELS=gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free
 
 LLM_MAX_TOKENS=8192    # Maximum response length (thinking + answer share this)
 LLM_TEMPERATURE=0.3    # Lower = more factual, higher = more creative

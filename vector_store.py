@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Any
 import numpy as np
 import logging
 import threading
+import time
 import concurrent.futures
 import config
 
@@ -22,19 +23,70 @@ logger = logging.getLogger(__name__)
 _chroma_executor = concurrent.futures.ThreadPoolExecutor(max_workers=32, thread_name_prefix="chroma-timeout")
 
 
+# Circuit breaker, same shape as the per-(provider, model) one in llm_client.py.
+# Without it an unhealthy ChromaDB (disk full, corrupt segment, hung compaction)
+# makes every request pay the full timeout before failing, and each one parks a
+# worker in the pool above that cannot be cancelled — the pool drains in seconds
+# and the failure spreads to requests that would never have touched Chroma.
+_CIRCUIT_COOLDOWN = 60.0
+_CIRCUIT_TRIP_AFTER = 3  # consecutive timeouts before the circuit opens
+_circuit_until = 0.0
+_circuit_failures = 0
+_circuit_lock = threading.Lock()
+
+
+class ChromaUnavailable(RuntimeError):
+    """Raised instead of waiting on a ChromaDB already known to be timing out."""
+
+
+def chroma_circuit_open() -> bool:
+    """True while the breaker is open — callers can degrade without trying."""
+    with _circuit_lock:
+        return time.monotonic() < _circuit_until
+
+
+def _chroma_record_failure() -> None:
+    global _circuit_until, _circuit_failures
+    with _circuit_lock:
+        _circuit_failures += 1
+        if _circuit_failures >= _CIRCUIT_TRIP_AFTER:
+            _circuit_until = time.monotonic() + _CIRCUIT_COOLDOWN
+            failures, _circuit_failures = _circuit_failures, 0  # fresh streak after the cooldown
+            logger.error("ChromaDB circuit OPEN for %.0fs after %d consecutive timeouts",
+                         _CIRCUIT_COOLDOWN, failures)
+            try:
+                import metrics
+                metrics.record_circuit_trip("chromadb")
+            except Exception:
+                pass  # a metrics failure must never worsen an outage
+
+
+def _chroma_record_success() -> None:
+    global _circuit_failures
+    if _circuit_failures:
+        with _circuit_lock:
+            _circuit_failures = 0
+
+
 def _chroma_call(fn, *args, timeout: float = 5.0, **kwargs) -> Any:
     """Run a ChromaDB call with a timeout. Raises TimeoutError if it hangs.
 
     Note: cancel() cannot stop an already-running call; on timeout the worker
     thread keeps running until the underlying call returns. The large pool above
-    bounds the damage of that leak.
+    bounds the damage of that leak, and the breaker bounds how often we are
+    willing to create one.
     """
+    if chroma_circuit_open():
+        raise ChromaUnavailable("ChromaDB circuit is open; skipping call")
     fut = _chroma_executor.submit(fn, *args, **kwargs)
     try:
-        return fut.result(timeout=timeout)
+        result = fut.result(timeout=timeout)
     except concurrent.futures.TimeoutError as err:
         fut.cancel()
+        _chroma_record_failure()
         raise TimeoutError(f"ChromaDB operation timed out after {timeout}s") from err
+    _chroma_record_success()
+    return result
 
 
 # Global client cache
@@ -115,6 +167,109 @@ def get_or_create_collection(
     return collection
 
 
+# Bump CHUNKER_VERSION whenever chunk boundaries change (section sizes, splitter
+# rules): the vectors stay valid but stop being comparable to older chunks of the
+# same document. SCHEMA_VERSION covers the metadata shape itself.
+CHUNKER_VERSION = 1
+SCHEMA_VERSION = 1
+
+
+def _embed_backend() -> str:
+    """Which weights produced the vectors: 'fp32', 'onnx-int8' or 'fp16'.
+
+    The model id alone is not enough. int8-quantized BGE-M3 and fp32 BGE-M3 share
+    a model name but do NOT produce interchangeable vectors, so a stamp recording
+    only `embed_model` would call a mixed collection consistent — exactly the
+    silent failure the stamp exists to prevent.
+
+    Read from the loader rather than sniffed off the model object: the loader
+    knows which branch it took, and inspecting sentence-transformers internals
+    would quietly start returning the wrong answer on a library upgrade.
+    """
+    try:
+        import embeddings
+        return embeddings.EMBED_BACKEND
+    except Exception:
+        return "unknown"
+
+
+def _provenance_stamp() -> Dict[str, Any]:
+    return {
+        "embed_model": config.EMBEDDING_MODEL_NAME,
+        "embed_dim": config.EMBEDDING_DIMENSION,
+        "embed_backend": _embed_backend(),
+        "chunker_version": CHUNKER_VERSION,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
+def index_fingerprint(collection: chromadb.Collection = None) -> Optional[Dict[str, Any]]:
+    """Provenance of the chunks already in the collection, or None if empty.
+
+    Samples one chunk: a mixed collection is the failure this is meant to catch,
+    and one disagreeing sample is enough to know something is wrong. Chunks
+    written before stamping existed report embed_model=None (unknown), which is
+    reported rather than assumed compatible.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    try:
+        sample = _chroma_call(collection.peek, limit=1)
+    except Exception:
+        return None
+    metas = sample.get("metadatas") or []
+    if not metas:
+        return None
+    m = metas[0] or {}
+    return {
+        "embed_model": m.get("embed_model"),
+        "embed_dim": m.get("embed_dim"),
+        "embed_backend": m.get("embed_backend"),
+        "chunker_version": m.get("chunker_version"),
+        "schema_version": m.get("schema_version"),
+    }
+
+
+def check_index_compatibility(collection: chromadb.Collection = None) -> Optional[str]:
+    """Return a human-readable problem description, or None when consistent.
+
+    Called at startup so a model or chunker change is loud instead of silent.
+    Unstamped legacy chunks are reported (they may predate any change) but are
+    not treated as a hard mismatch — there is nothing to compare them against.
+    """
+    fp = index_fingerprint(collection)
+    if fp is None:
+        return None  # empty collection: nothing to be incompatible with
+    if fp["embed_model"] is None:
+        return ("indexed chunks carry no embedding provenance (written before "
+                "version stamping); re-ingest to make future model changes detectable")
+    problems = []
+    if fp["embed_model"] != config.EMBEDDING_MODEL_NAME:
+        problems.append(f"embedding model {fp['embed_model']!r} indexed vs "
+                        f"{config.EMBEDDING_MODEL_NAME!r} configured")
+    if fp["embed_dim"] != config.EMBEDDING_DIMENSION:
+        problems.append(f"embedding dimension {fp['embed_dim']} indexed vs "
+                        f"{config.EMBEDDING_DIMENSION} configured")
+    if fp["chunker_version"] != CHUNKER_VERSION:
+        problems.append(f"chunker version {fp['chunker_version']} indexed vs "
+                        f"{CHUNKER_VERSION} configured")
+    # Same model id, different weights. int8 and fp32 vectors are not comparable,
+    # and without this the model-name check above would call the pair consistent.
+    # Only meaningful once the model is loaded — 'unloaded' means we cannot tell
+    # yet, and guessing would produce a spurious warning at import time.
+    current_backend = _embed_backend()
+    if (fp["embed_backend"] and current_backend not in ("unloaded", "unknown")
+            and fp["embed_backend"] != current_backend):
+        problems.append(f"embedding backend {fp['embed_backend']!r} indexed vs "
+                        f"{current_backend!r} configured (same model, different "
+                        "weights — the vectors are not comparable)")
+    if not problems:
+        return None
+    return ("; ".join(problems) +
+            " — queries will compare vectors from different embedding spaces, "
+            "which silently degrades retrieval. Re-ingest the corpus.")
+
+
 def add_documents(
     texts: List[str],
     embeddings: np.ndarray,
@@ -134,7 +289,15 @@ def add_documents(
     """
     if collection is None:
         collection = get_or_create_collection()
-    
+
+    # Stamp provenance on every chunk. Nothing recorded WHICH model produced a
+    # vector, so swapping the embedding model — or changing the per-section chunk
+    # sizes — silently mixed incompatible vectors into one collection. Cosine
+    # distance between two different embedding spaces is meaningless but never
+    # errors, so retrieval quality just quietly degrades. See check_index_compatibility.
+    stamp = _provenance_stamp()
+    metadatas = [{**m, **stamp} for m in metadatas]
+
     # Convert embeddings to list of lists
     embeddings_list = embeddings.tolist()
     
@@ -144,14 +307,81 @@ def add_documents(
         duplicates = {k: v for k, v in Counter(ids).items() if v > 1}
         logger.error(f"Duplicate IDs detected before upsert: {duplicates}")
     
-    # Add to collection (upsert replaces existing, inserts new)
-    _chroma_call(collection.upsert,
-        documents=texts,
-        embeddings=embeddings_list,
-        metadatas=metadatas,
-        ids=ids
-    )
-    
+    # Add to collection (upsert replaces existing, inserts new).
+    #
+    # Batched, with a write-sized timeout. _chroma_call defaults to 5s, which is
+    # right for a query and badly wrong for a bulk write: a whole corpus in one
+    # upsert (1359 chunks x 1024 dims) blew past it and raised — AFTER ~27
+    # minutes of embedding. The write itself had actually succeeded, because a
+    # timed-out call keeps running and merely stops being waited on, so the data
+    # landed while the caller saw a failure and skipped the ingest-log write.
+    #
+    # Batching bounds each individual wait, rather than scaling one timeout to
+    # the largest corpus anyone might ever ingest, and keeps peak memory flat.
+    # Batching reintroduces a failure mode a single upsert did not have: an
+    # exception on batch 3 leaves batches 1-2 committed, the caller never reaches
+    # its ingest-log write, and a later replay silently omits chunks that are
+    # still searchable in ChromaDB — exactly the divergence the log exists to
+    # prevent. So a failed write is rolled back, restoring all-or-nothing.
+    batch = max(1, config.CHROMA_UPSERT_BATCH)
+    # Which of these ids the collection ALREADY holds. An upsert replaces those
+    # rows, so deleting them during a rollback would destroy content the ingest
+    # log still records — divergence in the more damaging direction, since
+    # retrieval silently loses chunks nothing flags as missing. Rollback removes
+    # only rows this call created.
+    try:
+        preexisting = set(_chroma_call(collection.get, ids=list(ids), include=[],
+                                       timeout=config.CHROMA_WRITE_TIMEOUT_S).get("ids", []))
+    except Exception:
+        preexisting = set()
+        logger.warning("Could not check which ids already exist; a rollback would "
+                       "delete overwritten rows too", exc_info=True)
+
+    written: List[str] = []
+    attempted: List[str] = []
+    try:
+        for start in range(0, len(ids), batch):
+            sl = slice(start, start + batch)
+            # Counted as attempted BEFORE the call: a timed-out _chroma_call is
+            # not cancelled, it just stops being waited on, so its batch can
+            # still land afterwards and must be rolled back as well.
+            attempted.extend(ids[sl])
+            _chroma_call(collection.upsert,
+                documents=texts[sl],
+                embeddings=embeddings_list[sl],
+                metadatas=metadatas[sl],
+                ids=ids[sl],
+                timeout=config.CHROMA_WRITE_TIMEOUT_S,
+            )
+            written.extend(ids[sl])
+            if len(ids) > batch:
+                logger.info("  upserted %d/%d chunks", len(written), len(ids))
+    except Exception:
+        orphans = [i for i in attempted if i not in preexisting]
+        overwritten = [i for i in attempted if i in preexisting]
+        if overwritten:
+            logger.error("Upsert failed with %d chunks already overwritten in place. "
+                         "They are kept (deleting them would lose content the ingest "
+                         "log still records) but now hold text this run never logged. "
+                         "Re-ingest this paper. First ids: %s",
+                         len(overwritten), overwritten[:5])
+        if orphans:
+            logger.error("Upsert failed after %d/%d chunks; rolling back %d newly "
+                         "created chunks so the store cannot hold chunks the ingest "
+                         "log will not record", len(written), len(ids), len(orphans))
+            try:
+                _chroma_call(collection.delete, ids=orphans,
+                             timeout=config.CHROMA_WRITE_TIMEOUT_S)
+            except Exception:
+                # Rollback itself failed: say so loudly and name the ids, because
+                # the store now genuinely diverges from the log and only a
+                # reindex can reconcile it.
+                logger.error("ROLLBACK FAILED — %d orphaned chunks remain in the "
+                             "collection and are absent from the ingest log. Run "
+                             "reindex.py --backfill-log, or re-ingest this paper. "
+                             "First ids: %s", len(orphans), orphans[:5], exc_info=True)
+        raise
+
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
 
 
@@ -267,11 +497,33 @@ def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, 
 def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) -> int:
     """
     Delete all chunks for a specific paper.
+
+    The BM25 index is updated here rather than in the route, because every
+    deletion path routes through this function — doing it per caller meant the
+    lexical index kept serving chunks of deleted papers until something happened
+    to trigger a full rebuild, so deleted papers went on being cited.
     """
     if collection is None:
         collection = get_or_create_collection()
     ids = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[])['ids']
     _chroma_call(collection.delete, where={'paper_id': paper_id})
+    if ids:
+        try:
+            import bm25_search
+            bm25_search.remove_from_index(ids, getattr(collection, "name", None))
+        except Exception:
+            # A stale lexical index is a quality bug, not a correctness one for the
+            # delete itself — never fail the deletion over it.
+            logger.warning("BM25 index not updated after deleting %s", paper_id, exc_info=True)
+        try:
+            # The ingest log is the system of record a reindex replays from. Leaving
+            # the row behind would make a rebuild resurrect the paper we just
+            # deleted — exactly the inconsistency a system of record must prevent.
+            import persistence
+            persistence.delete_ingest_events(paper_id)
+        except Exception:
+            logger.warning("Ingest log not updated after deleting %s — a reindex would "
+                           "resurrect it", paper_id, exc_info=True)
     return len(ids)
 
 

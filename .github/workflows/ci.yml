@@ -29,6 +29,15 @@ jobs:
         # Heavy model downloads and API keys aren't available in CI, so restrict
         # to the unit markers.
         run: pytest -q -m "not integration and not network"
+      - name: Integration tests (real ChromaDB, no model downloads)
+        # These exercise the seams BETWEEN stages — prompt assembly, citation
+        # compaction, cache population, delete consistency across both indexes —
+        # which the unit suite cannot reach because it mocks every boundary.
+        # Every v2.4 patch bug was a seam defect of exactly this kind.
+        # No API key and no model download: the embedder is stubbed at its real
+        # external boundary, and everything on our side of it is real.
+        run: pytest -q -m "integration and not network" tests/integration
+
       - name: Eval gate
         # --grounding-judge jaccard (the default) is CI-safe: it scores the
         # already-committed answers_and_citations.json, no LLM/API key needed.

@@ -6,7 +6,9 @@ address (127.0.0.1, 169.254.169.254, an internal 10.x service, ...) still got
 fetched. This adds the missing DNS-resolved private-IP check.
 """
 
+from typing import Optional
 from urllib.parse import urljoin, urlparse
+import http.client
 import ipaddress
 import logging
 import os
@@ -34,25 +36,92 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 _NoRedirectOpener = urllib.request.build_opener(_NoRedirectHandler)
 
 
-def _is_private_ip(hostname: str) -> bool:
-    """Reject loopback, link-local, and private IPs after DNS resolution.
+def _is_blocked_ip(ip) -> bool:
+    """True for any address a fetch must never reach."""
+    return bool(ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified)
 
-    A hostname that fails to resolve is not itself an SSRF vector (the
-    subsequent urlopen() call will simply fail on it), so treat resolution
-    failure as "not private" rather than raising.
+
+def _resolve_public_ip(hostname: str, port: int) -> Optional[str]:
+    """Resolve `hostname` once and return a single vetted IP to connect to.
+
+    Returning the address — rather than a yes/no verdict — is what closes the
+    TOCTOU hole. The old code asked "is this hostname private?" and then let
+    urlopen() resolve the name a SECOND time, so a hostile or rebinding DNS
+    server could answer public for the check and 127.0.0.1 or 169.254.169.254
+    for the actual fetch. The connection is now pinned to exactly this address.
+
+    Returns None when the name doesn't resolve (not itself an SSRF vector — the
+    fetch would simply fail) or when it resolves to anything blocked.
     """
     try:
-        addrs = socket.getaddrinfo(hostname, None)
+        addrs = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return False
-    for family, _, _, _, sockaddr in addrs:
+        return None
+    # Every answer is inspected before any is used: returning on the first public
+    # one would let a name that resolves public-then-private through purely
+    # because of answer order, and that mix is the rebinding pattern itself.
+    chosen = None
+    for _family, _type, _proto, _canon, sockaddr in addrs:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
-        if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_reserved:
-            return True
-    return False
+        if _is_blocked_ip(ip):
+            return None
+        if chosen is None:
+            chosen = sockaddr[0]
+    return chosen
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection to a pre-resolved IP, with TLS still verified against
+    the original hostname.
+
+    `self.host` stays the hostname so SNI, certificate validation and the Host
+    header all remain correct; only the socket's destination is overridden.
+    Validating the certificate against the IP instead would break every ordinary
+    HTTPS fetch.
+    """
+
+    def __init__(self, host, *args, pinned_ip=None, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Plain-HTTP counterpart of _PinnedHTTPSConnection."""
+
+    def __init__(self, host, *args, pinned_ip=None, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+
+
+def _pinned_opener(pinned_ip: str) -> urllib.request.OpenerDirector:
+    """Opener that refuses redirects and connects only to `pinned_ip`."""
+    class _HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(
+                lambda host, **kw: _PinnedHTTPConnection(host, pinned_ip=pinned_ip, **kw), req)
+
+    class _HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            # Forward this handler's SSL context rather than letting the connection
+            # fall back to a default one — the handler's context is what carries
+            # verification settings, and silently swapping it is how a "pinning"
+            # change turns into an unverified-TLS change.
+            return self.do_open(
+                lambda host, **kw: _PinnedHTTPSConnection(host, pinned_ip=pinned_ip, **kw),
+                req, context=self._context)
+
+    return urllib.request.build_opener(_NoRedirectHandler, _HTTPHandler, _HTTPSHandler)
 
 
 def download_pdf(url: str, _redirects_left: int = _MAX_REDIRECTS) -> str | None:
@@ -65,26 +134,40 @@ def download_pdf(url: str, _redirects_left: int = _MAX_REDIRECTS) -> str | None:
     let a public, guard-passing URL 302 to an internal address and bypass the
     check entirely).
 
-    # ponytail: the private-IP check and urlopen()'s own DNS resolution are two
-    # separate lookups (TOCTOU) — a malicious/rebinding DNS server could return
-    # a public IP for the check and a private one for the actual fetch. Full
-    # fix is connection pinning (resolve once, connect to that exact IP); add
-    # it if this is ever exposed to untrusted third-party DNS at scale.
+    DNS is resolved exactly once and the connection is pinned to that address,
+    so a rebinding DNS server cannot answer public for the check and private for
+    the fetch. TLS still validates against the hostname, not the pinned IP.
+
     # ponytail: timeout=30 bounds each individual connect/read, not the total
     # transfer — a slow-drip server can hold the connection open indefinitely
     # under the byte cap. Add a wall-clock ceiling across the whole read loop
     # if this becomes a real self-DoS problem (route is auth'd + rate-limited).
     """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
+    # Parsing is inside the guard too: urlparse() itself raises on a malformed
+    # IPv6 authority ("http://[bad/"), and .port raises on a non-numeric or
+    # out-of-range port — neither of which .hostname does. This function's
+    # contract with its callers is "returns None on failure"; they treat a raise
+    # as a crash, and a background ingest task that raises here skips its
+    # reservation cleanup and its terminal job update, stranding the job as
+    # `running` forever.
+    try:
+        parsed = urlparse(url)
+        scheme = parsed.scheme
+        hostname = parsed.hostname or ""
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError as exc:
+        logger.warning("Rejected malformed URL (%s): %s", exc, url)
+        return None
+    if scheme not in ("http", "https"):
         logger.warning(f"Rejected non-HTTP(S) URL: {url}")
         return None
-    if _is_private_ip(parsed.hostname or ""):
-        logger.warning(f"Rejected private/loopback URL: {url}")
+    pinned_ip = _resolve_public_ip(hostname, port)
+    if pinned_ip is None:
+        logger.warning(f"Rejected unresolvable or private/loopback URL: {url}")
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "IndicRAG/2.0"})
     try:
-        resp = _NoRedirectOpener.open(req, timeout=30)
+        resp = _pinned_opener(pinned_ip).open(req, timeout=30)
     except urllib.error.HTTPError as e:
         if e.code in _REDIRECT_CODES:
             location = e.headers.get("Location") if e.headers else None

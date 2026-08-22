@@ -17,12 +17,17 @@ logger = logging.getLogger(__name__)
 _embedding_model = None
 _lock = threading.Lock()
 
+# Which weights are actually in use: 'unloaded' | 'fp32' | 'fp16' | 'onnx-int8'.
+# vector_store stamps this onto every chunk, because int8 and fp32 vectors of the
+# SAME model are not interchangeable and nothing else would notice them mixing.
+EMBED_BACKEND = "unloaded"
+
 
 def load_embedding_model(model_name: str = None) -> SentenceTransformer:
     """
     Load the multilingual embedding model with caching (thread-safe).
     """
-    global _embedding_model
+    global _embedding_model, EMBED_BACKEND
 
     if _embedding_model is not None:
         return _embedding_model
@@ -39,15 +44,37 @@ def load_embedding_model(model_name: str = None) -> SentenceTransformer:
 
         cache_dir = str(config.MODELS_CACHE_DIR)
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = SentenceTransformer(
-            model_name,
-            cache_folder=cache_dir,
-            device=device
-        )
+
+        # int8 ONNX on CPU only. Embedding dominates a bulk ingest — the
+        # cross-encoders were already quantized while this one still ran fp32.
+        # On GPU, fp16 (below) is both faster and more accurate than int8, so the
+        # quantized path is CPU-only by design.
+        #
+        # Fail-open, matching rerank.py and verify.py: any problem here falls back
+        # to fp32 rather than taking the system down for a speed optimization.
+        model = None
+        if device == "cpu" and config.EMBED_ONNX_INT8:
+            try:
+                import onnx_ce
+                model = onnx_ce.load(model_name, "embed", kind="bi")
+                EMBED_BACKEND = "onnx-int8"
+                logger.info("Using int8 ONNX embeddings (CPU)")
+            except Exception as e:
+                logger.warning("int8 ONNX embeddings unavailable, using fp32: %s", e)
+                model = None
+
+        if model is None:
+            model = SentenceTransformer(
+                model_name,
+                cache_folder=cache_dir,
+                device=device
+            )
+            EMBED_BACKEND = "fp32"
 
         # ponytail: model.half() on CPU silently produces NaN on many architectures
         if device == "cuda":
             model.half()
+            EMBED_BACKEND = "fp16"
             logger.info("Using float16 precision on GPU")
 
         logger.info(f"Model loaded on device: {device}")

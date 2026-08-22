@@ -20,6 +20,7 @@ by ``config.MULTIMODAL_MAX_FIGS_PER_DOC``.
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import fitz  # PyMuPDF (already a project dependency via pdf_utils)
@@ -165,18 +166,33 @@ def caption_regions(
 ) -> List[Dict[str, Any]]:
     """Caption each region (network) and build figure chunk dicts.
 
-    Parent-side only, sequential — one paper's figures at a time, no concurrent
-    fan-out at the VLM (matches ingest.py's network discipline). A region's crop
-    is written to disk only if it yields an indexable chunk, so dropped regions
-    leave no orphan PNGs.
+    Parent-side only. Captioning fans out across a small thread pool — a
+    figure-heavy paper used to serialize a dozen VLM round-trips into ingest
+    latency. Concurrency is deliberately small and bounded
+    (`config.FIGURE_CAPTION_WORKERS`): unbounded fan-out just trades a slow
+    ingest for a 429 storm that trips the LLM circuit breaker for everything
+    else running at the time.
 
-    Returns chunk dicts: {text, chunk_type, page, crop_path, caption}. Regions the
-    VLM can't describe and that also carry no caption/table text are dropped.
+    A region's crop is written to disk only if it yields an indexable chunk, so
+    dropped regions leave no orphan PNGs.
+
+    Returns chunk dicts: {text, chunk_type, page, crop_path, caption}, in region
+    order regardless of which caption finished first. Regions the VLM can't
+    describe and that also carry no caption/table text are dropped.
     """
     out_dir = config.FIGURES_DIR / _safe_id(paper_id)
     chunks: List[Dict[str, Any]] = []
-    for r in regions:
-        desc = _caption_one(r)
+
+    workers = max(1, min(config.FIGURE_CAPTION_WORKERS, len(regions))) if regions else 1
+    if workers == 1:
+        descs = [_caption_one(r) for r in regions]
+    else:
+        # map() yields results in submission order, so chunk order still follows
+        # page/figure order and does not depend on completion order.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vlm-caption") as pool:
+            descs = list(pool.map(_caption_one, regions))
+
+    for r, desc in zip(regions, descs):
         parts = [p for p in (r["caption"], desc, r["table_md"]) if p]
         body = "\n".join(parts).strip()
         if not body:
