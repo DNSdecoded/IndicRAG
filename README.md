@@ -39,6 +39,17 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Unbounded LLM spend closed.** `POST /report` and `POST /watch/{id}/run` each start a full LLM workload and had no rate limit; either could drain the shared quota for every other user.
 * **Concurrent turns no longer lose each other.** Two requests on one session both read history at length N and both appended, so each answer was blind to the other. A per-session lock now spans read → generate → append.
 
+### v2.5 patch — correctness fixes
+
+* **A timed-out upsert no longer escapes rollback.** The ChromaDB write timeout cannot cancel work already in flight, so a batch that timed out could still commit after the failure handler ran, leaving chunks searchable that no ingest-log record covers. Batch ids are now recorded *before* the call, so rollback covers the in-flight batch.
+* **Rollback stopped deleting pre-existing chunks.** A failed batch rolled back every id it had written, including ids that already held content from an earlier ingest — deleting rows the ingest log still records. A pre-flight probe now separates rows this call created (deleted) from rows it overwrote (kept, and logged loudly for re-ingest).
+* **A failed watch run no longer wedges the watch forever.** Scheduling read `next_run` from the JSON blob while claiming compared the column, so one failure left the two divergent and every later claim failed. Both are now updated in a single statement.
+* **BM25 index integrity.** Misaligned `ids`/`texts` raise instead of being silently truncated by `zip()`; `save_index` snapshots under the index lock; and `invalidate()` deletes the persisted caches, since chunk ids are positional and a reused id would otherwise resurrect stale text.
+* **Tags filtering works in degraded mode.** Sparse-only retrieval fetched exactly `top_k` ids and filtered afterwards, so a tag query could come back empty; it now over-fetches and pushes the filter into ChromaDB.
+* **The Gemini thinking-config ladder is bounded.** Retries classify the rejection before climbing and cannot loop.
+* **SSRF guard inspects every DNS answer**, not just the first.
+* **Agent streams hold the session turn lock** for the whole stream, and a disconnect stops the graph instead of letting it run on.
+
 ### v2.5 — breaking change
 
 `POST /watch` no longer treats `user_id` as an identity. It is a display label; authorization comes from the API key. Clients that relied on reading another user's watches by passing their `user_id` will now receive `[]` — that is the fix, not a regression.
@@ -491,7 +502,7 @@ Key settings (all overridable via environment variables):
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
 | `LLM_MODEL_NAME` | `gemini-3.7-flash` | Gemini model for generation |
 | `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,anthropic/claude-haiku,openai/gpt-5.4-nano` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
@@ -705,9 +716,12 @@ rather than a re-ingest:
 ```bash
 python reindex.py --check          # report drift between the log and current config
 python reindex.py --dry-run        # show what a rebuild would do
-python reindex.py                  # rebuild the live collection
+python reindex.py --yes            # rebuild the live collection (destructive)
 python reindex.py --into staging   # rebuild elsewhere, verify, then switch
 ```
+
+A rebuild resets the target collection before replaying, so rebuilding the *live*
+collection without `--yes` refuses and says so. `--into staging` needs no flag.
 
 Replay **re-embeds** recorded chunks; it does not re-chunk. So it implements an
 embedding-model change and **not** a chunker change — a chunker change needs a real
