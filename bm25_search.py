@@ -254,18 +254,22 @@ def save_index(coll_name: str = None) -> bool:
         path = _cache_path(name)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "format": _CACHE_FORMAT,
-                "k1": idx.k1,
-                "b": idx.b,
-                "doc_ids": idx.doc_ids,
-                "doc_lens": idx.doc_lens,
-                "postings": {t: [list(p) for p in ps] for t, ps in idx.postings.items()},
-                "deleted": sorted(idx._deleted),
-                "total_len": idx._total_len,
-                "id_fingerprint": _id_fingerprint(
-                    [d for i, d in enumerate(idx.doc_ids) if i not in idx._deleted]),
-            }
+            # Snapshot under the index's own lock: a concurrent add_documents
+            # between reading doc_ids and reading postings would serialise a
+            # payload that never existed.
+            with idx._lock:
+                payload = {
+                    "format": _CACHE_FORMAT,
+                    "k1": idx.k1,
+                    "b": idx.b,
+                    "doc_ids": list(idx.doc_ids),
+                    "doc_lens": list(idx.doc_lens),
+                    "postings": {t: [list(p) for p in ps] for t, ps in idx.postings.items()},
+                    "deleted": sorted(idx._deleted),
+                    "total_len": idx._total_len,
+                    "id_fingerprint": _id_fingerprint(
+                        [d for i, d in enumerate(idx.doc_ids) if i not in idx._deleted]),
+                }
             tmp = path.with_suffix(".tmp")
             with gzip.open(tmp, "wt", encoding="utf-8") as f:
                 json.dump(payload, f, separators=(",", ":"))
@@ -330,6 +334,11 @@ def add_to_index(ids: List[str], texts: List[str], collection_name: str = None) 
     """
     if not ids:
         return True
+    if len(ids) != len(texts):
+        # zip() would silently drop the tail and leave the index quietly short of
+        # the collection — a wrong index is worse than a failed ingest.
+        raise ValueError(
+            f"add_to_index got {len(ids)} ids but {len(texts)} texts")
     with _lock:
         if collection_name is not None:
             targets = [_indices[collection_name]] if collection_name in _indices else []
@@ -368,4 +377,13 @@ def invalidate():
     """
     global _indices
     with _lock:
+        names = list(_indices)
         _indices = {}
+    # Drop the on-disk copies too. The id fingerprint catches a changed corpus,
+    # but not text edited under unchanged ids (reindex), so a surviving file
+    # could be reloaded and serve the old text.
+    for name in names:
+        try:
+            _cache_path(name).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not delete BM25 cache for '%s'", name, exc_info=True)

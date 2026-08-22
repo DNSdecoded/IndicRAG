@@ -20,7 +20,7 @@ Usage
 -----
     python reindex.py --check          # report drift, change nothing
     python reindex.py --dry-run        # show what a rebuild would do
-    python reindex.py                  # rebuild into the live collection
+    python reindex.py --yes            # rebuild into the live collection (destructive)
     python reindex.py --into staging   # rebuild into a different collection first
 """
 
@@ -116,7 +116,8 @@ def _drift_report(events: list) -> list:
     return problems
 
 
-def reindex(collection_name: str, dry_run: bool, batch_size: int) -> int:
+def reindex(collection_name: str, dry_run: bool, batch_size: int,
+            confirm: bool = False) -> int:
     import bm25_search
     import embeddings
     import persistence
@@ -142,6 +143,14 @@ def reindex(collection_name: str, dry_run: bool, batch_size: int) -> int:
                         e["paper_id"], len(e["chunks"]), e["embed_model"] or "unknown model")
         logger.info("Dry run — nothing written.")
         return 0
+
+    # reset=True wipes whatever is there, and the default target is the live
+    # collection — so destroying production must be typed out, not defaulted into.
+    if collection_name == config.COLLECTION_NAME and not confirm:
+        logger.error("Refusing to reset the LIVE collection '%s' without --yes. "
+                     "Build into a staging collection with --into NAME, or pass "
+                     "--yes if you really mean to replace it.", collection_name)
+        return 2
 
     # Rebuild into a fresh collection. reset=True because a replay must produce
     # exactly the logged contents: merging into an existing collection would keep
@@ -182,6 +191,8 @@ def main() -> int:
     ap.add_argument("--check", action="store_true",
                     help="report drift between the log and the current config, then exit")
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--yes", action="store_true",
+                    help="confirm resetting the live collection")
     ap.add_argument("--backfill-log", action="store_true",
                     help="rebuild the ingest log from chunks already in the collection")
     args = ap.parse_args()
@@ -191,9 +202,8 @@ def main() -> int:
     if args.backfill_log:
         return 0 if backfill_log_from_collection(args.into or config.COLLECTION_NAME) else 2
 
-    events = persistence.get_ingest_events()
-
     if args.check:
+        events = persistence.get_ingest_events()
         if not events:
             logger.warning("Ingest log is empty — nothing recorded yet.")
             return 1
@@ -206,7 +216,8 @@ def main() -> int:
             logger.info("No drift: the log agrees with the current configuration.")
         return 1 if problems else 0
 
-    return reindex(args.into or config.COLLECTION_NAME, args.dry_run, args.batch_size)
+    return reindex(args.into or config.COLLECTION_NAME, args.dry_run, args.batch_size,
+                   confirm=args.yes)
 
 
 if __name__ == "__main__":

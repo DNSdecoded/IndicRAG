@@ -227,6 +227,31 @@ def test_the_rejection_is_remembered_so_only_one_call_pays_for_it():
     assert ("gemini-3.7-flash", "MINIMAL") in GeminiBackend._level_rejected
 
 
+def test_a_budget_rejection_followed_by_a_level_rejection_keeps_climbing():
+    """The two refusals chain: the budget translates to MINIMAL, and a model that
+    also refuses MINIMAL must advance up the ladder rather than fail the call."""
+    from google.genai import types
+    from providers.gemini import GeminiBackend
+
+    class _RejectsBoth(_RejectsLevel):
+        def generate_content(self, model=None, contents=None, config=None):
+            tc = getattr(config, "thinking_config", None)
+            if getattr(tc, "thinking_budget", None) is not None:
+                self.levels_seen.append("BUDGET")
+                raise RuntimeError("400 INVALID_ARGUMENT. Request contains an invalid argument.")
+            return super().generate_content(model=model, contents=contents, config=config)
+
+    GeminiBackend._level_rejected.clear()
+    b = GeminiBackend()
+    b._zero_budget_rejected = set()
+    client = _RejectsBoth()
+    cfg = types.GenerateContentConfig(
+        max_output_tokens=16, thinking_config=types.ThinkingConfig(thinking_budget=0))
+    out = b.generate("gemini-3.7-flash", "q", cfg, client=client)
+    assert out.text == "ok"
+    assert client.levels_seen == ["BUDGET", "MINIMAL", "LOW"]
+
+
 def test_rejection_is_learned_per_model_not_globally():
     """3.6-flash accepts MINIMAL; 3.7 refusing it must not change 3.6's behavior."""
     b = _fresh_backend()

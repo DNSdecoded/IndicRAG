@@ -486,9 +486,14 @@ def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool
     watch becomes due again. run_watch rewrites next_run properly on success.
     """
     with _db_lock:
+        # The JSON copy moves with the column. due_watches reads the row but
+        # claim_watch compares the column, so leaving data.next_run behind after a
+        # failed run means every later claim compares the stale value against the
+        # lease and fails — the watch never runs again.
         cur = _conn.execute(
-            "UPDATE watches SET next_run = ? WHERE id = ? AND next_run = ?",
-            (lease_until, watch_id, expected_next_run),
+            "UPDATE watches SET next_run = ?, data = json_set(data, '$.next_run', ?) "
+            "WHERE id = ? AND next_run = ?",
+            (lease_until, lease_until, watch_id, expected_next_run),
         )
         _conn.commit()
         return cur.rowcount == 1
@@ -516,7 +521,7 @@ def save_report(report_id: str, watch_id: str, topic: str, language: str,
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET topic=excluded.topic, language=excluded.language, "
             "markdown=excluded.markdown, citation_count=excluded.citation_count, "
-            "created_at=excluded.created_at",
+            "created_at=excluded.created_at, owner=excluded.owner",
             (report_id, watch_id, topic, language, markdown, citation_count, created_at, owner),
         )
         _conn.commit()

@@ -140,6 +140,28 @@ def job_lease() -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=config.JOB_LEASE_SECONDS)).isoformat()
 
 
+_last_lease_touch: Dict[str, float] = {}
+
+
+def touch_job_lease(job_id: str, min_interval: float = 60.0) -> None:
+    """Renew a running job's lease from a progress callback.
+
+    Progress is otherwise in-memory only, so a job whose steps take longer than
+    JOB_LEASE_SECONDS between _update_job calls looks abandoned to the startup
+    reaper while it is still working. Throttled, because progress fires per
+    paper/section and SQLite should not be written on every tick.
+    """
+    now = time.monotonic()
+    with _jobs_lock:
+        if now - _last_lease_touch.get(job_id, 0.0) < min_interval:
+            return
+        job = _jobs.get(job_id)
+        if job is None or job.get("status") in ("success", "failed"):
+            return
+        _last_lease_touch[job_id] = now
+        persistence.save_job(job_id, job, lease_until=job_lease())
+
+
 def _update_job(job_id: str, **kwargs):
     """Thread-safe update of a job's fields; evicts completed jobs once per hour.
 
@@ -192,7 +214,7 @@ _turn_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValu
 _turn_locks_guard = threading.Lock()
 
 
-def session_turn_lock(session_id: str) -> asyncio.Lock:
+def session_turn_lock(session_id: str | None) -> asyncio.Lock:
     """One lock per session, serializing a whole conversational turn.
 
     A turn is read-history -> generate -> append, and generation takes seconds.
@@ -205,6 +227,11 @@ def session_turn_lock(session_id: str) -> asyncio.Lock:
     WeakValueDictionary so a lock disappears once no turn holds or awaits it;
     the strong reference lives in the caller's `async with`.
     """
+    if not session_id:
+        # A request that brings no session id shares no history with anything, so
+        # it needs no mutual exclusion. Keying them all on one literal made every
+        # new conversation in the process queue behind every other one.
+        return asyncio.Lock()
     with _turn_locks_guard:
         lock = _turn_locks.get(session_id)
         if lock is None:

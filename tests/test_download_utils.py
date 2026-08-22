@@ -72,6 +72,9 @@ def test_a_host_resolving_to_both_public_and_private_is_refused():
     mixed = _addr("127.0.0.1") + _addr("93.184.216.34")
     with patch("socket.getaddrinfo", return_value=mixed):
         assert _resolve_public_ip("rebind.example", 80) is None
+    # Answer order must not decide it: the public address first is the same host.
+    with patch("socket.getaddrinfo", return_value=list(reversed(mixed))):
+        assert _resolve_public_ip("rebind.example", 80) is None
 
 
 @pytest.mark.parametrize("ip", ["0.0.0.0", "224.0.0.1", "::1", "fe80::1", "192.168.1.1"])

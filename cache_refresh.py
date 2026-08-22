@@ -19,8 +19,11 @@ def _post_ingest_refresh(new_ids=None, new_texts=None):
     """
     try:
         import bm25_search
-        if new_ids and bm25_search.add_to_index(list(new_ids), list(new_texts or [])):
-            logger.debug("BM25 index updated incrementally (+%d chunks)", len(new_ids))
+        ids, texts = list(new_ids or []), list(new_texts or [])
+        # Misaligned lists mean the caller lost track of which text belongs to
+        # which chunk; rebuild from the collection instead of indexing garbage.
+        if ids and len(ids) == len(texts) and bm25_search.add_to_index(ids, texts):
+            logger.debug("BM25 index updated incrementally (+%d chunks)", len(ids))
             # Re-persist off-thread: the in-memory index just moved ahead of the
             # saved copy, and a stale file only costs a rebuild on next start.
             threading.Thread(target=bm25_search.save_index, daemon=True).start()

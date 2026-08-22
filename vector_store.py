@@ -51,8 +51,9 @@ def _chroma_record_failure() -> None:
         _circuit_failures += 1
         if _circuit_failures >= _CIRCUIT_TRIP_AFTER:
             _circuit_until = time.monotonic() + _CIRCUIT_COOLDOWN
+            failures, _circuit_failures = _circuit_failures, 0  # fresh streak after the cooldown
             logger.error("ChromaDB circuit OPEN for %.0fs after %d consecutive timeouts",
-                         _CIRCUIT_COOLDOWN, _circuit_failures)
+                         _CIRCUIT_COOLDOWN, failures)
             try:
                 import metrics
                 metrics.record_circuit_trip("chromadb")
@@ -294,7 +295,8 @@ def add_documents(
     # sizes — silently mixed incompatible vectors into one collection. Cosine
     # distance between two different embedding spaces is meaningless but never
     # errors, so retrieval quality just quietly degrades. See check_index_compatibility.
-    metadatas = [{**m, **_provenance_stamp()} for m in metadatas]
+    stamp = _provenance_stamp()
+    metadatas = [{**m, **stamp} for m in metadatas]
 
     # Convert embeddings to list of lists
     embeddings_list = embeddings.tolist()
@@ -322,10 +324,28 @@ def add_documents(
     # still searchable in ChromaDB — exactly the divergence the log exists to
     # prevent. So a failed write is rolled back, restoring all-or-nothing.
     batch = max(1, config.CHROMA_UPSERT_BATCH)
+    # Which of these ids the collection ALREADY holds. An upsert replaces those
+    # rows, so deleting them during a rollback would destroy content the ingest
+    # log still records — divergence in the more damaging direction, since
+    # retrieval silently loses chunks nothing flags as missing. Rollback removes
+    # only rows this call created.
+    try:
+        preexisting = set(_chroma_call(collection.get, ids=list(ids), include=[],
+                                       timeout=config.CHROMA_WRITE_TIMEOUT_S).get("ids", []))
+    except Exception:
+        preexisting = set()
+        logger.warning("Could not check which ids already exist; a rollback would "
+                       "delete overwritten rows too", exc_info=True)
+
     written: List[str] = []
+    attempted: List[str] = []
     try:
         for start in range(0, len(ids), batch):
             sl = slice(start, start + batch)
+            # Counted as attempted BEFORE the call: a timed-out _chroma_call is
+            # not cancelled, it just stops being waited on, so its batch can
+            # still land afterwards and must be rolled back as well.
+            attempted.extend(ids[sl])
             _chroma_call(collection.upsert,
                 documents=texts[sl],
                 embeddings=embeddings_list[sl],
@@ -337,12 +357,20 @@ def add_documents(
             if len(ids) > batch:
                 logger.info("  upserted %d/%d chunks", len(written), len(ids))
     except Exception:
-        if written:
-            logger.error("Upsert failed after %d/%d chunks; rolling back so the "
-                         "store cannot hold chunks the ingest log will not record",
-                         len(written), len(ids))
+        orphans = [i for i in attempted if i not in preexisting]
+        overwritten = [i for i in attempted if i in preexisting]
+        if overwritten:
+            logger.error("Upsert failed with %d chunks already overwritten in place. "
+                         "They are kept (deleting them would lose content the ingest "
+                         "log still records) but now hold text this run never logged. "
+                         "Re-ingest this paper. First ids: %s",
+                         len(overwritten), overwritten[:5])
+        if orphans:
+            logger.error("Upsert failed after %d/%d chunks; rolling back %d newly "
+                         "created chunks so the store cannot hold chunks the ingest "
+                         "log will not record", len(written), len(ids), len(orphans))
             try:
-                _chroma_call(collection.delete, ids=written,
+                _chroma_call(collection.delete, ids=orphans,
                              timeout=config.CHROMA_WRITE_TIMEOUT_S)
             except Exception:
                 # Rollback itself failed: say so loudly and name the ids, because
@@ -351,7 +379,7 @@ def add_documents(
                 logger.error("ROLLBACK FAILED — %d orphaned chunks remain in the "
                              "collection and are absent from the ingest log. Run "
                              "reindex.py --backfill-log, or re-ingest this paper. "
-                             "First ids: %s", len(written), written[:5], exc_info=True)
+                             "First ids: %s", len(orphans), orphans[:5], exc_info=True)
         raise
 
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")

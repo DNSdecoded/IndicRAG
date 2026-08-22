@@ -471,7 +471,7 @@ _raw_selectable = os.getenv(
     # The cross-vendor slugs matter beyond user choice: failover picks a "/"-shaped
     # slug from this list, so an all-Gemini list would leave nothing to fail over to.
     "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
-    "anthropic/claude-haiku,openai/gpt-5.4-nano",
+    "anthropic/claude-haiku-4.5,openai/gpt-5.4-nano",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
 # How long the enriched OpenRouter /models catalog is cached (seconds).

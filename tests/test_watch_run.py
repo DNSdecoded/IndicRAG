@@ -332,3 +332,26 @@ def test_claim_parks_next_run_so_a_dead_claimer_cannot_wedge_the_watch():
         assert wid in {w["id"] for w in persistence.due_watches("2026-01-01T02:00:00+00:00")}
     finally:
         persistence.delete_watch(wid)
+
+
+def test_a_failed_run_can_be_reclaimed_after_the_lease_expires():
+    """The retry path: nothing rewrites next_run after a failed run, so the row
+    the poller reads must already carry the lease — otherwise the second claim
+    compares a stale next_run and the watch is wedged for good."""
+    import uuid
+    import persistence
+
+    wid = str(uuid.uuid4())
+    due_at = "2026-01-01T00:00:00+00:00"
+    lease = "2026-01-01T01:00:00+00:00"
+    _seed_watch(persistence, wid, due_at)
+    try:
+        assert persistence.claim_watch(wid, due_at, lease) is True
+        # run fails: next_run is never rewritten, the lease just expires
+        again = [w for w in persistence.due_watches("2026-01-01T02:00:00+00:00")
+                 if w["id"] == wid]
+        assert again and again[0]["next_run"] == lease
+        assert persistence.claim_watch(
+            wid, again[0]["next_run"], "2026-01-01T03:00:00+00:00") is True
+    finally:
+        persistence.delete_watch(wid)

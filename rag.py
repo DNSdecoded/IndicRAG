@@ -532,9 +532,9 @@ def _sparse_only_retrieval(user_query: str, top_k: int, collection,
     no BM25 index because the corpus is empty) so the caller can re-raise the
     original failure rather than serve a silently empty answer.
 
-    The result carries `degraded='sparse_only'` and logs at WARNING. Note that no
-    route reads that key yet — surfacing it in the API response is still to do, so
-    for now degradation is visible in the logs but not to the end user.
+    The result carries `degraded='sparse_only'` and logs at WARNING; /query and
+    /chat pass it through to the response and the SSE done event, so a degraded
+    answer is never mistaken for a normal one.
     """
     if not config.USE_HYBRID_SEARCH:
         return None
@@ -543,11 +543,20 @@ def _sparse_only_retrieval(user_query: str, top_k: int, collection,
         idx = bm25_search.get_or_build_index(collection)
         if idx is None:
             return None
-        ids, _scores = idx.search(user_query, top_k=top_k)
+        # Tags are post-filtered, so ask BM25 for the same widened set the dense
+        # path uses; taking exactly top_k here would leave too few after filtering.
+        search_k = top_k
+        if tags_post_filter:
+            search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+        ids, _scores = idx.search(user_query, top_k=search_k)
         if not ids:
             return None
+        # BM25 knows nothing about metadata filters — a paper-scoped or
+        # tag-filtered query must not quietly widen just because the dense leg
+        # is down, so the filter is applied on the fetch.
         got = vector_store._chroma_call(
-            collection.get, ids=ids, include=['documents', 'metadatas'])
+            collection.get, ids=ids, where=filter_dict or None,
+            include=['documents', 'metadatas'])
     except Exception as e:
         logger.error(f"Sparse-only fallback failed too: {e}", exc_info=True)
         return None
@@ -1005,6 +1014,12 @@ def answer_question_strategy_a(
         'language_name': lang_name,
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
+        # The exact context this answer was written from. Callers that need to
+        # resolve a citation marker back to a chunk (the eval harness) must use
+        # this and not a second retrieve_context call — strategy B retrieves on
+        # the TRANSLATED query, so a re-run does not reproduce it.
+        'context': {'metadatas': context_data.get('metadatas', []),
+                    'chunks': context_data.get('chunks', [])},
         # None on the normal path; 'sparse_only' when the dense leg was
         # unavailable and this answer came from BM25 alone.
         'degraded': context_data.get('degraded'),
@@ -1109,6 +1124,8 @@ def answer_question_strategy_b(
         'chunks_used': context_data['chunks_used'],
         'citations': citations,
         'english_answer': english_answer,
+        'context': {'metadatas': context_data.get('metadatas', []),
+                    'chunks': context_data.get('chunks', [])},
         'degraded': context_data.get('degraded'),
     }
     faith_result = _run_faithfulness(

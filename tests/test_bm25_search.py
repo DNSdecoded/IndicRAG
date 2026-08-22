@@ -223,6 +223,12 @@ class _Coll:
         return {"ids": list(self._docs), "documents": list(self._docs.values())}
 
 
+def _simulate_restart():
+    """Drop in-memory indices only. invalidate() also deletes the saved cache
+    (it means "the corpus moved"), which is the opposite of a restart."""
+    bm25_search._indices = {}
+
+
 @pytest.fixture
 def _cache_dir(tmp_path, monkeypatch):
     import config
@@ -239,7 +245,7 @@ def test_index_is_persisted_and_reloaded_without_rereading_the_corpus(_cache_dir
     bm25_search.get_or_build_index(coll)
     assert coll.doc_fetches == 1
 
-    bm25_search.invalidate()          # simulate a process restart
+    _simulate_restart()               # the process restarts; the file stays
     idx = bm25_search.get_or_build_index(coll)
 
     # Served from disk: the id set is re-read to prove the cache still matches
@@ -256,7 +262,7 @@ def test_reloaded_index_ranks_identically_to_a_freshly_built_one(_cache_dir):
     }
     coll = _Coll(docs)
     fresh = bm25_search.get_or_build_index(coll).search("antenna arrays", 3)
-    bm25_search.invalidate()
+    _simulate_restart()
     reloaded = bm25_search.get_or_build_index(coll).search("antenna arrays", 3)
     assert reloaded[0] == fresh[0]
     assert reloaded[1] == pytest.approx(fresh[1])
@@ -267,7 +273,7 @@ def test_stale_cache_is_ignored_when_the_corpus_changed(_cache_dir):
     trusted — serving a stale index is worse than paying for a rebuild."""
     coll = _Coll({"a": "antenna"})
     bm25_search.get_or_build_index(coll)
-    bm25_search.invalidate()
+    _simulate_restart()
 
     coll._docs["b"] = "newly ingested qubit paper"
     idx = bm25_search.get_or_build_index(coll)
@@ -279,7 +285,7 @@ def test_stale_cache_is_ignored_when_the_corpus_changed(_cache_dir):
 def test_corrupt_cache_falls_back_to_rebuild(_cache_dir):
     coll = _Coll({"a": "antenna"})
     bm25_search.get_or_build_index(coll)
-    bm25_search.invalidate()
+    _simulate_restart()
 
     bm25_search._cache_path(coll.name).write_bytes(b"not a gzip file at all")
     idx = bm25_search.get_or_build_index(coll)
@@ -293,7 +299,7 @@ def test_cache_from_an_older_format_is_ignored(_cache_dir):
     import json
     coll = _Coll({"a": "antenna"})
     bm25_search.get_or_build_index(coll)
-    bm25_search.invalidate()
+    _simulate_restart()
 
     path = bm25_search._cache_path(coll.name)
     with gzip.open(path, "rt", encoding="utf-8") as f:
@@ -330,19 +336,22 @@ def test_persistence_can_be_turned_off(tmp_path, monkeypatch):
         bm25_search.invalidate()
 
 
-def test_tombstones_survive_a_save_reload_cycle(_cache_dir):
-    """A deleted paper must stay deleted across a restart, or restarting would
-    resurrect it into the lexical index."""
+def test_a_cache_that_no_longer_matches_the_collection_is_rejected(_cache_dir):
+    """The saved index holds one live doc while Chroma still holds both, so the
+    file must be thrown away and rebuilt rather than served."""
     coll = _Coll({"a": "antenna design", "b": "antenna optimization"})
     idx = bm25_search.get_or_build_index(coll)
     idx.remove_documents(["a"])
     bm25_search.save_index(coll.name)
-    bm25_search.invalidate()
+    _simulate_restart()
 
     # count() still reports 2 rows in Chroma but the index holds 1 live doc, so
     # the staleness check correctly rejects it and rebuilds.
     reloaded = bm25_search.get_or_build_index(coll)
     assert reloaded is not None
+    # Rebuilt from the collection, so "a" is back — the point is that what gets
+    # served matches Chroma, not that the stale tombstone survives.
+    assert reloaded.search("antenna design", 5)[0][:1] == ["a"]
 
 
 def test_get_or_build_index_caches_per_collection():
@@ -369,7 +378,7 @@ def test_cache_is_rejected_when_content_changed_but_count_did_not(_cache_dir):
     differs. Loading that cache serves deleted text and misses its replacement."""
     coll = _Coll({"a1": "antenna design", "a2": "antenna results"})
     bm25_search.get_or_build_index(coll)
-    bm25_search.invalidate()
+    _simulate_restart()
 
     coll._docs = {"b1": "qubit surface codes", "b2": "qubit syndrome"}   # same count
     idx = bm25_search.get_or_build_index(coll)
@@ -381,10 +390,22 @@ def test_cache_is_rejected_when_content_changed_but_count_did_not(_cache_dir):
 def test_removing_documents_persists_the_index(_cache_dir):
     """A delete mutates the in-memory index; leaving the disk copy untouched is
     how it diverges from the collection across a restart."""
-    bm25_search.invalidate()
+    _simulate_restart()
     bm25_search._indices["persist"] = _index({"a": "antenna", "b": "qubit"})
     try:
         bm25_search.remove_from_index(["a"], "persist")
         assert bm25_search._cache_path("persist").exists()
     finally:
-        bm25_search.invalidate()
+        _simulate_restart()
+
+
+def test_invalidate_drops_the_saved_cache_too(_cache_dir):
+    """Chunk ids are positional (paper_id_section_N), so re-ingesting a changed
+    paper reuses them and the id fingerprint alone cannot spot the new text.
+    invalidate() therefore has to take the file with it."""
+    coll = _Coll({"a": "antenna"})
+    bm25_search.get_or_build_index(coll)
+    assert bm25_search._cache_path(coll.name).exists()
+
+    bm25_search.invalidate()
+    assert not bm25_search._cache_path(coll.name).exists()

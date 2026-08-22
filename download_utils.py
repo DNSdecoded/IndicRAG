@@ -58,17 +58,20 @@ def _resolve_public_ip(hostname: str, port: int) -> Optional[str]:
         addrs = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
         return None
+    # Every answer is inspected before any is used: returning on the first public
+    # one would let a name that resolves public-then-private through purely
+    # because of answer order, and that mix is the rebinding pattern itself.
+    chosen = None
     for _family, _type, _proto, _canon, sockaddr in addrs:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
         if _is_blocked_ip(ip):
-            # One bad answer condemns the host: a name resolving to both a public
-            # and a private address is the rebinding pattern itself.
             return None
-        return sockaddr[0]
-    return None
+        if chosen is None:
+            chosen = sockaddr[0]
+    return chosen
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):

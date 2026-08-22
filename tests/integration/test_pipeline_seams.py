@@ -29,6 +29,8 @@ Marked `integration`: slower than the unit suite and excluded by CI's default
 selector.
 """
 
+import zlib
+
 import numpy as np
 import pytest
 
@@ -76,7 +78,10 @@ def _fake_embed(texts):
     out = np.zeros((len(texts), dim), dtype=np.float32)
     for i, t in enumerate(texts):
         for tok in str(t).lower().split():
-            out[i, hash(tok) % dim] += 1.0
+            # crc32, not hash(): str hashing is salted per process, so bucket
+            # collisions — and with them the ranking these tests assert on —
+            # would change from run to run.
+            out[i, zlib.crc32(tok.encode("utf-8")) % dim] += 1.0
         norm = np.linalg.norm(out[i])
         if norm:
             out[i] /= norm
@@ -209,10 +214,13 @@ def test_faithfulness_receives_chunk_text_not_indices(pipeline, monkeypatch):
     out = rag.retrieve_context("antenna design", top_k=2, collection=pipeline)
     rag._run_faithfulness("Antennas shrink [1].", out["chunks"], out["metadatas"])
 
-    if "chunks" in seen:  # skipped entirely when faithfulness is disabled by config
-        assert seen["chunks"], "faithfulness ran with no chunks"
-        assert all(isinstance(c, str) for c in seen["chunks"]), \
-            f"expected chunk text, got {[type(c).__name__ for c in seen['chunks']]}"
+    # check_claims itself is patched, so the seam is exercised whatever the
+    # faithfulness config says — a conditional assert here would let the
+    # regression back in silently.
+    assert "chunks" in seen, "faithfulness never reached verify.check_claims"
+    assert seen["chunks"], "faithfulness ran with no chunks"
+    assert all(isinstance(c, str) for c in seen["chunks"]), \
+        f"expected chunk text, got {[type(c).__name__ for c in seen['chunks']]}"
 
 
 def test_an_explicit_collection_is_deliberately_not_cached(pipeline):
@@ -298,7 +306,9 @@ def test_reindex_replays_the_log_into_a_working_collection(pipeline, monkeypatch
         assert rc == 0
 
         rebuilt = vector_store.get_or_create_collection("replayed")
-        assert rebuilt.count() == len(chunks)
+        # Only this paper's rows: the ingest log is process-wide, so a total count
+        # would depend on whatever else earlier tests recorded.
+        assert len(rebuilt.get(where={"paper_id": pid}).get("ids", [])) == len(chunks)
 
         # The rebuilt collection must actually retrieve, not merely hold rows.
         out = rag.retrieve_context("antenna design neural network", top_k=3,

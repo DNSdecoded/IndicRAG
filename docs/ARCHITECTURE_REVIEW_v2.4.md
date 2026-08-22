@@ -5,8 +5,9 @@
 > Revision 2 folds in a second review pass; items marked **[R2]** came from it, and
 > §H records the recommendations that were checked and declined.
 >
-> Where this document and `README.md` disagree on a default, the code wins — the README's
-> `AGENT_TIMEOUT` "default 120" is stale (`config.py:314` sets 300).
+> Where this document and `README.md` disagree on a default, the code wins. (The README's
+> stale `AGENT_TIMEOUT` "default 120" was corrected after this review; both it and the code
+> now say 300.)
 
 ## Fix status
 
@@ -25,8 +26,9 @@ Items closed in the first implementation pass (318 unit tests green, 37 new):
 | **F5** migrations | **Partial** | `persistence._ensure_column` — idempotent `ADD COLUMN` only; a versioned runner is still needed for anything that backfills or transforms |
 | **F6a** BM25 test coverage | **Fixed** | `tests/test_bm25_search.py` — lands before the B2 rewrite |
 
-Known gap from this pass: the `degraded` marker is logged but not yet surfaced in any API
-response, so a sparse-only answer is visible to operators and not to end users.
+~~Known gap from this pass: the `degraded` marker is logged but not yet surfaced in any API
+response.~~ **Closed:** `degraded` is on `QueryResponse` (`routes/query.py:119`),
+`ChatResponse` (`routes/chat.py:68`) and the SSE `done` event on both streaming routes.
 
 **System as built:** single uvicorn process (`workers=1`), embedded ChromaDB (`PersistentClient` on a local dir), in-memory BM25 index, three process-local TTL caches, one SQLite connection behind one global lock, in-process asyncio watch scheduler, in-process ingest jobs, ~6 GB of models resident. Everything is one node with node-local state.
 
@@ -108,7 +110,7 @@ That is a coherent single-node design. Nearly every finding below follows from o
 
 **Change:** a global `asyncio.Semaphore` (or bounded threadpool) around agentic query / rerank / NLI, sized to cores. Over the limit, return 503 with `Retry-After` immediately.
 
-**Problem:** rate limiting (`deps.limiter`) counts requests, not concurrent work. An agent query can hold a thread for `AGENT_TIMEOUT` — **300s**, per `config.py:314`, not the 120 the README claims — while running cross-encoder + NLI + contradiction detection (up to 56 NLI passes). Twenty concurrent agent queries on an 8-core box means every one of them thrashes and times out — the classic failure where the system does maximum work and returns zero successful responses. A five-minute per-thread hold makes this materially worse than the README's numbers suggest.
+**Problem:** rate limiting (`deps.limiter`) counts requests, not concurrent work. An agent query can hold a thread for `AGENT_TIMEOUT` — **300s** — while running cross-encoder + NLI + contradiction detection (up to 56 NLI passes). Twenty concurrent agent queries on an 8-core box means every one of them thrashes and times out — the classic failure where the system does maximum work and returns zero successful responses. A five-minute per-thread hold makes this materially worse than the README's numbers suggest.
 
 **Benefit:** bounded, predictable p99 under overload; some requests shed fast instead of all failing slow.
 

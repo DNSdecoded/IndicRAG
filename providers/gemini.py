@@ -284,26 +284,36 @@ class GeminiBackend(LLMBackend):
             )
         return True
 
+    def _next_config(self, model: str, call_config, exc: Exception):
+        """Config to retry `exc` with, or None when the failure is not ours.
+
+        Two distinct refusals: a legacy budget this model no longer accepts, and
+        a level it does not offer. They chain — a budget rejection translates to
+        MINIMAL, which the same model may also refuse — so each failure is
+        reclassified rather than retried once and given up on.
+        """
+        if self._remember_zero_budget_rejection(model, call_config, exc):
+            return self._translate_thinking(call_config)
+        if self._remember_level_rejection(model, call_config, exc):
+            return self._escalate_level(call_config)
+        return None
+
     # ── single-client calls (dispatch/failover lives in llm_client) ─────
     def generate(self, model: str, contents, gen_config, client=None):
         client = client or self.pool[self.next_client_idx()]
         call_config = self._prep_config(client, model, gen_config)
-        try:
-            return client.models.generate_content(model=model, contents=contents, config=call_config)
-        except Exception as exc:
-            # Two distinct refusals, each retried once: a legacy budget this model
-            # no longer accepts, and a level it does not offer.
-            if self._remember_zero_budget_rejection(model, call_config, exc):
-                retry_config = self._translate_thinking(call_config)
-            elif self._remember_level_rejection(model, call_config, exc):
-                retry_config = self._escalate_level(call_config)
-            else:
-                raise
-            if retry_config is None:
-                raise
-            return client.models.generate_content(
-                model=model, contents=contents, config=retry_config,
-            )
+        # Bounded: each retry climbs the ladder, and past the top thinking is
+        # dropped, after which no rejection classifies and the error propagates.
+        for _ in range(len(self._LEVEL_LADDER) + 2):
+            try:
+                return client.models.generate_content(
+                    model=model, contents=contents, config=call_config)
+            except Exception as exc:
+                retry_config = self._next_config(model, call_config, exc)
+                if retry_config is None:
+                    raise
+                call_config = retry_config
+        raise RuntimeError("Gemini thinking-config retries did not converge")
 
     def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
         client = client or self.stream_pool[self.next_client_idx()]
@@ -330,25 +340,23 @@ class GeminiBackend(LLMBackend):
                 logger.warning("Gemini stream hit max_output_tokens for %s — answer truncated", model)
                 yield TRUNCATION_NOTE
 
-        try:
-            yield from _iter(call_config)
-        except Exception as exc:
-            # A zero-budget rejection is refused before any token is produced, so
-            # retrying the stream here is safe. Once text has been emitted the
-            # error is something else and must propagate.
-            # `emitted` guard: once bytes are out, a retry would duplicate the
-            # answer's opening. Same two refusal kinds as the unary path.
-            if emitted:
-                raise
-            if self._remember_zero_budget_rejection(model, call_config, exc):
-                retry_config = self._translate_thinking(call_config)
-            elif self._remember_level_rejection(model, call_config, exc):
-                retry_config = self._escalate_level(call_config)
-            else:
-                raise
-            if retry_config is None:
-                raise
-            yield from _iter(retry_config)
+        for _ in range(len(self._LEVEL_LADDER) + 2):
+            try:
+                yield from _iter(call_config)
+                break
+            except Exception as exc:
+                # A thinking-config rejection is refused before any token is
+                # produced, so retrying the stream here is safe.
+                # `emitted` guard: once bytes are out, a retry would duplicate the
+                # answer's opening, and the error is something else anyway.
+                if emitted:
+                    raise
+                retry_config = self._next_config(model, call_config, exc)
+                if retry_config is None:
+                    raise
+                call_config = retry_config
+        else:
+            raise RuntimeError("Gemini thinking-config retries did not converge")
 
         if not emitted:
             raise RuntimeError("No text generated from Gemini stream")

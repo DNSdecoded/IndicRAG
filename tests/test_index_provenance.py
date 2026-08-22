@@ -44,6 +44,7 @@ def test_every_chunk_is_stamped_on_write():
     meta = coll.upserted["metadatas"][0]
     assert meta["embed_model"] == config.EMBEDDING_MODEL_NAME
     assert meta["embed_dim"] == config.EMBEDDING_DIMENSION
+    assert meta["embed_backend"] == vector_store._embed_backend()
     assert meta["chunker_version"] == vector_store.CHUNKER_VERSION
     assert meta["schema_version"] == vector_store.SCHEMA_VERSION
     assert meta["paper_id"] == "p1"  # original fields survive
@@ -174,6 +175,9 @@ def test_a_failed_batch_rolls_back_what_it_already_wrote():
         def delete(self, ids=None, **kw):
             self.deleted.extend(ids or [])
 
+        def get(self, ids=None, include=None, **kw):
+            return {"ids": []}          # nothing pre-exists: all rows are new
+
         def count(self):
             return len(self.written) - len(self.deleted)
 
@@ -187,7 +191,51 @@ def test_a_failed_batch_rolls_back_what_it_already_wrote():
                 texts=["t"] * 6, embeddings=np.zeros((6, 4)),
                 metadatas=[{"paper_id": "p"} for _ in range(6)],
                 ids=ids, collection=coll)
-        # Everything committed before the failure is removed again.
-        assert sorted(coll.deleted) == sorted(coll.written)
+        # Everything committed before the failure is removed again — and so is
+        # the failing batch, whose write may still land after a timeout.
+        assert set(coll.written) <= set(coll.deleted)
+        assert sorted(coll.deleted) == ids
+    finally:
+        config.CHROMA_UPSERT_BATCH = old
+
+
+def test_rollback_keeps_rows_that_already_existed():
+    """An upsert REPLACES an existing row. Deleting it on rollback would lose
+    content the ingest log still records — silent data loss, worse than the
+    orphan the rollback exists to prevent."""
+    import config
+    import pytest
+
+    class _FailsOnSecondBatch:
+        name = "overwrite"
+
+        def __init__(self):
+            self.deleted, self.calls = [], 0
+
+        def get(self, ids=None, include=None, **kw):
+            return {"ids": ["c0", "c1"]}      # first batch is a re-ingest
+
+        def upsert(self, ids=None, **kw):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("chroma exploded")
+
+        def delete(self, ids=None, **kw):
+            self.deleted.extend(ids or [])
+
+        def count(self):
+            return 0
+
+    coll = _FailsOnSecondBatch()
+    old = config.CHROMA_UPSERT_BATCH
+    config.CHROMA_UPSERT_BATCH = 2
+    try:
+        ids = [f"c{i}" for i in range(4)]
+        with pytest.raises(RuntimeError, match="exploded"):
+            vector_store.add_documents(
+                texts=["t"] * 4, embeddings=np.zeros((4, 4)),
+                metadatas=[{"paper_id": "p"} for _ in range(4)],
+                ids=ids, collection=coll)
+        assert coll.deleted == ["c2", "c3"]   # only the rows this call created
     finally:
         config.CHROMA_UPSERT_BATCH = old

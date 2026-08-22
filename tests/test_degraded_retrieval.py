@@ -101,6 +101,9 @@ class _FakeCollection:
 
 def _install_index(monkeypatch, docs):
     import bm25_search
+    # Every fake collection is called "fake", so a persisted cache from one test
+    # would be loaded by the next one.
+    monkeypatch.setattr(config, "BM25_PERSIST", False)
     bm25_search.invalidate()
     monkeypatch.setattr(config, "USE_HYBRID_SEARCH", True)
     return _FakeCollection(docs)

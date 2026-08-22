@@ -91,7 +91,7 @@ async def chat(
 
     # The lock spans read-history -> generate -> append: concurrent turns on one
     # session must not each answer from a history that omits the other's turn.
-    async with session_turn_lock(body.session_id or "new"):
+    async with session_turn_lock(body.session_id):
         try:
             session_id, messages = _get_or_create_session(body.session_id, owner)
         except PermissionError:
@@ -158,7 +158,7 @@ async def chat_stream(
     # is not finished when this function returns — it ends when the generator
     # below appends the answer. The generator's `finally` is what releases it,
     # so a client disconnect mid-stream can't strand the lock.
-    lock = session_turn_lock(body.session_id or "new")
+    lock = session_turn_lock(body.session_id)
     await lock.acquire()
     try:
         try:

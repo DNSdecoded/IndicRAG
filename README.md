@@ -131,7 +131,7 @@ Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval)
 * **Per-stage Prometheus metrics** — `indicrag_stage_seconds` across dense retrieval, BM25, ColBERT, cross-encoder and NLI, plus counters for cache hits, LLM tokens, failover hops, breaker trips, reflexion iterations and answer outcomes. Route-level latency answers "is /query slow"; these answer "why". Timing is recorded on the error path too, since a stage that fails after 30s is the one worth seeing
 * API-key auth with per-key data isolation, env-driven CORS, Pydantic v2 validation, path-traversal + URL-scheme guards
 * **SSRF-hardened outbound fetches** — scheme allow-list, DNS resolved once with the connection pinned to that address (closing the rebinding window), per-hop redirect re-validation, and a 50 MB streaming cap. TLS still validates against the hostname, not the pinned IP
-* **int8 quantized ONNX** cross-encoders for CPU — lower memory, faster inference (~3x reranker, ~11x NLI). Optionally the embedding model too (`EMBED_ONNX_INT8`), though that one measured only 1.38x and shifts every vector, so it ships off
+* **int8 quantized ONNX** cross-encoders for CPU — lower memory, faster inference (~3x reranker, ~11x NLI). Optionally the embedding model too (`EMBED_ONNX_INT8`), though that one is more modest (see `EMBED_ONNX_INT8` in the configuration table) and shifts every vector, so it ships off
 * **Tested across the seams** — an integration suite runs a real ChromaDB through ingest, retrieval, citation compaction, caching and delete consistency. The unit suite mocks every boundary, and all three v2.4 correctness bugs lived in the seams between stages, where a mock cannot reach
 
 ### 📡 Topic Watches & Literature Reports

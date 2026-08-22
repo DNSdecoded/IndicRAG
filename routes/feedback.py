@@ -102,13 +102,17 @@ def _prefs_key(user_id: str, owner: Optional[str]) -> str:
 async def get_user_prefs(user_id: str, authenticated: bool = Depends(verify_api_key),
                          owner: Optional[str] = Depends(current_owner)):
     _require_enabled()
-    return PrefsResponse(user_id=user_id, prefs=persistence.get_prefs(_prefs_key(user_id, owner)))
+    # Echo the key actually read, not the path segment: with auth on those differ,
+    # and returning the path id makes a response about your own prefs look like a
+    # response about someone else's.
+    key = _prefs_key(user_id, owner)
+    return PrefsResponse(user_id=key, prefs=persistence.get_prefs(key))
 
 
 @router.put("/prefs/{user_id}", response_model=PrefsResponse, tags=["Preferences"])
 async def put_user_prefs(user_id: str, body: PrefsRequest, authenticated: bool = Depends(verify_api_key),
                          owner: Optional[str] = Depends(current_owner)):
     _require_enabled()
-    persistence.save_prefs(_prefs_key(user_id, owner), body.prefs,
-                           datetime.now(timezone.utc).isoformat())
-    return PrefsResponse(user_id=user_id, prefs=body.prefs)
+    key = _prefs_key(user_id, owner)
+    persistence.save_prefs(key, body.prefs, datetime.now(timezone.utc).isoformat())
+    return PrefsResponse(user_id=key, prefs=body.prefs)

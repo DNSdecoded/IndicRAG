@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 
 import config
 import persistence
-from deps import limiter, verify_api_key, current_owner, _jobs, _jobs_lock, _update_job
+from deps import (limiter, verify_api_key, current_owner, _jobs, _jobs_lock, _update_job,
+                  touch_job_lease)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,6 +65,9 @@ def _make_progress_cb(job_id: str):
                 job["progress_current"] = current
                 job["progress_total"] = total
                 job["progress_message"] = message
+        # Keep the SQLite lease alive: without this a long run is reaped as
+        # abandoned while it is still making progress.
+        touch_job_lease(job_id)
     return _cb
 
 

@@ -119,18 +119,29 @@ def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
         if with_answers:
             answer_data = rag.answer_question(text, top_k=top_k, strategy=strategy)
             answer = answer_data.get("answer", "")
-            chunks = ctx.get("chunks", [])
-            # Citation numbers are per paper in first-seen order — the same
-            # mapping format_context uses, so resolve through it rather than
-            # inventing a second numbering scheme here.
-            num_to_meta = rag.citation_number_map(metas)
+            # The answer's OWN context, not the ctx retrieved above: strategy B
+            # retrieves on the translated query, so the two differ and resolving
+            # markers against the wrong one mislabels every claim.
+            answer_ctx = answer_data.get("context") or {}
+            answer_metas = answer_ctx.get("metadatas", metas)
+            chunks = answer_ctx.get("chunks", [])
+            # The markers in `answer` are the COMPACTED ones, so resolve through
+            # the returned citation list (number → title) rather than the raw
+            # per-paper numbering, which is what the answer had before compaction.
+            title_to_meta = {}
+            for m in answer_metas:
+                title_to_meta.setdefault((m.get("title") or "Unknown").strip(), m)
+            num_to_meta = {
+                int(c["number"]): title_to_meta.get((c.get("title") or "").strip(), {})
+                for c in answer_data.get("citations", [])
+            }
             for claim in _split_claims(answer):
                 nums = [int(n) for n in re.findall(r"\[(\d+)\]", claim)]
                 meta = num_to_meta.get(nums[0]) if nums else None
                 cited_paper = (meta or {}).get("paper_id")
                 chunk_text = ""
                 if cited_paper:
-                    for m, c in zip(metas, chunks):
+                    for m, c in zip(answer_metas, chunks):
                         if m.get("paper_id") == cited_paper:
                             chunk_text = c
                             break
