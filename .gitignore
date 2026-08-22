@@ -84,6 +84,11 @@ graphify-out/
 # Local tool state
 .mimocode/
 .serena/
+.agents/
+.claude/
+.commandcode/
+skills-lock.json
+repo.md
 
 # Local test scratch output
 test_output.txt
