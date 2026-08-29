@@ -114,8 +114,6 @@ def test_deadline_already_passed_starts_no_attempt(monkeypatch):
 def test_deadline_stops_the_chain_and_reraises_the_real_error(monkeypatch):
     """When something was tried, the caller must see why it failed — not a
     generic deadline error that hides the provider's own message."""
-    import time
-
     import pytest
 
     class FailingGemini:
