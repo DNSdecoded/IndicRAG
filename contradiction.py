@@ -84,14 +84,22 @@ def find_contradictions(
 
 
 def contradiction_instruction(contradictions: List[Dict[str, Any]]) -> str:
-    """Prompt fragment telling the model to present both sides, or '' if none."""
+    """Prompt fragment telling the model to present both sides, or '' if none.
+
+    Emitted as its own `<contradictions>` section. This used to be bare prose
+    appended after the prompt's closing `</instructions>` tag — structurally
+    orphaned text in a prompt whose every other directive lives inside a tagged
+    block, which is exactly the content a model learns to skim.
+    """
     if not contradictions:
         return ""
     pairs = "; ".join(f'"{c["a_title"]}" vs "{c["b_title"]}"' for c in contradictions)
     return (
-        "\n\nNOTE — the retrieved sources appear to DISAGREE on some points "
-        f"({pairs}). Where the passages conflict, do not silently pick one: state "
-        "both positions explicitly and cite the source [N] for each side."
+        "\n\n<contradictions>\n"
+        f"The retrieved sources appear to DISAGREE on some points ({pairs}). "
+        "Where the passages conflict, do not silently pick one: state both "
+        "positions explicitly and cite the source [N] for each side.\n"
+        "</contradictions>"
     )
 
 

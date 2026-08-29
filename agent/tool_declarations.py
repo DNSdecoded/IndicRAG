@@ -43,6 +43,14 @@ FUNCTION_DECLARATIONS = [
                         "Only return passages from papers tagged with at least one of these tags. Optional."
                     ),
                 },
+                "top_k": {
+                    "type": "integer",
+                    "description": (
+                        "Passages to return for this sub-query. Optional; defaults to the "
+                        "configured budget. Raise it for broad survey questions, lower it "
+                        "for narrow lookups — more passages cost latency."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -128,8 +136,15 @@ FUNCTION_DECLARATIONS = [
                         "Optional; use when the query restricts by year."
                     ),
                 },
+                "arxiv_id": {
+                    "type": "string",
+                    "description": (
+                        "Fetch one specific paper by arXiv ID (e.g. '2301.07041'), skipping "
+                        "text search. Use when the query names an ID. Supply this or `query`."
+                    ),
+                },
             },
-            "required": ["query"],
+            "required": [],
         },
     ),
     types.FunctionDeclaration(

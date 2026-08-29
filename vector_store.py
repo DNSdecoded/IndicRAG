@@ -298,9 +298,11 @@ def add_documents(
     stamp = _provenance_stamp()
     metadatas = [{**m, **stamp} for m in metadatas]
 
-    # Convert embeddings to list of lists
-    embeddings_list = embeddings.tolist()
-    
+    # Embeddings are converted to lists per upsert batch (below) rather than all
+    # at once: `.tolist()` on the whole matrix materialises a second full copy of
+    # the corpus as Python floats — a 1359 x 1024 ingest doubles peak memory for
+    # no reason, since each batch is handed over and dropped anyway.
+
     logger.info(f"Adding {len(ids)} chunks. Unique IDs: {len(set(ids))}")
     if len(ids) != len(set(ids)):
         from collections import Counter
@@ -348,7 +350,7 @@ def add_documents(
             attempted.extend(ids[sl])
             _chroma_call(collection.upsert,
                 documents=texts[sl],
-                embeddings=embeddings_list[sl],
+                embeddings=embeddings[sl].tolist(),
                 metadatas=metadatas[sl],
                 ids=ids[sl],
                 timeout=config.CHROMA_WRITE_TIMEOUT_S,
@@ -508,22 +510,51 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     ids = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[])['ids']
     _chroma_call(collection.delete, where={'paper_id': paper_id})
     if ids:
-        try:
-            import bm25_search
-            bm25_search.remove_from_index(ids, getattr(collection, "name", None))
-        except Exception:
-            # A stale lexical index is a quality bug, not a correctness one for the
-            # delete itself — never fail the deletion over it.
-            logger.warning("BM25 index not updated after deleting %s", paper_id, exc_info=True)
-        try:
-            # The ingest log is the system of record a reindex replays from. Leaving
-            # the row behind would make a rebuild resurrect the paper we just
-            # deleted — exactly the inconsistency a system of record must prevent.
-            import persistence
-            persistence.delete_ingest_events(paper_id)
-        except Exception:
-            logger.warning("Ingest log not updated after deleting %s — a reindex would "
-                           "resurrect it", paper_id, exc_info=True)
+        def _compensate(step: str, fn, consequence: str):
+            """Run one cascade step; retry once, then say so loudly and count it.
+
+            Chroma is already committed by the time these run, so a failure here
+            cannot be rolled back — only compensated. Warn-and-continue made that
+            silent: the request returned 200 and the corpus quietly diverged from
+            its system of record until someone noticed a ghost citation. One retry
+            covers the transient case (a lock, a momentarily busy index); anything
+            that survives it is real divergence, so it is logged at ERROR and
+            counted, and `check_db.reconcile()` will name the exact chunk ids.
+            """
+            for attempt in (1, 2):
+                try:
+                    fn()
+                    if attempt == 2:
+                        logger.info("Cascade step %s for %s succeeded on retry",
+                                    step, paper_id)
+                    return
+                except Exception:
+                    if attempt == 1:
+                        continue
+                    logger.error("DELETE CASCADE INCOMPLETE for %s: %s failed twice. "
+                                 "%s Run check_db.py to see the exact divergence.",
+                                 paper_id, step, consequence, exc_info=True)
+                    try:
+                        import metrics
+                        metrics.record_cascade_failure(step)
+                    except Exception:
+                        pass  # instrumentation must never mask the real failure
+
+        import bm25_search
+        _compensate(
+            "bm25",
+            lambda: bm25_search.remove_from_index(ids, getattr(collection, "name", None)),
+            "The lexical index still serves this paper's chunks, so it can still be cited.",
+        )
+        # The ingest log is the system of record a reindex replays from. Leaving
+        # the row behind would make a rebuild resurrect the paper we just
+        # deleted — exactly the inconsistency a system of record must prevent.
+        import persistence
+        _compensate(
+            "ingest_log",
+            lambda: persistence.delete_ingest_events(paper_id),
+            "A reindex would resurrect this paper.",
+        )
     return len(ids)
 
 
@@ -551,25 +582,48 @@ def find_similar_paper(
     Cross-ingestion dedup for re-uploads under a different filename. Uses
     difflib.SequenceMatcher (stdlib) rather than a fuzzy-matching dependency —
     good enough for near-identical title comparison at this corpus scale.
+
+    Reads the `paper_index` mirror rather than ChromaDB: the question is about
+    PAPERS, and answering it from chunk metadata meant fetching every chunk in
+    the corpus and grouping it in Python on every single ingest. `collection` is
+    still accepted, and still used when the mirror is empty — a database from
+    before the mirror existed, or a caller passing a collection the log does not
+    describe (tests, a staging rebuild).
     """
-    if collection is None:
-        collection = get_or_create_collection()
-    result = _chroma_call(collection.get, include=['metadatas'])
-    seen: Dict[str, dict] = {}
-    for meta in result.get('metadatas', []):
-        pid = meta.get('paper_id')
-        if pid and pid not in seen:
-            seen[pid] = meta
+    # The mirror is derived from the ingest log, which describes the LIVE
+    # collection only. Answering a staging or test collection from it would
+    # report duplicates that are not in that collection, and miss ones that are.
+    mirror_applies = collection is None or getattr(collection, "name", None) == config.COLLECTION_NAME
+    candidates = []
+    if mirror_applies:
+        try:
+            import persistence
+            candidates = persistence.list_papers()
+        except Exception:
+            logger.warning("paper_index unavailable; falling back to a metadata scan",
+                           exc_info=True)
+
+    if not candidates:
+        if collection is None:
+            collection = get_or_create_collection()
+        result = _chroma_call(collection.get, include=['metadatas'])
+        seen: Dict[str, dict] = {}
+        for meta in result.get('metadatas', []):
+            pid = (meta or {}).get('paper_id')
+            if pid and pid not in seen:
+                seen[pid] = meta
+        candidates = [{"paper_id": pid, "title": m.get("title", ""),
+                       "year": m.get("year", "")} for pid, m in seen.items()]
 
     from difflib import SequenceMatcher
     norm_title = title.strip().lower()
     best_pid, best_ratio = None, 0.0
-    for pid, meta in seen.items():
-        if year and meta.get('year') and str(meta['year']) != str(year):
+    for row in candidates:
+        if year and row.get("year") and str(row["year"]) != str(year):
             continue
-        ratio = SequenceMatcher(None, norm_title, str(meta.get('title', '')).strip().lower()).ratio()
+        ratio = SequenceMatcher(None, norm_title, str(row.get("title") or "").strip().lower()).ratio()
         if ratio > best_ratio:
-            best_pid, best_ratio = pid, ratio
+            best_pid, best_ratio = row["paper_id"], ratio
 
     return best_pid if best_ratio >= threshold else None
 

@@ -119,18 +119,38 @@ def _combine_filters(*filters):
     return clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
 
+# An LLM-supplied top_k reaches a ChromaDB n_results and a CPU cross-encoder
+# batch, so it is bounded rather than trusted. 3x the configured budget is room
+# for a genuine survey query without letting one sub-query monopolise the CPU.
+_MAX_TOOL_TOP_K = config.MAX_CONTEXT_CHUNKS * 3
+
+
+def _clamp_top_k(top_k) -> int:
+    """Coerce an LLM-supplied top_k into [1, _MAX_TOOL_TOP_K]. None/garbage -> configured default."""
+    if top_k is None:
+        return config.MAX_CONTEXT_CHUNKS
+    try:
+        return max(1, min(int(top_k), _MAX_TOOL_TOP_K))
+    except (TypeError, ValueError):
+        return config.MAX_CONTEXT_CHUNKS
+
+
 def execute_indicrag(query: str, expand_query: bool = False,
-                     year_from=None, year_to=None, tags=None) -> dict:
+                     year_from=None, year_to=None, tags=None, top_k=None) -> dict:
     import hashlib
     _MIN_EXPAND_WORDS = 4
     should_expand = expand_query and len(query.split()) >= _MIN_EXPAND_WORDS
     filter_dict = _combine_filters(_year_filter(year_from, year_to), _tags_filter(tags))
+    # Clamped, not trusted: top_k comes from the LLM, and it lands in a ChromaDB
+    # n_results and a cross-encoder batch. An unbounded value is a latency and
+    # memory footgun on a CPU reranker; a non-integer one is a 500.
+    top_k = _clamp_top_k(top_k)
 
     if should_expand:
         variants = _expand_query_variants(query)
         chunks, metas, seen = [], [], set()
         for q in [query] + variants:
-            result = rag.retrieve_context(q, filter_dict=filter_dict)
+            result = rag.retrieve_context(q, top_k=top_k, filter_dict=filter_dict)
             for chunk, meta in zip(result["chunks"], result["metadatas"]):
                 key = hashlib.sha256(chunk.encode()).hexdigest()
                 if key not in seen:
@@ -144,11 +164,11 @@ def execute_indicrag(query: str, expand_query: bool = False,
         # drop a highly relevant chunk just because it scored lower under one
         # variant's wording early in the list.
         import rerank
-        top_chunks, top_metas, _ = rerank.rerank(query, chunks, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+        top_chunks, top_metas, _ = rerank.rerank(query, chunks, metas, top_k=top_k)
         passages = [{"text": chunk, **meta} for chunk, meta in zip(top_chunks, top_metas)]
         return {"passages": passages}
     else:
-        result = rag.retrieve_context(query, filter_dict=filter_dict)
+        result = rag.retrieve_context(query, top_k=top_k, filter_dict=filter_dict)
         passages = [
             {"text": chunk, **meta}
             for chunk, meta in zip(result["chunks"], result["metadatas"])
@@ -386,6 +406,9 @@ def execute_arxiv_search(
     import datetime
     import concurrent.futures as _cf
 
+    if not arxiv_id and not (query or "").strip():
+        return {"passages": [], "error": "arxiv_search needs either `query` or `arxiv_id`."}
+
     sort = (arxiv.SortCriterion.Relevance
             if sort_by != "submitted_date"
             else arxiv.SortCriterion.SubmittedDate)
@@ -602,7 +625,8 @@ def execute_open_access_search(
 TOOL_DISPATCH = {
     "indicrag_retrieval": lambda args: execute_indicrag(
         args["query"], args.get("expand_query", False),
-        args.get("year_from"), args.get("year_to"), args.get("tags")
+        args.get("year_from"), args.get("year_to"), args.get("tags"),
+        args.get("top_k")
     ),
     "web_search": lambda args: execute_web_search(
         args["query"], args.get("num_results", 5)
@@ -610,10 +634,11 @@ TOOL_DISPATCH = {
     "calculate": lambda args: execute_calculate(args["expression"]),
     "execute_python": lambda args: execute_python(args["code"]),
     "arxiv_search": lambda args: execute_arxiv_search(
-        args["query"],
+        args.get("query", ""),
         args.get("max_results", 5),
         args.get("sort_by", "relevance"),
         args.get("year_from"),
+        args.get("arxiv_id"),
     ),
     "open_access_search": lambda args: execute_open_access_search(
         args["query"], args.get("max_results", 5),

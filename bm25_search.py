@@ -20,6 +20,7 @@ import json
 import math
 import os
 import regex
+import sys
 import threading
 import logging
 from collections import Counter, defaultdict
@@ -31,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 # Bump when the on-disk shape changes; an older file is then ignored, not
 # misread — a silently misinterpreted index is worse than a rebuild.
-_CACHE_FORMAT = 2  # 2: id fingerprint replaced the count-only staleness check
+_CACHE_FORMAT = 3  # 3: df counters + compaction; 2: id-fingerprint staleness check
+# Compact once tombstones exceed this share of the index. Below it, skipping a
+# dead posting is cheaper than rewriting every posting list.
+_COMPACT_RATIO = 0.2
 
 _indices: dict[str, "BM25Index"] = {}
 _lock = threading.Lock()
@@ -50,6 +54,13 @@ class BM25Index:
         # Removed documents are tombstoned rather than compacted out: reclaiming a
         # slot would renumber every later doc_idx and invalidate every posting.
         self._deleted: set[int] = set()
+        # Live document frequency per term, maintained on add and tombstone.
+        # Recomputing it per query term meant walking that term's whole posting
+        # list against the tombstone set on every single search — the classic
+        # read amplification of an uncompacted log.
+        self.df: Dict[str, int] = defaultdict(int)
+        # Which terms each doc contributed, so a tombstone knows what to decrement.
+        self.doc_terms: List[set] = []
         self._total_len = 0
         self._lock = threading.Lock()
 
@@ -75,6 +86,8 @@ class BM25Index:
             self.doc_lens = []
             self.postings = defaultdict(list)
             self._deleted = set()
+            self.df = defaultdict(int)
+            self.doc_terms = []
             self._total_len = 0
             self._add_unlocked(ids, texts)
 
@@ -98,8 +111,15 @@ class BM25Index:
             self.doc_ids.append(doc_id)
             self.doc_lens.append(len(tokens))
             self._total_len += len(tokens)
+            terms = set()
             for term, tf in Counter(tokens).items():
+                # Interned so doc_terms holds one shared string per term across
+                # the whole corpus rather than a private copy per document.
+                term = sys.intern(term)
                 self.postings[term].append((idx, tf))
+                self.df[term] += 1
+                terms.add(term)
+            self.doc_terms.append(terms)
             existing[doc_id] = idx
 
     def remove_documents(self, ids) -> int:
@@ -123,6 +143,64 @@ class BM25Index:
         occasional skipped entry."""
         self._deleted.add(idx)
         self._total_len -= self.doc_lens[idx]
+        for term in self.doc_terms[idx]:
+            if self.df.get(term):
+                self.df[term] -= 1
+
+    def _rebuild_derived(self) -> None:
+        """Recompute df and doc_terms from the postings (used after a cache load)."""
+        df = defaultdict(int)
+        doc_terms = [set() for _ in self.doc_ids]
+        for term, plist in self.postings.items():
+            term = sys.intern(term)
+            for i, _tf in plist:
+                if i < len(doc_terms):
+                    doc_terms[i].add(term)
+                if i not in self._deleted:
+                    df[term] += 1
+        self.df = df
+        self.doc_terms = doc_terms
+
+    @property
+    def deleted_ratio(self) -> float:
+        """Share of slots that are tombstones. 0.0 for an empty index."""
+        return (len(self._deleted) / len(self.doc_ids)) if self.doc_ids else 0.0
+
+    def compact(self) -> int:
+        """Drop tombstoned slots and renumber the survivors. Returns slots freed.
+
+        Tombstones are cheap to skip one at a time and ruinous in bulk: they sit
+        in every posting list they ever appeared in, so a corpus that has churned
+        keeps paying to walk documents nobody can retrieve. Rebuilt from the
+        postings themselves — the document text is not needed and is not kept.
+        """
+        with self._lock:
+            if not self._deleted:
+                return 0
+            freed = len(self._deleted)
+            remap = {}
+            doc_ids, doc_lens, doc_terms = [], [], []
+            for old_idx, doc_id in enumerate(self.doc_ids):
+                if old_idx in self._deleted:
+                    continue
+                remap[old_idx] = len(doc_ids)
+                doc_ids.append(doc_id)
+                doc_lens.append(self.doc_lens[old_idx])
+                doc_terms.append(self.doc_terms[old_idx])
+
+            postings = defaultdict(list)
+            df = defaultdict(int)
+            for term, plist in self.postings.items():
+                kept = [(remap[i], tf) for i, tf in plist if i in remap]
+                if kept:
+                    postings[term] = kept
+                    df[term] = len(kept)
+
+            self.doc_ids, self.doc_lens, self.doc_terms = doc_ids, doc_lens, doc_terms
+            self.postings, self.df = postings, df
+            self._deleted = set()
+            self._total_len = sum(doc_lens)
+            return freed
 
     # -- query --------------------------------------------------------------
     def search(self, query: str, top_k: int = 30) -> Tuple[List[str], List[float]]:
@@ -143,7 +221,7 @@ class BM25Index:
             postings = self.postings.get(term)
             if not postings:
                 continue
-            df = sum(1 for idx, _ in postings if idx not in self._deleted)
+            df = self.df.get(term, 0)
             if df == 0:
                 continue
             idf = math.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
@@ -217,6 +295,10 @@ def _load_cached(coll_name: str, live_ids) -> Optional["BM25Index"]:
                                           for t, ps in payload["postings"].items()})
         idx._deleted = set(payload["deleted"])
         idx._total_len = payload["total_len"]
+        # Derived, not stored: df and doc_terms are recoverable from the postings
+        # in one pass, and persisting them would roughly double the file for data
+        # the loader can reconstruct faster than it can parse.
+        idx._rebuild_derived()
         live_fp = _id_fingerprint(live_ids)
         if payload.get("id_fingerprint") != live_fp:
             logger.info("BM25 cache for '%s' does not match the collection "
@@ -362,6 +444,13 @@ def remove_from_index(ids, collection_name: str = None) -> bool:
         return False
     for idx in targets:
         idx.remove_documents(ids)
+        if idx.deleted_ratio > _COMPACT_RATIO:
+            # Inline, on the deleting caller: compaction takes the index lock, so
+            # running it on a background thread would only move the wait onto the
+            # next query instead of the delete that caused it. Deletes are rare
+            # and the cost is one pass over the postings.
+            freed = idx.compact()
+            logger.info("BM25 index compacted: %d tombstoned slot(s) reclaimed", freed)
     # Persist: a delete mutates the in-memory index, and leaving the disk copy
     # untouched is how it diverges from the collection between restarts.
     if config.BM25_PERSIST:

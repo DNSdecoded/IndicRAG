@@ -71,6 +71,13 @@ async def lifespan(app):
     if config.USE_RERANKER:
         import rerank
         rerank._load()
+    if config.USE_COLBERT_RERANK:
+        # Warm here or the FIRST query after start pays the model load inside the
+        # retrieval path, while holding the loader lock every concurrent query
+        # then queues behind — the same cold-start cliff the reranker warm-up
+        # above exists to avoid.
+        import colbert_rerank
+        colbert_rerank._load()
     if config.USE_HYBRID_SEARCH:
         import bm25_search
         bm25_search.get_or_build_index()
@@ -98,6 +105,8 @@ async def lifespan(app):
             await watch_task
         except asyncio.CancelledError:
             pass
+    import persistence as _persistence
+    _persistence.checkpoint()
     logger.info("Shutting down: draining in-flight requests complete.")
 
 # Initialize FastAPI app

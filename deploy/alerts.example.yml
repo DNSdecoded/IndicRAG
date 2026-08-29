@@ -1,0 +1,132 @@
+# Prometheus alert rules for IndicRAG.
+#
+# The per-stage histograms have existed since v2.5 and nobody was watching them:
+# a metric with no alert tells you what went wrong only after someone notices,
+# which is close to having no metric. These thresholds match what the pipeline
+# was actually measured at on a CPU-only box (see config.py for the budgets the
+# code itself enforces) — copy this file next to your prometheus.yml, point
+# `rule_files` at it, and retune the numbers for your hardware before trusting
+# them.
+#
+#   rule_files:
+#     - alerts.yml
+#
+# Scrape /metrics with the same X-API-Key as the rest of the API.
+
+groups:
+  - name: indicrag-latency
+    interval: 30s
+    rules:
+      # Retrieval is what a user waits through before any token appears. On the
+      # reference box that is ~11s of cross-encoder rerank over 15 candidates
+      # plus dense search, so a p95 past 30s means the reranker fell back to
+      # fp32, or the corpus outgrew what one CPU pass can serve.
+      - alert: RetrievalP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, stage) (rate(indicrag_stage_seconds_bucket{stage=~"retrieval_.*|rerank_.*"}[10m]))
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.stage }} p95 above 30s"
+          description: >-
+            Check whether the reranker is on the int8 ONNX path (~3x faster than
+            fp32 torch) and whether TORCH_NUM_THREADS is still pinned.
+
+      # AGENT_TIMEOUT is 300s and AGENT_REFLEXION_BUDGET_S is 90s, so a p95 near
+      # 120s means most requests are one hiccup away from shipping an
+      # unverified draft.
+      - alert: AnswerP95NearBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(indicrag_stage_seconds_bucket{stage="answer_generation"}[10m]))
+          ) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Answer generation p95 above 120s"
+          description: >-
+            Approaching the reflexion budget; answers will start finalising
+            without a completeness check.
+
+      - alert: StageErrorsRising
+        expr: sum by (stage) (rate(indicrag_stage_errors_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.stage }} raising errors"
+          description: "Exceptions inside this pipeline stage, sustained for 10m."
+
+  - name: indicrag-capacity
+    interval: 30s
+    rules:
+      # Shedding under load is correct behaviour, not a fault — but sustained
+      # shedding means the pool is undersized for the traffic, and every shed
+      # request is a user who got a 429 instead of an answer.
+      - alert: SustainedLoadShedding
+        expr: sum by (pool) (rate(indicrag_admission_shed_total[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Shedding {{ $labels.pool }} traffic for 15m"
+          description: >-
+            Raise QUERY_CONCURRENCY / AGENT_CONCURRENCY only if the box has the
+            CPU for it — the pools exist because the pipeline is CPU-bound.
+
+      # Every slot busy for a whole window means the latency users see is now
+      # queueing time, not work.
+      - alert: AdmissionPoolSaturated
+        expr: min_over_time(indicrag_admission_inflight{pool="query"}[10m]) >= 8
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Query admission pool full for 10m"
+          description: "Compare against QUERY_CONCURRENCY; adjust the threshold if you changed it."
+
+  - name: indicrag-integrity
+    interval: 60s
+    rules:
+      # A cascade failure means ChromaDB, the BM25 index and the ingest log have
+      # diverged: deleted papers can still be cited, or a rebuild resurrects
+      # them. Repair is manual, so this one pages.
+      - alert: DeleteCascadeIncomplete
+        expr: increase(indicrag_cascade_failures_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Delete cascade left {{ $labels.step }} diverged from the log"
+          description: >-
+            Run check_db.py (or POST /reconcile) for the exact chunk ids, then
+            reindex.py to repair.
+
+      - alert: LLMPathsFlapping
+        expr: sum(rate(indicrag_circuit_trips_total[15m])) > 0.02
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM circuit breakers tripping repeatedly"
+          description: >-
+            Failover is absorbing it, but every hop costs latency and quota.
+            Check provider status and key limits.
+
+      - alert: FailoverIsTheNormalPath
+        expr: |
+          sum(rate(indicrag_llm_failovers_total[30m]))
+            / clamp_min(sum(rate(indicrag_answers_total[30m])), 0.001) > 0.5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most answers are coming from a fallback model"
+          description: >-
+            The primary model is effectively down. Answer quality is whatever the
+            fallback gives, which the eval gate was never thresholded against.

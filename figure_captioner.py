@@ -54,7 +54,11 @@ def _caption_prompt(kind: str, caption: str) -> str:
     return (
         f"This is a {label} from a scientific paper.{hint} "
         f"Describe it densely for search retrieval: what it shows, the axes or "
-        f"columns, key values, trends, and any stated result. Be concrete and "
+        f"columns, key values, trends, and any stated result. "
+        f"Transcribe axis labels, units, column headers, legend entries and "
+        f"numeric values VERBATIM where they are legible — 'x-axis: elapsed time "
+        f"(ms)', not 'the x-axis shows time'. These captions are indexed as text, "
+        f"so a paraphrased label is a term nobody can search for. Be concrete and "
         f"factual. One short paragraph, no preamble."
     )
 

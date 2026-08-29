@@ -7,6 +7,7 @@ async for. WAL mode lets reads and the single writer coexist without
 blocking each other.
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
@@ -64,34 +65,206 @@ _conn.execute(
 )
 
 
+def _year_of(metadatas_json) -> str:
+    """Publication year off a chunk-metadata blob; empty string when absent.
+
+    Every chunk of a paper carries the same year, so the first one that has it
+    answers for the paper.
+    """
+    try:
+        for meta in json.loads(metadatas_json or "[]"):
+            year = (meta or {}).get("year")
+            if year:
+                return str(year)
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 def _ensure_column(table: str, column: str, decl: str) -> None:
     """Add a column to an existing table if it isn't there yet.
 
     `CREATE TABLE IF NOT EXISTS` silently keeps an old database's old shape, so a
     column added in a later release never appears on an already-deployed instance
-    and the first query referencing it fails with `no such column`. This is the
-    whole migration story for now: idempotent, runs at import, no framework.
-    Replace it with a versioned runner once a change needs to backfill or
-    transform data rather than just append a nullable column.
+    and the first query referencing it fails with `no such column`. Idempotent by
+    inspection, which is what lets the migrations below run safely on a database
+    that already got these columns from the pre-runner version of this file.
     """
     cols = {row[1] for row in _conn.execute(f"PRAGMA table_info({table})")}
     if column not in cols:
         _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
-# `owner` is the SHA-256 fingerprint of the caller's API key (deps.current_owner).
-# NULL means "written before ownership existed, or written while auth was disabled".
-_ensure_column("feedback", "owner", "TEXT")
-_ensure_column("reports", "owner", "TEXT")
-_ensure_column("query_log", "owner", "TEXT")
+# ---------------------------------------------------------------------------
+# Schema migrations
+#
+# Ordered, named, applied once, recorded in `schema_migrations`. The previous
+# scheme — bare _ensure_column() calls at import — could only ever append a
+# nullable column: it had no way to express "backfill this from that", and no
+# record of what had run, so a migration needing data transformation had nowhere
+# to live. Rules: append only, never edit an applied migration (deployed
+# databases already ran the old body), and each migration is one transaction.
+# ---------------------------------------------------------------------------
+def _m0001_owner_and_lease_columns(conn) -> None:
+    # `owner` is the SHA-256 fingerprint of the caller's API key (deps.current_owner).
+    # NULL means "written before ownership existed, or written while auth was disabled".
+    _ensure_column("feedback", "owner", "TEXT")
+    _ensure_column("reports", "owner", "TEXT")
+    _ensure_column("query_log", "owner", "TEXT")
+    # Job leases. An in-flight job is owned by whichever process is heartbeating it;
+    # when that process dies the lease simply expires and the row can be reaped.
+    _ensure_column("jobs", "lease_until", "TEXT")
+    # Which weights produced the vectors. int8 and fp32 output for the SAME model id
+    # are not interchangeable, so embed_model alone cannot detect a mixed corpus.
+    _ensure_column("ingest_log", "embed_backend", "TEXT")
 
-# Job leases. An in-flight job is owned by whichever process is heartbeating it;
-# when that process dies the lease simply expires and the row can be reaped.
-_ensure_column("jobs", "lease_until", "TEXT")
 
-# Which weights produced the vectors. int8 and fp32 output for the SAME model id
-# are not interchangeable, so embed_model alone cannot detect a mixed corpus.
-_ensure_column("ingest_log", "embed_backend", "TEXT")
+def _m0002_paper_index(conn) -> None:
+    """Materialise one row per paper from the ingest log.
+
+    Dedup on ingest fuzzy-matches the new title against every existing one, and
+    the only place titles lived was ChromaDB chunk metadata — so answering "have
+    I seen this paper?" meant pulling the metadata of every CHUNK in the corpus
+    and grouping it in Python, once per ingested file. This mirror is derived
+    state, rebuildable from the log at any time, and it is a papers-sized table
+    rather than a chunks-sized scan.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS paper_index ("
+        "paper_id TEXT PRIMARY KEY, title TEXT, year TEXT, "
+        "chunk_count INTEGER, updated_at TEXT)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_index_year ON paper_index(year)")
+    rows = conn.execute(
+        "SELECT paper_id, title, metadatas, ids, created_at FROM ingest_log"
+    ).fetchall()
+    for paper_id, title, metadatas_json, ids_json, created_at in rows:
+        conn.execute(
+            "INSERT INTO paper_index (paper_id, title, year, chunk_count, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(paper_id) DO UPDATE SET "
+            "title=excluded.title, year=excluded.year, "
+            "chunk_count=excluded.chunk_count, updated_at=excluded.updated_at",
+            (paper_id, title, _year_of(metadatas_json),
+             len(json.loads(ids_json or "[]")), created_at),
+        )
+
+
+def _m0003_metadata_cache(conn) -> None:
+    """Cache arXiv title lookups so a re-ingest is not a re-crawl.
+
+    Enrichment is one network round trip per paper behind a 1s politeness delay,
+    paid again on every bulk run over the same directory even when the answer
+    could not have changed. Misses are cached too — "arXiv does not have this
+    paper" is exactly the answer that would otherwise be re-fetched forever.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS metadata_cache ("
+        "title_key TEXT PRIMARY KEY, authors TEXT, year TEXT, doi TEXT, "
+        "found INTEGER, fetched_at TEXT)"
+    )
+
+
+_MIGRATIONS = [
+    ("0001_owner_and_lease_columns", _m0001_owner_and_lease_columns),
+    ("0002_paper_index", _m0002_paper_index),
+    ("0003_metadata_cache", _m0003_metadata_cache),
+]
+
+
+def _run_migrations() -> None:
+    _conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT)"
+    )
+    applied = {row[0] for row in _conn.execute("SELECT name FROM schema_migrations")}
+    for name, fn in _MIGRATIONS:
+        if name in applied:
+            continue
+        try:
+            fn(_conn)
+            _conn.execute(
+                "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                (name, datetime.now(timezone.utc).isoformat()),
+            )
+            _conn.commit()
+        except Exception:
+            # Leave it unrecorded and re-raise: a half-applied migration that
+            # marked itself done would be invisible on the next start, and the
+            # failure belongs at startup, not at the first query that needs the
+            # column.
+            _conn.rollback()
+            raise
+
+
+_run_migrations()
+
+
+# ---------------------------------------------------------------------------
+# Reads and batched writes
+#
+# WAL lets one writer and many readers coexist, but every access here went
+# through one connection behind one global lock, so readers queued behind each
+# other and behind the writer for no reason. Reads now use a per-thread
+# read-only connection and take no lock at all; WAL gives each one a consistent
+# snapshot. Writes still go through _conn under _db_lock — single-writer is the
+# correct topology here, and that lock is what keeps it single.
+# ---------------------------------------------------------------------------
+_local = threading.local()
+
+
+def _read_conn():
+    """A per-thread read-only connection, opened on first use."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(
+            f"file:{config.SESSIONS_DB_PATH}?mode=ro", uri=True, check_same_thread=False)
+        _local.conn = conn
+    return conn
+
+
+_batch_depth = 0
+
+
+@contextmanager
+def batch_writes():
+    """Commit once at the end of the block instead of once per write.
+
+    Bulk paths wrote one row per commit, and every commit is an fsync: a 50-paper
+    ingest paid 50 durability barriers to record work the user thinks of as one
+    operation. Nested use is refcounted, and a failure inside the block rolls the
+    whole batch back rather than leaving half of it recorded.
+
+    ponytail: the depth counter is process-global, so a concurrent write from
+    another thread joins whichever batch is open. Single-writer by design; make
+    it thread-local if writes ever fan out.
+    """
+    global _batch_depth
+    with _db_lock:
+        _batch_depth += 1
+    try:
+        yield
+    except Exception:
+        with _db_lock:
+            _batch_depth -= 1
+            if _batch_depth == 0:
+                _conn.rollback()
+        raise
+    with _db_lock:
+        _batch_depth -= 1
+        if _batch_depth == 0:
+            _conn.commit()
+
+
+def _maybe_commit() -> None:
+    """Commit unless a batch is open. Call while holding _db_lock.
+
+    EVERY write path goes through this, not only the batched ones. They share one
+    connection, so an unrelated write landing mid-batch would commit the batch's
+    half-written rows along with it — exactly the partial state batch_writes()
+    exists to prevent.
+    """
+    if _batch_depth == 0:
+        _conn.commit()
 
 # Secondary indexes. Every table above declared a PRIMARY KEY and nothing else, so
 # each of these access paths was a full scan: due_watches runs on every scheduler
@@ -113,6 +286,72 @@ _conn.commit()
 _db_lock = threading.Lock()
 
 
+def snapshot_to(dest_path) -> dict:
+    """Write a consistent copy of this database to `dest_path`, online.
+
+    sqlite3's own backup API, not a file copy: copying sessions.db while the
+    process is writing yields a torn file, and copying it without its -wal loses
+    the most recent writes entirely. This runs page-by-page against a live
+    connection and is safe with the server up.
+    """
+    import sqlite3 as _sqlite3
+
+    with _db_lock:
+        dest = _sqlite3.connect(str(dest_path))
+        try:
+            _conn.backup(dest)
+        finally:
+            dest.close()
+        papers = _conn.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+    return {"path": str(dest_path), "papers": papers}
+
+
+def restore_from(src_path) -> dict:
+    """Replace this database's contents with the snapshot at `src_path`.
+
+    Also the backup API, in the other direction: it overwrites every page inside
+    one transaction, so a failure leaves the original intact rather than half a
+    database. The vector store is NOT touched — it is a derived view, and the
+    caller replays the restored log into it (reindex.py).
+    """
+    import sqlite3 as _sqlite3
+
+    with _db_lock:
+        src = _sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
+        try:
+            # Sanity-check before overwriting: an arbitrary SQLite file that has
+            # no ingest_log would silently wipe the system of record.
+            tables = {r[0] for r in src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "ingest_log" not in tables:
+                raise ValueError(f"{src_path} is not an IndicRAG database "
+                                 "(no ingest_log table)")
+            src.backup(_conn)
+            papers = _conn.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+        finally:
+            src.close()
+    # A restored database can predate migrations this build expects.
+    _run_migrations()
+    return {"path": str(src_path), "papers": papers}
+
+
+def checkpoint() -> None:
+    """Fold the WAL back into the main database file. Best-effort.
+
+    WAL mode defers that fold, so an unclean stop leaves the last writes only in
+    sessions.db-wal. SQLite recovers them on next open, but only if the -wal file
+    travels with the .db — which a naive backup, container image, or volume copy
+    does not guarantee. TRUNCATE, not PASSIVE: PASSIVE gives up when a reader
+    holds the file, and shutdown is exactly when we want it to finish.
+    """
+    try:
+        with _db_lock:
+            _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("WAL checkpoint on shutdown failed", exc_info=True)
+
+
 def load_sessions(max_age_hours: int = None) -> dict:
     """Load sessions, pruning ones older than max_age_hours from disk first."""
     if max_age_hours is None:
@@ -120,7 +359,7 @@ def load_sessions(max_age_hours: int = None) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
     with _db_lock:
         _conn.execute("DELETE FROM sessions WHERE updated_at < ?", (cutoff,))
-        _conn.commit()
+        _maybe_commit()
         rows = _conn.execute("SELECT id, data FROM sessions").fetchall()
     return {sid: json.loads(data) for sid, data in rows}
 
@@ -132,13 +371,13 @@ def save_session(session_id: str, session: dict) -> None:
             "ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at",
             (session_id, json.dumps(session), session["created_at"], session["updated_at"]),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def delete_session(session_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 def load_jobs(max_age_hours: int = 24) -> dict:
@@ -151,7 +390,7 @@ def load_jobs(max_age_hours: int = 24) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
     with _db_lock:
         _conn.execute("DELETE FROM jobs WHERE completed_at IS NOT NULL AND completed_at < ?", (cutoff,))
-        _conn.commit()
+        _maybe_commit()
         rows = _conn.execute("SELECT id, data FROM jobs").fetchall()
     return {jid: json.loads(data) for jid, data in rows}
 
@@ -159,7 +398,7 @@ def load_jobs(max_age_hours: int = 24) -> dict:
 def delete_job(job_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
@@ -178,7 +417,7 @@ def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
             (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"),
              job.get("completed_at"), lease_until),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def reap_stale_jobs(now_iso: str) -> list[dict]:
@@ -214,7 +453,7 @@ def reap_stale_jobs(now_iso: str) -> list[dict]:
             )
             reaped.append(job)
         if reaped:
-            _conn.commit()
+            _maybe_commit()
     return reaped
 
 
@@ -226,7 +465,7 @@ def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, cr
             "VALUES (?, ?, ?, ?, ?, ?)",
             (feedback_id, query_id, rating, comment, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def log_query(query_id: str, question: str, answer: str, mode: str,
@@ -242,7 +481,7 @@ def log_query(query_id: str, question: str, answer: str, mode: str,
             "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
             (query_id, question, answer, mode, model, language, confidence, coverage, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 _FEEDBACK_CONTEXT_COLUMNS = [
@@ -318,7 +557,7 @@ def save_prefs(user_id: str, prefs: dict, updated_at: str) -> None:
             "ON CONFLICT(user_id) DO UPDATE SET prefs=excluded.prefs, updated_at=excluded.updated_at",
             (user_id, json.dumps(prefs), updated_at),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +579,7 @@ def save_watch(watch: dict) -> None:
                 watch.get("next_run"), watch.get("last_run"), watch.get("created_at"),
             ),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def get_watch(watch_id: str) -> dict | None:
@@ -389,12 +628,11 @@ def owns_watch(watch: dict | None, owner: str | None) -> bool:
 
 def due_watches(now_iso: str) -> list[dict]:
     """Watches whose next_run has arrived (next_run non-NULL and <= now)."""
-    with _db_lock:
-        rows = _conn.execute(
-            "SELECT data FROM watches WHERE next_run IS NOT NULL AND next_run <= ? "
-            "ORDER BY next_run ASC",
-            (now_iso,),
-        ).fetchall()
+    rows = _read_conn().execute(
+        "SELECT data FROM watches WHERE next_run IS NOT NULL AND next_run <= ? "
+        "ORDER BY next_run ASC",
+        (now_iso,),
+    ).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 
@@ -425,7 +663,16 @@ def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
              json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
              embed_model, chunker_version, created_at, embed_backend),
         )
-        _conn.commit()
+        # Same transaction as the log write: the mirror is only trustworthy if it
+        # cannot lag the row it mirrors.
+        _conn.execute(
+            "INSERT INTO paper_index (paper_id, title, year, chunk_count, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(paper_id) DO UPDATE SET "
+            "title=excluded.title, year=excluded.year, "
+            "chunk_count=excluded.chunk_count, updated_at=excluded.updated_at",
+            (paper_id, title, _year_of(json.dumps(metadatas)), len(ids), created_at),
+        )
+        _maybe_commit()
 
 
 def get_ingest_events(paper_id: str = None) -> list[dict]:
@@ -434,18 +681,18 @@ def get_ingest_events(paper_id: str = None) -> list[dict]:
     Oldest first so a replay reproduces the original ingest order — chunk ids
     and citation numbering follow insertion order.
     """
-    with _db_lock:
-        if paper_id is None:
-            rows = _conn.execute(
-                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
-                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
-                "FROM ingest_log ORDER BY created_at ASC").fetchall()
-        else:
-            rows = _conn.execute(
-                "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
-                "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
-                "FROM ingest_log WHERE paper_id = ? ORDER BY created_at ASC",
-                (paper_id,)).fetchall()
+    conn = _read_conn()
+    if paper_id is None:
+        rows = conn.execute(
+            "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+            "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
+            "FROM ingest_log ORDER BY created_at ASC").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT event_id, paper_id, content_hash, title, source_path, chunks, "
+            "metadatas, ids, embed_model, chunker_version, created_at, embed_backend "
+            "FROM ingest_log WHERE paper_id = ? ORDER BY created_at ASC",
+            (paper_id,)).fetchall()
     return [{
         "event_id": r[0], "paper_id": r[1], "content_hash": r[2], "title": r[3],
         "source_path": r[4], "chunks": json.loads(r[5]), "metadatas": json.loads(r[6]),
@@ -454,9 +701,67 @@ def get_ingest_events(paper_id: str = None) -> list[dict]:
     } for r in rows]
 
 
-def ingest_event_count() -> int:
+def get_metadata_cache(title_key: str):
+    """Cached arXiv lookup: a metadata dict, {} for a cached miss, or None if unseen.
+
+    The three-way return matters — {} and None are different answers. {} means
+    "asked, arXiv had nothing", which must not trigger another lookup.
+    """
+    row = _read_conn().execute(
+        "SELECT authors, year, doi, found FROM metadata_cache WHERE title_key = ?",
+        (title_key,),
+    ).fetchone()
+    if row is None:
+        return None
+    if not row[3]:
+        return {}
+    return {"authors": row[0] or "", "year": row[1] or "", "doi": row[2] or ""}
+
+
+def put_metadata_cache(title_key: str, data, fetched_at: str) -> None:
+    """Record a lookup result. `data` falsy means a cached miss."""
+    data = data or {}
     with _db_lock:
-        return _conn.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+        _conn.execute(
+            "INSERT INTO metadata_cache (title_key, authors, year, doi, found, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(title_key) DO UPDATE SET "
+            "authors=excluded.authors, year=excluded.year, doi=excluded.doi, "
+            "found=excluded.found, fetched_at=excluded.fetched_at",
+            (title_key, data.get("authors", ""), data.get("year", ""),
+             data.get("doi", ""), 1 if data else 0, fetched_at),
+        )
+        _maybe_commit()
+
+
+def list_papers() -> list[dict]:
+    """One row per ingested paper: paper_id, title, year, chunk_count.
+
+    The dedup path's view of the corpus. Papers-sized, so a caller can afford to
+    fuzzy-match every title without touching the vector store.
+    """
+    rows = _read_conn().execute(
+        "SELECT paper_id, title, year, chunk_count FROM paper_index"
+    ).fetchall()
+    return [{"paper_id": r[0], "title": r[1] or "", "year": r[2] or "",
+             "chunk_count": r[3] or 0} for r in rows]
+
+
+def clear_ingest_log() -> int:
+    """Delete every ingest event. Returns how many rows went.
+
+    For `purge.py --db` only: the log describes the current contents of the
+    indexes, so wiping the indexes without wiping the log leaves a system of
+    record that would replay a corpus which no longer exists.
+    """
+    with _db_lock:
+        cur = _conn.execute("DELETE FROM ingest_log")
+        _conn.execute("DELETE FROM paper_index")
+        _maybe_commit()
+        return cur.rowcount
+
+
+def ingest_event_count() -> int:
+    return _read_conn().execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
 
 
 def delete_ingest_events(paper_id: str) -> int:
@@ -468,7 +773,8 @@ def delete_ingest_events(paper_id: str) -> int:
     """
     with _db_lock:
         cur = _conn.execute("DELETE FROM ingest_log WHERE paper_id = ?", (paper_id,))
-        _conn.commit()
+        _conn.execute("DELETE FROM paper_index WHERE paper_id = ?", (paper_id,))
+        _maybe_commit()
         return cur.rowcount
 
 
@@ -495,14 +801,14 @@ def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool
             "WHERE id = ? AND next_run = ?",
             (lease_until, lease_until, watch_id, expected_next_run),
         )
-        _conn.commit()
+        _maybe_commit()
         return cur.rowcount == 1
 
 
 def delete_watch(watch_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +830,7 @@ def save_report(report_id: str, watch_id: str, topic: str, language: str,
             "created_at=excluded.created_at, owner=excluded.owner",
             (report_id, watch_id, topic, language, markdown, citation_count, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def get_report(report_id: str, owner: str | None = None) -> dict | None:

@@ -125,14 +125,44 @@ def _attempts(model: str, provider: str) -> list[tuple[str, str]]:
     return attempts
 
 
-def generate_with_failover(model: str, contents, gen_config, provider: str | None = None):
+class DeadlineExceeded(RuntimeError):
+    """No remaining budget for another failover attempt."""
+
+
+def generate_with_failover(model: str, contents, gen_config, provider: str | None = None,
+                           *, deadline: float | None = None):
     """Try requested (provider, model), then same-provider then cross-provider
-    fallback. Per-(provider,model) circuit breaker skips recently-dead paths."""
+    fallback. Per-(provider,model) circuit breaker skips recently-dead paths.
+
+    `deadline` is a time.monotonic() timestamp by which the caller needs an
+    answer. Without it the chain walks up to three attempts at
+    LLM_REQUEST_TIMEOUT_S each, so a fully-stalled chain runs ~180s — past the
+    agent's own reflexion budget, which is the case config.py:415-424 describes.
+    With it, an attempt that cannot finish before the deadline is not started:
+    the caller gets its remaining time back to finalise a draft instead of
+    spending it on a request whose answer would arrive too late to use.
+
+    ponytail: this skips attempts, it does not cancel one already in flight —
+    the provider SDKs are synchronous and own their own socket timeouts. Bounding
+    what we start is the part that changes behaviour; true cancellation needs a
+    request-scoped abort the SDKs do not currently expose.
+    """
     provider = resolve_provider(model, provider)
     last_exc: Exception | None = None
     any_attempted = False
 
     for prov, mdl in _attempts(model, provider):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < _config.LLM_MIN_ATTEMPT_S:
+                logger.warning(
+                    "[failover] %.1fs left, below the %.1fs an attempt needs — "
+                    "stopping the chain instead of starting %s:%s",
+                    remaining, _config.LLM_MIN_ATTEMPT_S, prov, mdl)
+                if last_exc is not None:
+                    raise last_exc
+                raise DeadlineExceeded(
+                    f"Out of budget before any LLM attempt ({remaining:.1f}s left)")
         key = _circuit_key(prov, mdl)
         if _circuit_blocked(key):
             logger.info(f"[failover] {prov}:{mdl} circuit open, skipping")
@@ -148,6 +178,60 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
             if backend.is_permanent(exc):
                 raise
             logger.warning(f"[failover] {prov}:{mdl} failed ({exc!s:.120}) — next path")
+            _circuit_trip(key)
+            continue
+
+    if not any_attempted:
+        raise RuntimeError("All configured LLM paths are circuit-open; retry after cooldown.")
+    raise last_exc  # type: ignore[misc]
+
+
+def generate_stream_with_failover(model: str, contents, gen_config,
+                                  provider: str | None = None, *,
+                                  deadline: float | None = None):
+    """Stream text chunks, failing over between paths ONLY before the first chunk.
+
+    Once a token has been handed to the caller it has been shown to a user, so a
+    silent switch to another model mid-answer would splice two different answers
+    together. Before the first chunk nothing is committed and the usual chain
+    applies.
+
+    Same deadline semantics as generate_with_failover: an attempt that cannot
+    start in time is not started.
+    """
+    provider = resolve_provider(model, provider)
+    last_exc: Exception | None = None
+    any_attempted = False
+
+    for prov, mdl in _attempts(model, provider):
+        if deadline is not None and (deadline - time.monotonic()) < _config.LLM_MIN_ATTEMPT_S:
+            if last_exc is not None:
+                raise last_exc
+            raise DeadlineExceeded("Out of budget before any streaming attempt")
+        key = _circuit_key(prov, mdl)
+        if _circuit_blocked(key):
+            logger.info(f"[failover] {prov}:{mdl} circuit open, skipping (stream)")
+            continue
+        backend = get_backend(prov)
+        any_attempted = True
+        emitted = False
+        try:
+            for chunk in backend.generate_stream(mdl, contents, gen_config):
+                emitted = True
+                yield chunk
+            _circuit_clear(key)
+            return
+        except Exception as exc:
+            if emitted:
+                # Half an answer is already on the user's screen; the caller must
+                # see the break rather than have a second model continue it.
+                logger.error(f"[failover] {prov}:{mdl} broke mid-stream — no failover")
+                raise
+            last_exc = exc
+            if backend.is_permanent(exc):
+                raise
+            logger.warning(f"[failover] {prov}:{mdl} failed before first token "
+                           f"({exc!s:.120}) — next path")
             _circuit_trip(key)
             continue
 

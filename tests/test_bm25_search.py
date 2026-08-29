@@ -409,3 +409,70 @@ def test_invalidate_drops_the_saved_cache_too(_cache_dir):
 
     bm25_search.invalidate()
     assert not bm25_search._cache_path(coll.name).exists()
+
+
+# ── df counters + compaction (B1) ───────────────────────────────────────────
+
+def _small_index():
+    idx = bm25_search.BM25Index()
+    idx.build(
+        ["a", "b", "c"],
+        ["antenna optimization deep learning",
+         "antenna design microstrip",
+         "quantum error correction"],
+    )
+    return idx
+
+
+def test_df_counters_track_tombstones():
+    """df used to be recomputed per query term by walking that term's whole
+    posting list against the tombstone set."""
+    idx = _small_index()
+    assert idx.df["antenna"] == 2
+    assert idx.df["quantum"] == 1
+
+    idx.remove_documents(["b"])
+    assert idx.df["antenna"] == 1, "a tombstoned doc must stop counting toward df"
+    assert idx.df["quantum"] == 1
+
+
+def test_readding_an_id_does_not_double_count_df():
+    idx = _small_index()
+    idx.add_documents(["a"], ["antenna antenna antenna"])
+    assert idx.df["antenna"] == 2, "the replaced copy must be tombstoned, not counted twice"
+
+
+def test_compaction_reclaims_slots_and_preserves_search():
+    idx = _small_index()
+    before_ids, _ = idx.search("antenna")
+    assert set(before_ids) == {"a", "b"}
+
+    idx.remove_documents(["b"])
+    assert idx.deleted_ratio > 0
+    freed = idx.compact()
+
+    assert freed == 1
+    assert idx._deleted == set()
+    assert idx.doc_ids == ["a", "c"]
+    assert idx.n_docs == 2
+    after_ids, _ = idx.search("antenna")
+    assert after_ids == ["a"], "compaction must not change what the index returns"
+    assert idx.search("quantum")[0] == ["c"], "surviving docs must keep their postings"
+
+
+def test_compaction_of_a_clean_index_is_a_no_op():
+    idx = _small_index()
+    assert idx.compact() == 0
+    assert idx.doc_ids == ["a", "b", "c"]
+
+
+def test_rebuild_derived_recovers_df_after_a_cache_load():
+    """df and doc_terms are not persisted — the loader reconstructs them."""
+    idx = _small_index()
+    idx.remove_documents(["c"])
+    idx.df = {}
+    idx.doc_terms = []
+    idx._rebuild_derived()
+
+    assert idx.df["antenna"] == 2
+    assert idx.df["quantum"] == 0, "a tombstoned doc must not be counted on reload"

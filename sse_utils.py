@@ -2,14 +2,24 @@
 
 import asyncio
 import json
+import logging
 import threading
 
 from fastapi.concurrency import run_in_threadpool
 
+import config
 import lang_utils
 import llm_client
 import rag
 import translation
+
+logger = logging.getLogger(__name__)
+
+# Bounds how many generations can be producing chunks at once. Acquired before the
+# producer thread starts and released when it finishes, so a burst of streaming
+# clients queues here rather than as an unbounded pile of threads each holding a
+# provider connection open.
+_producer_slots = threading.Semaphore(config.SSE_MAX_PRODUCERS)
 
 # Distinct from providers.base.TRUNCATION_NOTE, which means "hit the token limit".
 # This one means the connection died mid-generation, so the answer stops wherever
@@ -35,21 +45,82 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
     loop = asyncio.get_running_loop()  # fix: get_event_loop() deprecated in async contexts (Python 3.10+)
     stop_event = threading.Event()
 
-    def _enqueue(item):
-        """Block until queue has space, ensuring terminal events are never dropped."""
+    dropped = 0
+    # Producer-owned, and the ONLY complete copy of the answer. The consumer sees
+    # whatever survived the queue; anything dropped for a slow reader is still
+    # text the model generated, and the done event has to carry it.
+    produced: list[str] = []
+    produced_lock = threading.Lock()
+
+    def _enqueue_terminal(item):
+        """Block until the queue has space. Only for error/done, which must land."""
         fut = asyncio.run_coroutine_threadsafe(q.put(item), loop)
         fut.result(timeout=30)
+
+    def _offer_chunk(item):
+        """Hand over a chunk without ever blocking the producer.
+
+        A slow client used to stall generation itself: the producer waited up to
+        30s per chunk on a full queue, holding a provider connection open for
+        minutes because the reader was not draining. Chunks are the one event
+        that can be sacrificed — the done event carries the complete, compacted
+        answer and the client re-renders from it — so a full queue drops its
+        oldest chunk rather than stopping the generation that fills it.
+        """
+        nonlocal dropped
+        with produced_lock:
+            produced.append(item[1])
+
+        def _put():
+            nonlocal dropped
+            if q.full():
+                try:
+                    q.get_nowait()
+                    dropped += 1
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:
+                dropped += 1
+
+        loop.call_soon_threadsafe(_put)
 
     def _run():
         try:
             for chunk in llm_client.llm_generate_stream(prompt, max_tokens, model=model, provider=provider):
                 if stop_event.is_set():
                     break
-                _enqueue(("chunk", chunk))
+                _offer_chunk(("chunk", chunk))
         except Exception as exc:
-            _enqueue(("error", str(exc)))
+            try:
+                _enqueue_terminal(("error", str(exc)))
+            except Exception:
+                logger.warning("Could not deliver the stream error event", exc_info=True)
         finally:
-            _enqueue(("done", None))
+            # Nested, because delivery can raise on its own (a 30s timeout, or a
+            # loop already closed by a disconnect). A slot leaked here is
+            # permanent: SSE_MAX_PRODUCERS shrinks by one for the process.
+            try:
+                _enqueue_terminal(("done", None))
+            except Exception:
+                logger.warning("Could not deliver the stream done event", exc_info=True)
+            finally:
+                _producer_slots.release()
+
+    # Off-loop: a blocking semaphore wait here would stall every other request
+    # on this worker for up to ADMISSION_WAIT_S, which is the opposite of what
+    # bounding producers is for.
+    got_slot = await asyncio.to_thread(
+        _producer_slots.acquire, True, config.ADMISSION_WAIT_S)
+    if not got_slot:
+        # Same shape as any other stream error, so the client renders it
+        # instead of hanging on a connection that will never produce.
+        payload = json.dumps({'type': 'error',
+                              'message': 'Server is at streaming capacity. Retry shortly.'})
+        yield f"data: {payload}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -83,7 +154,17 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
             else:  # done
                 break
 
-        assembled = "".join(full_answer)
+        if dropped:
+            # The final answer is unaffected — the done event below carries the
+            # whole compacted text — but the live typing effect skipped ahead.
+            logger.info("SSE backpressure: %d chunk event(s) dropped for a slow client",
+                        dropped)
+
+        # produced[], not full_answer[]: the queue is a delivery channel and may
+        # have dropped chunks for a slow reader, but the answer that gets
+        # compacted, cited, logged and stored must be the whole generation.
+        with produced_lock:
+            assembled = "".join(produced) if produced else "".join(full_answer)
         # Compact BEFORE translating, so the translated answer inherits the dense
         # numbering (same order rag.answer_question uses). Chunks already streamed
         # carry the raw markers — an answer citing papers 1 and 4 of 4 renders

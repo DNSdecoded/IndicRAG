@@ -1,8 +1,9 @@
 """
 Shared FastAPI dependencies: auth, rate limiting, in-memory session/job state.
 
-Session/job dicts live here (not persistence.py yet — that's a later phase task)
-so routers can share them without importing api_server and creating a cycle.
+Session/job dicts live here — an in-memory view hydrated from persistence.py at
+import and written back through it on mutation — so routers can share them
+without importing api_server and creating a cycle.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ from typing import Any, Dict, Optional
 import asyncio
 import hashlib
 import hmac
+import logging
 import os
 import threading
 import time
@@ -24,6 +26,8 @@ from slowapi.util import get_remote_address
 
 import config
 import persistence
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -321,3 +325,62 @@ def _append_session_messages(session_id: str, user_text: str, assistant_text: st
             del msgs[:len(msgs) - max_msgs]
         sess["updated_at"] = datetime.now(timezone.utc).isoformat()
         persistence.save_session(session_id, sess)
+
+
+# ---------------------------------------------------------------------------
+# Admission control
+#
+# The RAG pipeline runs off-loop in FastAPI's shared threadpool. Nothing capped
+# how many requests could be in flight, so a burst of heavy queries occupied the
+# pool for as long as it took to rerank them and everything else — /health, job
+# polls, the SPA's own status calls — queued behind that work. The server was
+# indistinguishable from a hung one.
+#
+# A bounded pool per workload turns that into an explicit, fast rejection.
+# Agents get the smaller pool and are therefore shed first: they are the most
+# expensive shape (multi-tool, reflexion loops) and the most tolerant of a retry.
+# ---------------------------------------------------------------------------
+import anyio  # noqa: E402  (kept beside the code it serves)
+
+_query_admission = anyio.CapacityLimiter(config.QUERY_CONCURRENCY)
+_agent_admission = anyio.CapacityLimiter(config.AGENT_CONCURRENCY)
+
+
+async def _admit(limiter: "anyio.CapacityLimiter", pool: str):
+    """Hold one admission slot for the life of the request, or shed with 429."""
+    acquired = False
+    with anyio.move_on_after(config.ADMISSION_WAIT_S):
+        await limiter.acquire()
+        acquired = True
+
+    if not acquired:
+        import metrics
+        metrics.record_admission_shed(pool)
+        logger.warning("Shedding %s request: %d slot(s) all busy for %.1fs",
+                       pool, limiter.total_tokens, config.ADMISSION_WAIT_S)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"error": "Server is at capacity. Retry shortly.",
+                    "code": "OVERLOADED"},
+            headers={"Retry-After": str(config.ADMISSION_RETRY_AFTER_S)},
+        )
+
+    import metrics
+    metrics.admission_enter(pool)
+    try:
+        yield
+    finally:
+        metrics.admission_exit(pool)
+        limiter.release()
+
+
+async def admit_query():
+    """FastAPI dependency: bound concurrent /query, /chat and /compare work."""
+    async for _ in _admit(_query_admission, "query"):
+        yield
+
+
+async def admit_agent():
+    """FastAPI dependency: bound concurrent agent work, shed before queries."""
+    async for _ in _admit(_agent_admission, "agent"):
+        yield

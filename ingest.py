@@ -184,7 +184,7 @@ def _build_paper_chunks(
     }
 
 
-def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
+def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> bool:
     """Write one paper's ingest-log row.
 
     Shared by both ingest paths on purpose. ingest_paper() and ingest_directory()
@@ -193,8 +193,11 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
     uses — unlogged, and reindex.py would report an empty log after a perfectly
     successful ingest.
 
-    Best-effort: a logging failure costs replayability for this paper, not the
-    ingest that already succeeded.
+    Returns True when the row landed. A failure is NOT fatal to the ingest — the
+    chunks are already in the indexes and are searchable — but it is a real
+    divergence: the log no longer describes the corpus, so a replay silently
+    omits this paper and the reconciler reports it as `not_in_log`. Callers are
+    expected to surface a False, not ignore it.
     """
     try:
         import persistence
@@ -213,9 +216,18 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
             created_at=datetime.now(timezone.utc).isoformat(),
             embed_backend=vector_store._embed_backend(),
         )
+        return True
     except Exception:
-        logger.warning("Could not record ingest log for %s — this paper will not be "
-                       "replayable by reindex.py", prepared.get('paper_id'), exc_info=True)
+        logger.error("INGEST LOG WRITE FAILED for %s. Its chunks are indexed and "
+                     "searchable but absent from the log, so a reindex would drop "
+                     "them. Run reindex.py --backfill-log, or re-ingest the paper.",
+                     prepared.get('paper_id'), exc_info=True)
+        try:
+            import metrics
+            metrics.record_cascade_failure("ingest_log_write")
+        except Exception:
+            pass  # instrumentation must never mask the real failure
+        return False
 
 
 def ingest_paper(
@@ -267,7 +279,13 @@ def ingest_paper(
     # Record what was indexed so the indexes can be rebuilt without re-parsing
     # the PDF. Written AFTER the indexes, so the log never claims chunks that
     # failed to land.
-    _record_ingest(prepared, source_path)
+    if not _record_ingest(prepared, source_path):
+        # Indexed but unlogged. The chunks are searchable, so this is not a failed
+        # ingest — but a reindex would drop them, and the caller is the only one
+        # who can decide to re-ingest. _record_ingest has already logged the
+        # repair step at ERROR.
+        logger.error("Paper %s is indexed but missing from the ingest log",
+                     prepared['paper_id'])
 
     return len(prepared['chunks'])
 
@@ -494,25 +512,42 @@ def ingest_directory(
         total = len(pdf_files)
         done = 0
 
+        # Extraction results are collected first so the network-bound arXiv
+        # enrichment can run for the whole batch at once. Done inline, it was one
+        # round trip plus a 1s politeness delay per paper, serially, before any
+        # embedding could start — N seconds of pure waiting on every bulk run.
+        extracted = []
         for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=total, desc="Extracting PDFs"):
-            pdf_path = future_to_pdf[future]
-            done += 1
             try:
                 path, paper_id, result, metadata = future.result()
+            except Exception as extract_err:
+                failed_path = future_to_pdf[future]
+                logger.error(f"Error processing {failed_path}: {extract_err}", exc_info=True)
+                stats["failed"] += 1
+                stats["failed_files"].append(failed_path)
+                continue
+            if result is None:
+                stats["failed"] += 1
+                stats["failed_files"].append(path)
+                continue
+            extracted.append((path, paper_id, result, metadata))
 
-                if result is None:
-                    stats["failed"] += 1
-                    stats["failed_files"].append(path)
-                    continue
+        enriched_by_title = {}
+        if config.ENRICH_METADATA and extracted:
+            # In the parent, not the CPU workers: this is network work, and those
+            # workers are processes sized for parsing.
+            import metadata_enrich
+            enriched_by_title = metadata_enrich.enrich_many(
+                [r['title'] for _, _, r, _ in extracted])
 
-                # arXiv enrichment (network) in the parent, not the CPU workers.
-                if config.ENRICH_METADATA:
-                    import metadata_enrich
-                    enriched = metadata_enrich.enrich_from_arxiv(result['title'])
-                    if enriched:
-                        # Caller/worker-computed metadata (file_hash, content_hash)
-                        # wins over enriched fields.
-                        metadata = {**enriched, **metadata}
+        for path, paper_id, result, metadata in extracted:
+            done += 1
+            try:
+                enriched = enriched_by_title.get(result['title'])
+                if enriched:
+                    # Caller/worker-computed metadata (file_hash, content_hash)
+                    # wins over enriched fields.
+                    metadata = {**enriched, **metadata}
 
                 # Build chunks + dedup now; embedding is batched below.
                 prepared = _build_paper_chunks(
@@ -532,9 +567,9 @@ def ingest_directory(
                     progress_cb(done, total, f"Ingesting {Path(path).name} ({done}/{total})")
 
             except Exception as e:
-                logger.error(f"\nError processing {pdf_path}: {e}")
+                logger.error(f"\nError processing {path}: {e}")
                 stats["failed"] += 1
-                stats["failed_files"].append(str(pdf_path))
+                stats["failed_files"].append(str(path))
 
     # Batch-embed every chunk across all papers in one pass — BGE-M3 is far more
     # efficient on one large batch than on one embed call per paper.
@@ -572,8 +607,25 @@ def ingest_directory(
         stats["total_chunks"] = len(all_chunks)
 
         # Same log write as the single-paper path, after the indexes are written.
-        for p in prepared_papers:
-            _record_ingest(p)
+        # One transaction for the batch: per-paper commits meant one fsync each
+        # to record work that succeeded or failed as a single upsert anyway.
+        #
+        # A row that fails commits the REST of the batch rather than rolling back,
+        # deliberately. Every paper here is already in the indexes, so discarding
+        # the rows that did succeed would turn one unlogged paper into a whole
+        # batch of them — the failure is surfaced instead, in stats and in the
+        # log, because the fix is per-paper (backfill or re-ingest).
+        import persistence
+        unlogged = []
+        with persistence.batch_writes():
+            for p in prepared_papers:
+                if not _record_ingest(p):
+                    unlogged.append(p.get('paper_id'))
+        if unlogged:
+            stats["unlogged_papers"] = unlogged
+            logger.error("%d paper(s) are indexed but missing from the ingest log: %s. "
+                         "They are searchable now and would vanish on the next reindex.",
+                         len(unlogged), ", ".join(str(u) for u in unlogged[:5]))
 
     # Print summary
     logger.info("\n" + "=" * 60)

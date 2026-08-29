@@ -7,13 +7,46 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
 [![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.7%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.5-blue.svg)
+![Version](https://img.shields.io/badge/version-2.6--dev-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
 A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
 
 Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini + OpenRouter), **topic watches**, and **literature review reports**.
+
+---
+
+## What's New in v2.6 (in progress)
+
+**Theme: bounded, honest serving.** The search indexes are derived views over the
+ingest log; v2.6 adds the machinery that verifies that claim, and bounds what the
+server takes on before it degrades for everyone.
+
+| Area | v2.5 | v2.6 |
+|------|------|------|
+| **Index integrity** | Nothing checked the log against the indexes | **Reconciler** (`check_db.py`, `POST /reconcile`) diffs the ingest log against ChromaDB and BM25 per paper; `/quality` reports the result |
+| **Delete cascade** | Best-effort, warn-and-continue | **Compensating retry**, then ERROR + `indicrag_cascade_failures_total` — a partial delete is no longer silent |
+| **Backup** | None (copying `sessions.db` mid-write tears it) | **`backup.py`** — online SQLite snapshot + manifest; restore replays the log into the indexes |
+| **Schema changes** | `_ensure_column()` at import, no record of what ran | **Versioned migrations** recorded in a `schema_migrations` table |
+| **Load handling** | Unbounded; heavy queries starved `/health` and job polls | **Admission control** — bounded pools per workload, `429` + `Retry-After`, agents shed first |
+| **LLM failover** | Up to 3 attempts x 60s, past the agent's own budget | **Deadline-aware** — an attempt that cannot finish in time is never started |
+| **Agent streaming** | Re-chunked a finished answer at 80 chars | **Real token streaming**; the done event carries the citation-corrected answer |
+| **SSE under load** | A slow client blocked the producer 30s per chunk | **Drop-oldest chunks**, bounded producer threads — generation never waits on a reader |
+| **BM25 deletes** | `df` rescanned per query term against tombstones | **Live `df` counters** + automatic compaction past 20% tombstones |
+| **Dedup on ingest** | Scanned every chunk's metadata out of ChromaDB | **`paper_index` mirror** — a papers-sized table, written in the log's own transaction |
+| **arXiv enrichment** | Serial, 1s+ per paper, re-crawled every run | **Parallel (3 workers) + cached** in SQLite, misses included |
+| **Orphaned HNSW segments** | Accumulated forever (24 dirs / 18 MB measured) | **`purge.py --segments`** reclaims what no live collection references |
+| **SQLite** | One connection, one global lock, commit per write | **Per-thread read connections** + `batch_writes()` — WAL is finally worth having |
+| **Alerting** | Metrics existed, nobody watched them | **`deploy/alerts.example.yml`** — 8 Prometheus rules over latency, capacity and integrity |
+| **Prompts** | Thresholds hardcoded in two places, history untagged | **Config-driven thresholds**, `<history>` / `<contradictions>` sections, grey-literature and empty-context rules |
+
+### v2.6 — new maintenance surface
+
+* **`POST /reconcile`** runs the log-vs-index diff. It walks the whole collection, which is why it is a POST — and why `/quality` reads the cached result rather than triggering a scan.
+* **`python check_db.py`** does the same from the command line and exits non-zero on divergence.
+* **`python backup.py create | list | restore <file> --yes`** snapshots the system of record. Restoring replays it into the indexes, because a restored log with stale vectors is worse than either snapshot.
+* **`python purge.py --segments`** deletes only segment directories Chroma's own metadata does not reference, and refuses to act if that metadata is unreadable.
 
 ---
 
@@ -343,6 +376,7 @@ for src in data['sources']:
 | `/chat/{session_id}` | GET | Fetch one session's history (owner only; other keys get 404) |
 | `/agent/query` | POST | Agentic pipeline with reflexion loops (timeout → 504) |
 | `/agent/stream` | POST | Agentic pipeline, streamed step-by-step (SSE) |
+| `/reconcile` | POST | Diff the ingest log against ChromaDB + BM25 (v2.6) |
 | `/compare` | POST | Kick off a multi-model answer comparison (async, returns `job_id`) |
 | `/compare/status/{job_id}` | GET | Comparison job status / results |
 | `/models` | GET | Curated model allowlist with tool-capability metadata |
@@ -412,10 +446,12 @@ IndicRAG/
 │   ├── requirements.txt             # dependencies
 │   ├── .env.example                 # LLM_API_KEY(S), TAVILY, AGENT_MAX_TOKENS, ...
 │   ├── start_server.py              # Launcher with pre-flight checks
-│   └── patterns.json                # Regex patterns for PDF cleaning
+│   ├── patterns.json                # Regex patterns for PDF cleaning
+│   ├── backup.py                    # Online DB snapshot + restore-and-replay
+│   └── check_db.py                  # Log-vs-index reconciler (CLI + /reconcile)
 │
 ├── 🐍 Core Modules
-│   ├── config.py                    # Configuration + env parsing (VERSION = 2.4.0-dev)
+│   ├── config.py                    # Configuration + env parsing (VERSION = 2.6.0-dev)
 │   ├── api_server.py                # FastAPI app: lifespan warm-up + router mounting
 │   ├── deps.py                      # Shared deps: auth, rate limit, session/job state
 │   ├── middleware.py                # Request-ID propagation
@@ -514,6 +550,14 @@ Key settings (all overridable via environment variables):
 | `LLM_THINKING_LEVEL` | `minimal` | Thinking level for standard RAG — the Gemini 3.x control. `minimal`, `low`, `medium`, `high`, or empty to accept the model default. **Not neutral:** the model's own default is `medium`, and those thought tokens come out of `LLM_MAX_TOKENS`, squeezing the answer. Not every model offers every level — `gemini-3.7-flash` rejects `minimal`; the backend learns that per model and escalates one level up rather than failing |
 | `AGENT_THINKING_LEVEL` | `minimal` | Same, for the agentic pipeline |
 | `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
+| `COMPLETENESS_ACCEPT` | `0.75` | Completeness the reflexion evaluator must see to accept an answer. Was hardcoded twice — in the prompt and in the gate — so tuning one silently disagreed with the other |
+| `LLM_MIN_ATTEMPT_S` | `20` | Least remaining budget a deadline-aware caller will start another failover attempt with. Below it the chain stops and hands the time back |
+| `QUERY_CONCURRENCY` | `8` | Concurrent `/query`, `/chat` and `/compare` requests. Beyond it, callers wait `ADMISSION_WAIT_S` and then get `429` |
+| `AGENT_CONCURRENCY` | `4` | Same for `/agent/*`. Smaller on purpose: agents are the expensive shape, so they shed first |
+| `ADMISSION_WAIT_S` | `5` | How long a request may wait for an admission slot before being shed |
+| `ADMISSION_RETRY_AFTER_S` | `10` | `Retry-After` hint sent with a shed request |
+| `SSE_MAX_PRODUCERS` | `16` | Concurrent SSE producer threads. Each holds a provider connection, so unbounded threads let slow clients pin the upstream API |
+| `ENRICH_WORKERS` | `3` | Parallel arXiv metadata lookups during a bulk ingest. Deliberately small — arXiv is a shared public service |
 | `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
 | `CONTRADICTION_NLI_THRESHOLD` | `0.6` | NLI score threshold for contradiction detection |
 | `TAVILY_API_KEY` | (optional) | Enables agent web search tool |
@@ -703,10 +747,41 @@ See [docs/evaluation.md](docs/evaluation.md) for methodology.
 
 ```bash
 python purge.py --papers      # Delete all PDFs
-python purge.py --db          # Clear vector database
+python purge.py --db          # Clear vector DB, ingest log and BM25 cache together
 python purge.py --models      # Remove cached models
-python purge.py --all --yes   # Clear everything
+python purge.py --segments    # Reclaim orphaned ChromaDB HNSW segment dirs
+python purge.py --all --yes   # Clear everything (--segments stays separate: it destroys nothing live)
 ```
+
+`--db` clears the ingest log and the BM25 cache along with the vectors. Wiping the
+indexes alone left a system of record that would replay a corpus which no longer
+existed.
+
+### Integrity checks
+
+```bash
+python check_db.py                 # diff the ingest log against ChromaDB + BM25
+```
+
+Exits non-zero on divergence and names the offending chunk ids. The same check runs
+behind `POST /reconcile`, and `/quality` reports the last result under
+`index_integrity` — answer-quality numbers mean nothing if the corpus being answered
+from has drifted from the log. Repair with `reindex.py` (replay) or
+`reindex.py --backfill-log` (adopt chunks the log never recorded).
+
+### Backups
+
+```bash
+python backup.py create                    # snapshot into backups/
+python backup.py list                      # what is on disk, with manifests
+python backup.py restore <file> --yes      # replace the log, then rebuild the indexes
+```
+
+What gets backed up is the ingest log, not the vector store: the indexes are derived
+views a replay reproduces exactly, so a snapshot is one small SQLite file rather than
+gigabytes of HNSW. It uses SQLite's own online backup API and is safe to take with the
+server running — a plain file copy of `sessions.db` mid-write is torn, and copying it
+without its `-wal` loses the most recent writes.
 
 ### Reindexing
 

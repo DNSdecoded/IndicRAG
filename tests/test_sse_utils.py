@@ -102,3 +102,94 @@ def test_marker_past_visible_chunks_resolves_to_nothing():
     done = next(e for e in events if e["type"] == "done")
     assert [c["title"] for c in done["citations"]] == ["Paper A"]
     assert done["answer"] == "grounded [1] invented"
+
+
+# ── backpressure (A5) ───────────────────────────────────────────────────────
+
+def test_slow_client_never_stalls_the_producer(monkeypatch):
+    """A slow reader used to block the producer thread for up to 30s per chunk,
+    pinning a provider connection open for minutes. Chunks are droppable — the
+    done event carries the whole compacted answer — so the generation runs on."""
+    import asyncio
+
+    import sse_utils
+
+    produced = []
+
+    def _many_chunks(prompt, max_tokens, model=None, provider=None):
+        for i in range(500):          # far more than the queue holds
+            produced.append(i)
+            yield f"chunk-{i} "
+
+    monkeypatch.setattr(sse_utils.llm_client, "llm_generate_stream", _many_chunks)
+    monkeypatch.setattr(sse_utils.rag, "compact_citations",
+                        lambda text, metas, visible_chunks=None: (text, []))
+
+    async def _drain_slowly():
+        events = []
+        agen = sse_utils.sse_stream("p", [], "en")
+        async for event in agen:
+            events.append(event)
+            # Let the producer run ahead while this consumer dawdles.
+            await asyncio.sleep(0)
+        return events
+
+    events = asyncio.run(_drain_slowly())
+
+    assert len(produced) == 500, "the producer must finish regardless of the reader"
+    done = [e for e in events if '"type": "done"' in e or "'type': 'done'" in e]
+    assert done, "a done event must still arrive"
+
+
+def test_streaming_capacity_is_bounded(monkeypatch):
+    """Every producer holds a provider connection; unbounded threads mean a burst
+    of slow clients can pin the upstream API."""
+    import asyncio
+    import threading
+
+    import sse_utils
+
+    monkeypatch.setattr(sse_utils, "_producer_slots", threading.Semaphore(0))
+    monkeypatch.setattr(sse_utils.config, "ADMISSION_WAIT_S", 0.01)
+
+    async def _collect():
+        return [e async for e in sse_utils.sse_stream("p", [], "en")]
+
+    events = asyncio.run(_collect())
+
+    assert any("streaming capacity" in e for e in events)
+    assert events[-1] == "data: [DONE]\n\n"
+
+
+def test_dropped_chunks_still_reach_the_final_answer(monkeypatch):
+    """Review finding: the answer was assembled from what survived the queue, so
+    backpressure silently deleted text from the answer that gets compacted,
+    cited, logged and stored."""
+    import asyncio
+    import json as _json
+
+    import sse_utils
+
+    pieces = [f"w{i} " for i in range(400)]
+
+    def _many(prompt, max_tokens, model=None, provider=None):
+        yield from pieces
+
+    monkeypatch.setattr(sse_utils.llm_client, "llm_generate_stream", _many)
+    monkeypatch.setattr(sse_utils.rag, "compact_citations",
+                        lambda text, metas, visible_chunks=None: (text, []))
+
+    async def _drain_slowly():
+        out = []
+        async for event in sse_utils.sse_stream("p", [], "en"):
+            out.append(event)
+            await asyncio.sleep(0)
+        return out
+
+    events = asyncio.run(_drain_slowly())
+
+    done = [e for e in events if '"type": "done"' in e]
+    assert done, "a done event must arrive"
+    payload = _json.loads(done[-1].removeprefix("data: ").strip())
+    assert payload["answer"] == "".join(pieces), (
+        "the done answer must be the whole generation, not just what the reader kept up with")
