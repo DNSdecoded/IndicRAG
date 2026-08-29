@@ -44,6 +44,9 @@ class _NoopMetric:
     def set(self, *a, **k):
         pass
 
+    def dec(self, *a, **k):
+        pass
+
 
 if _ENABLED:
     # Buckets span the real spread: a cache hit is sub-millisecond, a cross-encoder

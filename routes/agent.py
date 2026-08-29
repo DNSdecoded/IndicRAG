@@ -370,8 +370,19 @@ async def agent_stream(
                 """
                 if stop.is_set():
                     raise RuntimeError("client gone")
+
+                def _put():
+                    # Runs on the loop, after this function has returned, so it
+                    # must swallow its own failure: an escaped QueueFull here is
+                    # an unhandled exception in the event loop rather than the
+                    # dropped token it actually is.
+                    try:
+                        q.put_nowait(("token", text, None))
+                    except asyncio.QueueFull:
+                        pass  # the done event still carries the whole answer
+
                 try:
-                    loop.call_soon_threadsafe(q.put_nowait, ("token", text, None))
+                    loop.call_soon_threadsafe(_put)
                 except RuntimeError:
                     raise RuntimeError("client gone")
 

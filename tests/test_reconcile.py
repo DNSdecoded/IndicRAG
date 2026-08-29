@@ -158,8 +158,12 @@ def test_dedup_matches_from_the_mirror_without_touching_the_collection():
         ids=[f"{pid}_0"], embed_model="BAAI/bge-m3", chunker_version=1, created_at=TS,
     )
 
+    import config
+
     class ExplodingCollection:
-        name = "should_not_be_read"
+        # The live collection: the mirror describes exactly this one, so dedup
+        # must answer from it without touching ChromaDB.
+        name = config.COLLECTION_NAME
 
         def get(self, **kwargs):
             raise AssertionError("dedup must read the mirror, not the collection")
@@ -168,5 +172,37 @@ def test_dedup_matches_from_the_mirror_without_touching_the_collection():
         found = vector_store.find_similar_paper(
             "Attention Is All You Need", collection=ExplodingCollection())
         assert found == pid
+    finally:
+        persistence.delete_ingest_events(pid)
+
+
+def test_dedup_scans_a_foreign_collection_instead_of_the_mirror():
+    """The mirror is derived from the ingest log, which describes the LIVE
+    collection only. Answering a staging rebuild from it would report duplicates
+    that collection does not hold, and miss the ones it does."""
+    import vector_store
+
+    pid = str(uuid.uuid4())
+    persistence.record_ingest(
+        event_id=pid, paper_id=pid, content_hash="h", title="Attention Is All You Need",
+        source_path=f"papers/{pid}.pdf", chunks=["c"],
+        metadatas=[{"paper_id": pid, "title": "Attention Is All You Need"}],
+        ids=[f"{pid}_0"], embed_model="BAAI/bge-m3", chunker_version=1, created_at=TS,
+    )
+
+    scanned = []
+
+    class StagingCollection:
+        name = "staging_rebuild"
+
+        def get(self, **kwargs):
+            scanned.append(kwargs)
+            return {"ids": [], "metadatas": []}
+
+    try:
+        found = vector_store.find_similar_paper(
+            "Attention Is All You Need", collection=StagingCollection())
+        assert scanned, "a non-live collection must be scanned directly"
+        assert found is None, "the live corpus must not answer for a staging collection"
     finally:
         persistence.delete_ingest_events(pid)

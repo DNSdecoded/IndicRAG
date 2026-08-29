@@ -362,3 +362,15 @@ def test_agent_pool_is_smaller_than_the_query_pool():
     import deps
 
     assert deps._agent_admission.total_tokens <= deps._query_admission.total_tokens
+
+
+def test_admission_slot_is_released_without_prometheus(monkeypatch):
+    """_NoopMetric had no dec(), so with prometheus_client absent admission_exit
+    raised inside the finally and the slot was never released — the pool shrank
+    by one on every request until the endpoint admitted nothing."""
+    import metrics
+
+    noop = metrics._NoopMetric()
+    noop.labels(pool="query").dec()   # must not raise
+    metrics.admission_exit("query")
+    metrics.admission_enter("query")

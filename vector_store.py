@@ -590,13 +590,18 @@ def find_similar_paper(
     before the mirror existed, or a caller passing a collection the log does not
     describe (tests, a staging rebuild).
     """
+    # The mirror is derived from the ingest log, which describes the LIVE
+    # collection only. Answering a staging or test collection from it would
+    # report duplicates that are not in that collection, and miss ones that are.
+    mirror_applies = collection is None or getattr(collection, "name", None) == config.COLLECTION_NAME
     candidates = []
-    try:
-        import persistence
-        candidates = persistence.list_papers()
-    except Exception:
-        logger.warning("paper_index unavailable; falling back to a metadata scan",
-                       exc_info=True)
+    if mirror_applies:
+        try:
+            import persistence
+            candidates = persistence.list_papers()
+        except Exception:
+            logger.warning("paper_index unavailable; falling back to a metadata scan",
+                           exc_info=True)
 
     if not candidates:
         if collection is None:

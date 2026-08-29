@@ -66,9 +66,8 @@ Output: {{"sub_queries": ["deep learning sub-6GHz antenna design IoT", \
 "year_from": 2022, "domain_hints": ["eess.AP", "eess.SP"]}}
 
 Input: "ऐंटीना अनुकूलन के लिए किन मशीन लर्निंग विधियों का उपयोग किया गया है?"
-Output: {{"sub_queries": ["ऐंटीना अनुकूलन मशीन लर्निंग विधियाँ", \
-"न्यूरल नेटवर्क आधारित ऐंटीना डिज़ाइन"], "year_from": null, \
-"domain_hints": ["eess.AP"]}}
+Output: {{"sub_queries": ["ऐंटीना अनुकूलन मशीन लर्निंग विधियाँ"], \
+"year_from": null, "domain_hints": ["eess.AP"]}}
 
 Input: "What is the reported bandwidth of the proposed MIMO antenna?"
 Output: {{"sub_queries": ["reported bandwidth proposed MIMO antenna"], \

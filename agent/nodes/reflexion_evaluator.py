@@ -147,6 +147,11 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
     titles = [c.get("title", "Unknown") for c in state.get("retrieved_contexts", [])]
     source_titles = "\n".join(f"- {t}" for t in titles[:12]) or "None retrieved"
 
+    # One deadline for the whole evaluation, including the JSON-repair retry
+    # below: the reserve check above proved there is room to evaluate once, not
+    # to evaluate and then repair without limit.
+    eval_deadline = (start + config.AGENT_TIMEOUT) if start is not None else None
+
     raw_text = ""
     try:
         _model = state.get("requested_model") or config.LLM_MODEL_NAME
@@ -172,7 +177,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             # The reserve check above proved there is room to evaluate; this stops
             # the failover chain spending that room on retries whose answer would
             # arrive after the draft had to ship anyway.
-            deadline=(start + config.AGENT_TIMEOUT) if start is not None else None,
+            deadline=eval_deadline,
         )
         raw_text = rag.safe_extract_text(resp)
 
@@ -186,6 +191,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
                     thinking_config=llm_client.thinking_config_for("agent"),
                 ),
                 provider="gemini",
+                deadline=eval_deadline,
             )
             return rag.safe_extract_text(r)
 

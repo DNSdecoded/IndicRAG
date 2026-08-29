@@ -279,7 +279,13 @@ def ingest_paper(
     # Record what was indexed so the indexes can be rebuilt without re-parsing
     # the PDF. Written AFTER the indexes, so the log never claims chunks that
     # failed to land.
-    _record_ingest(prepared, source_path)
+    if not _record_ingest(prepared, source_path):
+        # Indexed but unlogged. The chunks are searchable, so this is not a failed
+        # ingest — but a reindex would drop them, and the caller is the only one
+        # who can decide to re-ingest. _record_ingest has already logged the
+        # repair step at ERROR.
+        logger.error("Paper %s is indexed but missing from the ingest log",
+                     prepared['paper_id'])
 
     return len(prepared['chunks'])
 

@@ -465,8 +465,12 @@ def retrieve_context(
     if config.USE_RERANKER and docs:
         import rerank
         with metrics.stage("rerank_cross_encoder"):
+            # The caller's top_k, not the global default: hardcoding the default
+            # here meant a caller asking for more passages was silently cut back
+            # to it, so the agent's top_k parameter advertised a range it could
+            # not deliver. top_k is None-defaulted to MAX_CONTEXT_CHUNKS above.
             docs, metas, scores = rerank.rerank(
-                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+                user_query, docs, metas, top_k=top_k)
         dists = scores
 
     # Format context for LLM
@@ -1269,7 +1273,9 @@ def answer_with_history(
         strategy=strategy,
     )
     if history_str:
-        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
+        # Same framing as prepare_chat_for_stream: /chat and /chat/stream must
+        # not build different prompts for the same request.
+        prompt = f"<history>\n{history_str}\n</history>\n\n{prompt}"
 
     english_answer = llm_generate(prompt, model=model, provider=provider)
     # Compact before any translation so the translated answer carries the same numbers.

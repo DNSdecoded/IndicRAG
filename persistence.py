@@ -256,7 +256,13 @@ def batch_writes():
 
 
 def _maybe_commit() -> None:
-    """Commit unless a batch is open. Call while holding _db_lock."""
+    """Commit unless a batch is open. Call while holding _db_lock.
+
+    EVERY write path goes through this, not only the batched ones. They share one
+    connection, so an unrelated write landing mid-batch would commit the batch's
+    half-written rows along with it — exactly the partial state batch_writes()
+    exists to prevent.
+    """
     if _batch_depth == 0:
         _conn.commit()
 
@@ -353,7 +359,7 @@ def load_sessions(max_age_hours: int = None) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
     with _db_lock:
         _conn.execute("DELETE FROM sessions WHERE updated_at < ?", (cutoff,))
-        _conn.commit()
+        _maybe_commit()
         rows = _conn.execute("SELECT id, data FROM sessions").fetchall()
     return {sid: json.loads(data) for sid, data in rows}
 
@@ -365,13 +371,13 @@ def save_session(session_id: str, session: dict) -> None:
             "ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at",
             (session_id, json.dumps(session), session["created_at"], session["updated_at"]),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def delete_session(session_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 def load_jobs(max_age_hours: int = 24) -> dict:
@@ -384,7 +390,7 @@ def load_jobs(max_age_hours: int = 24) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
     with _db_lock:
         _conn.execute("DELETE FROM jobs WHERE completed_at IS NOT NULL AND completed_at < ?", (cutoff,))
-        _conn.commit()
+        _maybe_commit()
         rows = _conn.execute("SELECT id, data FROM jobs").fetchall()
     return {jid: json.loads(data) for jid, data in rows}
 
@@ -392,7 +398,7 @@ def load_jobs(max_age_hours: int = 24) -> dict:
 def delete_job(job_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
@@ -411,7 +417,7 @@ def save_job(job_id: str, job: dict, lease_until: str = None) -> None:
             (job_id, json.dumps(job), job.get("status"), job.get("submitted_at"),
              job.get("completed_at"), lease_until),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def reap_stale_jobs(now_iso: str) -> list[dict]:
@@ -447,7 +453,7 @@ def reap_stale_jobs(now_iso: str) -> list[dict]:
             )
             reaped.append(job)
         if reaped:
-            _conn.commit()
+            _maybe_commit()
     return reaped
 
 
@@ -459,7 +465,7 @@ def save_feedback(feedback_id: str, query_id: str, rating: str, comment: str, cr
             "VALUES (?, ?, ?, ?, ?, ?)",
             (feedback_id, query_id, rating, comment, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def log_query(query_id: str, question: str, answer: str, mode: str,
@@ -475,7 +481,7 @@ def log_query(query_id: str, question: str, answer: str, mode: str,
             "answer=excluded.answer, confidence=excluded.confidence, coverage=excluded.coverage",
             (query_id, question, answer, mode, model, language, confidence, coverage, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 _FEEDBACK_CONTEXT_COLUMNS = [
@@ -551,7 +557,7 @@ def save_prefs(user_id: str, prefs: dict, updated_at: str) -> None:
             "ON CONFLICT(user_id) DO UPDATE SET prefs=excluded.prefs, updated_at=excluded.updated_at",
             (user_id, json.dumps(prefs), updated_at),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +579,7 @@ def save_watch(watch: dict) -> None:
                 watch.get("next_run"), watch.get("last_run"), watch.get("created_at"),
             ),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def get_watch(watch_id: str) -> dict | None:
@@ -724,7 +730,7 @@ def put_metadata_cache(title_key: str, data, fetched_at: str) -> None:
             (title_key, data.get("authors", ""), data.get("year", ""),
              data.get("doi", ""), 1 if data else 0, fetched_at),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def list_papers() -> list[dict]:
@@ -750,7 +756,7 @@ def clear_ingest_log() -> int:
     with _db_lock:
         cur = _conn.execute("DELETE FROM ingest_log")
         _conn.execute("DELETE FROM paper_index")
-        _conn.commit()
+        _maybe_commit()
         return cur.rowcount
 
 
@@ -768,7 +774,7 @@ def delete_ingest_events(paper_id: str) -> int:
     with _db_lock:
         cur = _conn.execute("DELETE FROM ingest_log WHERE paper_id = ?", (paper_id,))
         _conn.execute("DELETE FROM paper_index WHERE paper_id = ?", (paper_id,))
-        _conn.commit()
+        _maybe_commit()
         return cur.rowcount
 
 
@@ -795,14 +801,14 @@ def claim_watch(watch_id: str, expected_next_run: str, lease_until: str) -> bool
             "WHERE id = ? AND next_run = ?",
             (lease_until, lease_until, watch_id, expected_next_run),
         )
-        _conn.commit()
+        _maybe_commit()
         return cur.rowcount == 1
 
 
 def delete_watch(watch_id: str) -> None:
     with _db_lock:
         _conn.execute("DELETE FROM watches WHERE id = ?", (watch_id,))
-        _conn.commit()
+        _maybe_commit()
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +830,7 @@ def save_report(report_id: str, watch_id: str, topic: str, language: str,
             "created_at=excluded.created_at, owner=excluded.owner",
             (report_id, watch_id, topic, language, markdown, citation_count, created_at, owner),
         )
-        _conn.commit()
+        _maybe_commit()
 
 
 def get_report(report_id: str, owner: str | None = None) -> dict | None:
