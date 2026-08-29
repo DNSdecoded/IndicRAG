@@ -8,6 +8,7 @@ rebuild becomes a replay.
 """
 
 import uuid
+from unittest.mock import patch
 
 import persistence
 import reindex
@@ -217,3 +218,42 @@ def test_batch_writes_commits_once_and_rolls_back_as_a_unit():
     finally:
         persistence.delete_ingest_events(a)
         persistence.delete_ingest_events(b)
+
+
+def test_a_failed_log_write_does_not_discard_the_rows_that_succeeded():
+    """Review finding: a bulk batch commits per-paper rows in one transaction.
+    Rolling the batch back on one failure would unlog papers that ARE indexed,
+    turning one divergence into a whole batch of them. The failure is surfaced
+    instead — _record_ingest returns False and the caller reports it."""
+    import ingest
+
+    ok_pid, bad_pid = str(uuid.uuid4()), str(uuid.uuid4())
+
+    def _prepared(pid):
+        return {
+            "paper_id": pid, "title": f"Title {pid}", "content_hash": "h",
+            "chunks": ["c"], "metadatas": [{"paper_id": pid, "title": f"Title {pid}"}],
+            "ids": [f"{pid}_0"], "source_path": f"papers/{pid}.pdf",
+        }
+
+    real_record = persistence.record_ingest
+
+    def _fail_for_one(**kwargs):
+        if kwargs.get("paper_id") == bad_pid:
+            raise RuntimeError("disk full")
+        return real_record(**kwargs)
+
+    results = []
+    try:
+        with patch.object(persistence, "record_ingest", side_effect=_fail_for_one):
+            with persistence.batch_writes():
+                for pid in (ok_pid, bad_pid):
+                    results.append(ingest._record_ingest(_prepared(pid)))
+
+        assert results == [True, False], "the caller must be able to see which row failed"
+        assert persistence.get_ingest_events(ok_pid), (
+            "a successful row must survive another paper's failure")
+        assert not persistence.get_ingest_events(bad_pid)
+    finally:
+        persistence.delete_ingest_events(ok_pid)
+        persistence.delete_ingest_events(bad_pid)
