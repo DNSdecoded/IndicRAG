@@ -45,8 +45,10 @@ Use for cutting-edge research, recent preprints, or when the user requests arXiv
 Supports: query (str), max_results (int), year_range (str "YYYY-YYYY" or "YYYY-"), \
 open_access_only (bool, default true). \
 Use for citation counts, peer-reviewed papers, or wide literature surveys.
-  "web_search"  Live web search. Use ONLY for current events, news, or \
-non-academic queries. Do NOT use for scientific literature.
+  "web_search"  Live web search. Use primarily for current events, news, \
+non-academic queries, and grey literature that academic databases do not index — \
+standards, government or agency reports, technical documentation, datasheets. \
+Prefer the academic tools for peer-reviewed literature.
   "calculate"  Evaluate a mathematical expression.
   "execute_python"  Run sandboxed Python for data manipulation.
 

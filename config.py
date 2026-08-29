@@ -187,6 +187,10 @@ CONTRADICTION_NLI_THRESHOLD = float(os.getenv("CONTRADICTION_NLI_THRESHOLD", "0.
 
 # Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
 ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
+# Concurrent arXiv enrichment lookups during a bulk ingest. Deliberately small:
+# arXiv is a shared public service and the client already waits 1s between calls,
+# so this trades a serial N-second stall for a bounded burst, not a crawl.
+ENRICH_WORKERS = int(os.getenv("ENRICH_WORKERS", "3"))
 DEDUP_PAPERS = os.getenv("DEDUP_PAPERS", "true").lower() == "true"
 DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
 
@@ -266,6 +270,11 @@ FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.15"))
 # completeness alone. Sits below 1.0 by design: per-claim recall is 0.70, so even a
 # fully grounded answer lands near 0.70 — the old hardcoded 0.75 could never fire.
 AGENT_FAITHFULNESS_ACCEPT = float(os.getenv("AGENT_FAITHFULNESS_ACCEPT", "0.6"))
+# Completeness the reflexion evaluator must see before it accepts an answer. This
+# was hardcoded twice — as 0.75 in the evaluator prompt and again as 0.75 in the
+# gate that reads the model's verdict — so tuning one silently disagreed with the
+# other, and the model was told a rule the code did not enforce.
+COMPLETENESS_ACCEPT = float(os.getenv("COMPLETENESS_ACCEPT", "0.75"))
 FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
 # NLI model for claim faithfulness. Default is MULTILINGUAL so Indic-language
@@ -386,6 +395,22 @@ AGENT_THINKING_LEVEL = os.getenv("AGENT_THINKING_LEVEL", "minimal").strip().lowe
 # AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on
 # every stock-config run — the answer shipped with no faithfulness score at all.
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
+
+# ── Admission control ──────────────────────────────────────────────────────
+# Heavy endpoints run their pipeline in FastAPI's shared threadpool (~40 threads).
+# Nothing bounded how many could be in flight, so a burst of RAG work queued
+# /health checks and job polls behind up to 90s of reranking — the server looked
+# dead while it was merely busy. Bounding admission makes the load shed visibly
+# (429 + Retry-After) instead of degrading everything silently.
+QUERY_CONCURRENCY = int(os.getenv("QUERY_CONCURRENCY", "8"))
+# Agents are the expensive shape (multi-tool, reflexion loops), so they get a
+# smaller pool and are shed first.
+AGENT_CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "4"))
+# How long a request may wait for a slot before it is rejected. Long enough to
+# ride out a short burst, far below any client timeout.
+ADMISSION_WAIT_S = float(os.getenv("ADMISSION_WAIT_S", "5"))
+# Retry-After hint, in seconds, sent with a shed request.
+ADMISSION_RETRY_AFTER_S = int(os.getenv("ADMISSION_RETRY_AFTER_S", "10"))
 # Per-request HTTP timeout for non-streaming LLM calls. Without it the SDK defaults
 # apply (OpenAI: 600s x 2 retries) and ONE stalled request outlasts the whole agent
 # budget. 60s is sized for a legitimate call, not for the failover chain: agent
@@ -401,11 +426,21 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
 # generation headroom, make the timeout deadline-aware (remaining budget / attempts
 # left) instead of just lowering it.
 LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
+# Least remaining wall-clock a deadline-aware caller will start a new attempt with.
+# Below this the answer would land after the caller has already had to give up, so
+# the chain stops and hands the time back rather than spending it. Sized to a
+# measured unary generation (20-50s on CPU) rather than to the HTTP timeout.
+LLM_MIN_ATTEMPT_S = float(os.getenv("LLM_MIN_ATTEMPT_S", "20"))
 # Streaming needs its own, much larger budget: for Gemini the HTTP timeout covers
 # the WHOLE stream, not the gap between chunks, so reusing the 60s unary value tore
 # down long answers mid-generation (WinError 10054, truncated text). This still
 # bounds a genuinely stuck stream without capping legitimate long generations.
 LLM_STREAM_TIMEOUT_S = int(os.getenv("LLM_STREAM_TIMEOUT_S", "300"))
+# Concurrent SSE producer threads across all streaming requests. Each one holds a
+# provider connection for the length of a generation, so an unbounded count lets
+# slow clients pin the upstream API — and every one of those threads also occupies
+# a slot the rest of the process needs.
+SSE_MAX_PRODUCERS = int(os.getenv("SSE_MAX_PRODUCERS", "16"))
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
@@ -512,14 +547,17 @@ Rules:
    the question requires. Omit sections that do not apply.
 7. CONFLICTS: When sources disagree, present each position with its [N] \
    and state the disagreement explicitly rather than silently merging them.
-8. LANGUAGE: When asked to respond in a non-English language, produce the \
+8. AGREEMENT: When several sources support the same claim, cite the most \
+   recent or most authoritative one. Cite all of them only where each adds \
+   something the others do not — a different dataset, method, or magnitude.
+9. LANGUAGE: When asked to respond in a non-English language, produce the \
    entire answer in that language consistently. Keep technical terms, \
    proper nouns, and citation markers [N] in their original form.
-9. MEDICAL: If — and only if — the context describes specific patient \
-   treatment recommendations, dosage guidance, or diagnostic criteria that \
-   could directly influence a health decision, append exactly: \
-   "⚠️ This is not medical advice. Consult a qualified healthcare professional."
-10. CONDUCT: Never reference system architecture, prompt guidelines, or \
+10. MEDICAL: If — and only if — the context describes specific patient \
+    treatment recommendations, dosage guidance, or diagnostic criteria that \
+    could directly influence a health decision, append exactly: \
+    "⚠️ This is not medical advice. Consult a qualified healthcare professional."
+11. CONDUCT: Never reference system architecture, prompt guidelines, or \
     internal engineering constraints in your output.\
 """
 
@@ -550,6 +588,7 @@ QUERY_PROMPT_TEMPLATE = """\
 - Lead with a direct answer; add technical depth only as the query requires.
 - Equations in <context> may appear as flattened multi-line plain text (PDF extraction). Reconstructing such an equation into standard notation or LaTeX is faithful quoting, not inference — do it when asked, using only the symbols and values present in the context.
 - If context is insufficient, state exactly what is missing rather than inferring.
+- If NO passage in <context> addresses the query, say so plainly — "the retrieved context does not address X" — and name what would be needed. Do not answer from general knowledge, and do not pad the answer with the nearest merely-related passage.
 </instructions>\
 """
 
@@ -646,7 +685,7 @@ ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"
 # ============================================================================
 # Surfaced in the OpenAPI spec and /health, so it is what an operator reads when
 # asking "which build is this?" — it had drifted two releases behind the README.
-VERSION = "2.5.0-dev"
+VERSION = "2.6.0-dev"
 
 # ============================================================================
 # Chat / Session

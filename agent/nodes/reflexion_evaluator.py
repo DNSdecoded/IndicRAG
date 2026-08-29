@@ -36,11 +36,17 @@ relative to the query, the problem is a retrieval failure, not a writing failure
 STEP 2 — COMPLETENESS SCORE:
 Score 0.0 (answer completely missing) to 1.0 (fully addresses every aspect).
 
+GROUNDING ALREADY MEASURED: an NLI check scored {faith_score} of this answer's \
+claims as supported by the retrieved passages, against an accepted minimum of \
+{faith_threshold}. A fluent answer that is not grounded still needs more context, \
+so weigh that score alongside your own completeness judgement.
+
 STEP 3 — ACTION (choose the one action that fixes the actual deficit):
-  "accept"       Score >= 0.75 AND sources are relevant.
-  "regenerate"   Score < 0.75 BUT sources are relevant and adequate — \
+  "accept"       Score >= {accept_threshold} AND grounding is at or above its \
+                 minimum AND sources are relevant.
+  "regenerate"   Score < {accept_threshold} BUT sources are relevant and adequate — \
                  the answer is poorly written; rewrite without re-retrieving.
-  "retrieve_more" Score < 0.75 AND sources are on-topic but incomplete — \
+  "retrieve_more" Score < {accept_threshold} AND sources are on-topic but incomplete — \
                  fetch additional context with a sharper query.
   "reformulate"  Majority of source titles are OFF-TOPIC — the retrieval \
                  query was wrong; replanning needed.
@@ -149,6 +155,9 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
             query=state["original_query"],
             source_titles=source_titles,
             answer=_truncate_at_sentence(answer, EVAL_ANSWER_CHARS),
+            accept_threshold=f"{config.COMPLETENESS_ACCEPT:.2f}",
+            faith_score=f"{faithfulness_score:.2f}",
+            faith_threshold=f"{config.AGENT_FAITHFULNESS_ACCEPT:.2f}",
         )
         resp = rag.generate_with_failover(
             model=_model,
@@ -160,6 +169,10 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
                 thinking_config=llm_client.thinking_config_for("agent"),
             ),
             provider=_provider,
+            # The reserve check above proved there is room to evaluate; this stops
+            # the failover chain spending that room on retries whose answer would
+            # arrive after the draft had to ship anyway.
+            deadline=(start + config.AGENT_TIMEOUT) if start is not None else None,
         )
         raw_text = rag.safe_extract_text(resp)
 
@@ -184,7 +197,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
         if not claims:
             action = parsed.get("action", "retrieve_more")
-        elif faithfulness_score >= config.AGENT_FAITHFULNESS_ACCEPT and completeness_score >= 0.75:
+        elif (faithfulness_score >= config.AGENT_FAITHFULNESS_ACCEPT
+              and completeness_score >= config.COMPLETENESS_ACCEPT):
             action = "accept"
         else:
             action = parsed.get("action", "retrieve_more")

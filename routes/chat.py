@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 import rag
 from deps import (
     limiter, verify_api_key, current_owner, owns_session, session_turn_lock,
-    _get_or_create_session, _append_session_messages,
+    admit_query, _get_or_create_session, _append_session_messages,
 )
 from routes.query import Citation, build_paper_filter, build_tags_filter, combine_filters
 from sse_utils import sse_stream
@@ -75,6 +75,7 @@ async def chat(
     body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_query),
 ):
     """
     Send a message in a multi-turn conversation.
@@ -148,6 +149,7 @@ async def chat_stream(
     body: ChatRequest,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_query),
 ):
     """Stream a multi-turn chat answer as Server-Sent Events."""
     top_k = body.top_k

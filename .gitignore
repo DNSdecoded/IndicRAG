@@ -97,3 +97,6 @@ test_output.txt
 docs/Eval/eval_report.json
 docs/Eval/eval_history/
 .gstack/
+
+# Database snapshots (backup.py)
+backups/

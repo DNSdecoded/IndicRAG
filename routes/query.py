@@ -15,7 +15,8 @@ import config
 import persistence
 import rag
 from agent.nodes.finalizer import citation_coverage
-from deps import STATIC_DIR, limiter, verify_api_key, current_owner, _jobs, _jobs_lock, _update_job
+from deps import (STATIC_DIR, limiter, verify_api_key, current_owner, admit_query,
+                  _jobs, _jobs_lock, _update_job)
 from sse_utils import sse_stream
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,7 @@ async def query_question(
     body: QueryRequest,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_query),
 ):
     """
     Answer a question in any language using the RAG system.
@@ -302,6 +304,7 @@ async def query_stream(
     request: Request,
     body: QueryRequest,
     authenticated: bool = Depends(verify_api_key),
+    _slot: None = Depends(admit_query),
 ):
     """Stream a RAG answer as Server-Sent Events."""
     top_k = body.top_k
@@ -376,6 +379,7 @@ async def compare_papers_endpoint(
     background_tasks: BackgroundTasks,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_query),
 ):
     """Generate a papers x dimensions comparison table across the corpus.
 

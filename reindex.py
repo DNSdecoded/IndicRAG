@@ -68,16 +68,19 @@ def backfill_log_from_collection(collection_name: str) -> int:
         papers[pid]["metadatas"].append(meta)
 
     now = datetime.now(timezone.utc).isoformat()
-    for pid, p in papers.items():
-        first = p["metadatas"][0]
-        persistence.record_ingest(
-            event_id=pid, paper_id=pid, content_hash="", title=first.get("title", ""),
-            source_path="", chunks=p["chunks"], metadatas=p["metadatas"], ids=p["ids"],
-            embed_model=first.get("embed_model") or "",
-            chunker_version=first.get("chunker_version") or 0,
-            created_at=now, embed_backend=first.get("embed_backend"),
-        )
-        logger.info("  backfilled %-28s %4d chunks", pid, len(p["chunks"]))
+    # One transaction for the whole backfill: a partial log is the state this
+    # command exists to repair, so it must not be the state it can leave behind.
+    with persistence.batch_writes():
+        for pid, p in papers.items():
+            first = p["metadatas"][0]
+            persistence.record_ingest(
+                event_id=pid, paper_id=pid, content_hash="", title=first.get("title", ""),
+                source_path="", chunks=p["chunks"], metadatas=p["metadatas"], ids=p["ids"],
+                embed_model=first.get("embed_model") or "",
+                chunker_version=first.get("chunker_version") or 0,
+                created_at=now, embed_backend=first.get("embed_backend"),
+            )
+            logger.info("  backfilled %-28s %4d chunks", pid, len(p["chunks"]))
     logger.info("Backfilled %d papers / %d chunks into the ingest log.",
                 len(papers), sum(len(p["chunks"]) for p in papers.values()))
     return len(papers)

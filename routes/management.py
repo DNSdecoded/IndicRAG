@@ -440,10 +440,42 @@ async def clear_caches(authenticated: bool = Depends(verify_api_key)):
 
 @router.get("/quality", tags=["Management"])
 async def get_quality_metrics(authenticated: bool = Depends(verify_api_key)):
-    """Return the latest retrieval/generation eval metrics (docs/Eval/evaluate.py)."""
-    if _EVAL_REPORT_PATH.exists():
-        return json.loads(_EVAL_REPORT_PATH.read_text(encoding="utf-8"))
-    return {"error": "No eval report available"}
+    """Return the latest retrieval/generation eval metrics (docs/Eval/evaluate.py),
+    plus the last index-integrity reconciliation.
+
+    Answer quality has two independent failure modes and this endpoint now reports
+    both: the eval report says whether the pipeline answers well, `index_integrity`
+    says whether it is answering from the corpus the ingest log claims exists. A
+    divergence there makes every eval number above it meaningless.
+    """
+    import check_db
+
+    report = (json.loads(_EVAL_REPORT_PATH.read_text(encoding="utf-8"))
+              if _EVAL_REPORT_PATH.exists() else {"error": "No eval report available"})
+    # The cached result, never a fresh scan: reconciliation walks the whole
+    # collection, and /quality is polled by the SPA health view.
+    report["index_integrity"] = check_db.last_result()
+    return report
+
+
+@router.post("/reconcile", tags=["Management"])
+async def run_reconciliation(authenticated: bool = Depends(verify_api_key)):
+    """Diff the ingest log against ChromaDB and the BM25 index.
+
+    POST, not GET: this walks the entire collection and rebuilds the BM25 index if
+    one is not loaded, so it is a job the caller asks for, not something a browser
+    should fire off by prefetching a link.
+    """
+    import check_db
+
+    try:
+        return await run_in_threadpool(check_db.reconcile)
+    except Exception as e:
+        logger.error(f"Reconciliation failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Reconciliation failed.", "code": "INTERNAL_ERROR"},
+        )
 
 
 @router.get("/stats", tags=["Management"])

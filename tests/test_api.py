@@ -199,7 +199,12 @@ def test_quality_returns_report_when_present(client, tmp_path, monkeypatch):
     resp = client.get("/quality")
 
     assert resp.status_code == 200
-    assert resp.json() == report
+    body = resp.json()
+    assert {k: body[k] for k in report} == report
+    # Answer quality and index integrity are independent failure modes, and a
+    # divergent index makes every eval number above it meaningless — so /quality
+    # reports both. Cached, never a fresh scan: this endpoint is polled.
+    assert "index_integrity" in body
 
 
 def test_quality_returns_error_when_absent(client, tmp_path, monkeypatch):
@@ -208,7 +213,9 @@ def test_quality_returns_error_when_absent(client, tmp_path, monkeypatch):
     resp = client.get("/quality")
 
     assert resp.status_code == 200
-    assert resp.json() == {"error": "No eval report available"}
+    body = resp.json()
+    assert body["error"] == "No eval report available"
+    assert "index_integrity" in body
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +302,63 @@ def test_rate_limit_headers_present(client):
 
         # Verify that we did hit the rate limit (at least on the 31st request)
         assert rate_limit_exceeded, "Expected to hit rate limit after 31 requests"
+
+
+# ── admission control (A3) ──────────────────────────────────────────────────
+
+class _FullLimiter:
+    """A limiter that never grants a slot, so the shed path is deterministic."""
+
+    total_tokens = 1
+
+    async def acquire(self):
+        import anyio
+        await anyio.sleep_forever()
+
+    def release(self):  # pragma: no cover - never acquired
+        raise AssertionError("release on a limiter that never admitted anyone")
+
+
+def test_saturated_pool_sheds_with_429_and_retry_after(client, monkeypatch):
+    """A burst of heavy work used to occupy the shared threadpool until it
+    drained, queuing /health and job polls behind it — the server looked hung.
+    Shedding says "busy" in milliseconds instead."""
+    import config
+    import deps
+
+    monkeypatch.setattr(deps, "_query_admission", _FullLimiter())
+    monkeypatch.setattr(config, "ADMISSION_WAIT_S", 0.05)
+
+    resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 429
+    assert resp.headers.get("Retry-After") == str(config.ADMISSION_RETRY_AFTER_S)
+    assert resp.json()["detail"]["code"] == "OVERLOADED"
+
+
+def test_admission_slot_is_released_after_a_request(client):
+    """A leaked slot would shrink the pool on every request until the endpoint
+    stopped admitting anything at all."""
+    import deps
+
+    # This module has already spent /query's 30/minute budget by now, and a
+    # rate-limit 429 would look exactly like the admission 429 under test.
+    deps.limiter.reset()
+
+    before = deps._query_admission.borrowed_tokens
+    with patch("rag.answer_question", return_value={
+        "answer": "a", "language": "en", "language_name": "English",
+        "chunks_used": 1, "citations": [],
+    }):
+        resp = client.post("/query", json={"question": "anything"})
+
+    assert resp.status_code == 200
+    assert deps._query_admission.borrowed_tokens == before
+
+
+def test_agent_pool_is_smaller_than_the_query_pool():
+    """Agents are the expensive shape and the most retry-tolerant, so they are
+    the traffic that must shed first."""
+    import deps
+
+    assert deps._agent_admission.total_tokens <= deps._query_admission.total_tokens

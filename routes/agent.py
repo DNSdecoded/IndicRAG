@@ -20,7 +20,7 @@ import rag
 from agent.state import AgentState
 from agent.nodes.finalizer import citation_coverage
 from deps import (
-    limiter, verify_api_key, current_owner,
+    limiter, verify_api_key, current_owner, admit_agent,
     _get_or_create_session, _append_session_messages, session_turn_lock,
 )
 
@@ -135,6 +135,7 @@ async def agent_query(
     body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_agent),
 ):
     """
     Answer a question using the agentic IndicRAG pipeline with reflexion loops.
@@ -296,6 +297,7 @@ async def agent_stream(
     body: AgentQueryRequest,
     authenticated: bool = Depends(verify_api_key),
     owner: Optional[str] = Depends(current_owner),
+    _slot: None = Depends(admit_agent),
 ):
     """Stream agentic query results as Server-Sent Events.
 
@@ -358,6 +360,23 @@ async def agent_stream(
                 # Block until there is room, so a terminal event is never dropped.
                 asyncio.run_coroutine_threadsafe(q.put(item), loop).result(timeout=30)
 
+            def _emit_token(text: str) -> None:
+                """Called from the graph worker for every token of the first draft.
+
+                Non-blocking by design: a token is the one event worth dropping —
+                the done event carries the complete, citation-corrected answer and
+                the client re-renders from it — so a slow reader must never stall
+                the generation that feeds it.
+                """
+                if stop.is_set():
+                    raise RuntimeError("client gone")
+                try:
+                    loop.call_soon_threadsafe(q.put_nowait, ("token", text, None))
+                except RuntimeError:
+                    raise RuntimeError("client gone")
+
+            initial_state["token_sink"] = _emit_token
+
             def _run_graph():
                 merged = dict(initial_state)
                 try:
@@ -376,6 +395,7 @@ async def agent_stream(
 
             result = None
             sources_sent = False
+            streamed_tokens = False
             deadline = time.monotonic() + float(config.AGENT_TIMEOUT)
             try:
                 while True:
@@ -388,6 +408,14 @@ async def agent_stream(
                         yield f"data: {json.dumps({'type': 'error', 'message': payload})}\n\n"
                         yield "data: [DONE]\n\n"
                         return
+                    if kind == "token":
+                        # Raw [N] markers as the model wrote them: numbering cannot
+                        # be compacted until the answer is complete, so the done
+                        # event ships the corrected text and the client re-renders.
+                        # Same contract /query/stream already uses.
+                        yield f"data: {json.dumps({'type': 'chunk', 'text': payload})}\n\n"
+                        streamed_tokens = True
+                        continue
                     if kind == "done":
                         result = state
                         break
@@ -442,11 +470,15 @@ async def agent_stream(
 
             _append_session_messages(session_id, body.question, final_answer, owner, cits)
 
-            # --- Phase 3b: stream the final answer in chunks ---
-            chunk_size = 80  # characters per SSE chunk
-            for i in range(0, len(final_answer), chunk_size):
-                chunk = final_answer[i:i + chunk_size]
-                yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+            # --- Phase 3b: fallback for answers that never streamed ---
+            # A regenerated draft, a non-streaming provider path, or a client that
+            # connected after generation started all land here. When tokens DID
+            # stream, re-sending the text would duplicate the whole answer.
+            if not streamed_tokens:
+                chunk_size = 80  # characters per SSE chunk
+                for i in range(0, len(final_answer), chunk_size):
+                    chunk = final_answer[i:i + chunk_size]
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
 
             # --- Phase 4: build sources list ---
             seen_titles: set = set()
@@ -486,6 +518,10 @@ async def agent_stream(
 
             done_payload = {
                 "type": "done",
+                # The citation-corrected text. Tokens went out with the model's own
+                # [N] numbering, which can have gaps; the client renders this in
+                # their place once the answer is complete.
+                "answer": final_answer,
                 "citations": sources,
                 "language": result.get("detected_language", "en"),
                 "session_id": session_id,

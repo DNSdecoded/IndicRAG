@@ -35,8 +35,13 @@ def _post_ingest_refresh(new_ids=None, new_texts=None):
     except Exception:
         logger.warning("Failed to refresh BM25 index after ingestion", exc_info=True)
     try:
-        from cache import retrieval_cache, tool_cache
+        from cache import llm_cache, retrieval_cache, tool_cache
         retrieval_cache.invalidate()
         tool_cache.invalidate()
+        # llm_cache too: it is keyed on the prompt, and a prompt embeds the
+        # context that was retrieved when it was built. After an ingest or a
+        # delete that context is stale, so a cached answer can keep citing a
+        # paper that no longer exists for the whole TTL.
+        llm_cache.invalidate()
     except Exception:
         logger.warning("Failed to invalidate caches after ingestion", exc_info=True)

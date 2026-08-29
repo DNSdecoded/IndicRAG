@@ -494,25 +494,42 @@ def ingest_directory(
         total = len(pdf_files)
         done = 0
 
+        # Extraction results are collected first so the network-bound arXiv
+        # enrichment can run for the whole batch at once. Done inline, it was one
+        # round trip plus a 1s politeness delay per paper, serially, before any
+        # embedding could start — N seconds of pure waiting on every bulk run.
+        extracted = []
         for future in tqdm(concurrent.futures.as_completed(future_to_pdf), total=total, desc="Extracting PDFs"):
-            pdf_path = future_to_pdf[future]
-            done += 1
             try:
                 path, paper_id, result, metadata = future.result()
+            except Exception as extract_err:
+                failed_path = future_to_pdf[future]
+                logger.error(f"Error processing {failed_path}: {extract_err}", exc_info=True)
+                stats["failed"] += 1
+                stats["failed_files"].append(failed_path)
+                continue
+            if result is None:
+                stats["failed"] += 1
+                stats["failed_files"].append(path)
+                continue
+            extracted.append((path, paper_id, result, metadata))
 
-                if result is None:
-                    stats["failed"] += 1
-                    stats["failed_files"].append(path)
-                    continue
+        enriched_by_title = {}
+        if config.ENRICH_METADATA and extracted:
+            # In the parent, not the CPU workers: this is network work, and those
+            # workers are processes sized for parsing.
+            import metadata_enrich
+            enriched_by_title = metadata_enrich.enrich_many(
+                [r['title'] for _, _, r, _ in extracted])
 
-                # arXiv enrichment (network) in the parent, not the CPU workers.
-                if config.ENRICH_METADATA:
-                    import metadata_enrich
-                    enriched = metadata_enrich.enrich_from_arxiv(result['title'])
-                    if enriched:
-                        # Caller/worker-computed metadata (file_hash, content_hash)
-                        # wins over enriched fields.
-                        metadata = {**enriched, **metadata}
+        for path, paper_id, result, metadata in extracted:
+            done += 1
+            try:
+                enriched = enriched_by_title.get(result['title'])
+                if enriched:
+                    # Caller/worker-computed metadata (file_hash, content_hash)
+                    # wins over enriched fields.
+                    metadata = {**enriched, **metadata}
 
                 # Build chunks + dedup now; embedding is batched below.
                 prepared = _build_paper_chunks(
@@ -532,9 +549,9 @@ def ingest_directory(
                     progress_cb(done, total, f"Ingesting {Path(path).name} ({done}/{total})")
 
             except Exception as e:
-                logger.error(f"\nError processing {pdf_path}: {e}")
+                logger.error(f"\nError processing {path}: {e}")
                 stats["failed"] += 1
-                stats["failed_files"].append(str(pdf_path))
+                stats["failed_files"].append(str(path))
 
     # Batch-embed every chunk across all papers in one pass — BGE-M3 is far more
     # efficient on one large batch than on one embed call per paper.
@@ -572,8 +589,12 @@ def ingest_directory(
         stats["total_chunks"] = len(all_chunks)
 
         # Same log write as the single-paper path, after the indexes are written.
-        for p in prepared_papers:
-            _record_ingest(p)
+        # One transaction for the batch: per-paper commits meant one fsync each
+        # to record work that succeeded or failed as a single upsert anyway.
+        import persistence
+        with persistence.batch_writes():
+            for p in prepared_papers:
+                _record_ingest(p)
 
     # Print summary
     logger.info("\n" + "=" * 60)

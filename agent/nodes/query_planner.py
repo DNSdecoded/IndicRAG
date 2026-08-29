@@ -31,7 +31,10 @@ Extract:
    sub-query per requested item — e.g. "reward function formulation", \
    "simulation evaluation count", "sample efficiency improvement" — so \
    field-specific facts (equations, counts, metrics) get retrieved, not just \
-   the broad topic. Prioritise these checklist items within the {max_sq}-phrase budget.
+   the broad topic. Prioritise these checklist items within the {max_sq}-phrase budget. \
+   IF the query is simple and single-topic, emit exactly ONE sub-query — the \
+   query itself, search-optimised. Splitting a question that has one topic axis \
+   spends the agent's retrieval budget on near-duplicate searches.
 2. year_from — Integer year if the query contains temporal language \
    ("after YYYY", "since YYYY", "post-YYYY", "proposed in YYYY+"). \
    null if no temporal constraint exists.
@@ -62,9 +65,14 @@ Output: {{"sub_queries": ["deep learning sub-6GHz antenna design IoT", \
 "reconfigurable intelligent surface IoT antenna machine learning"], \
 "year_from": 2022, "domain_hints": ["eess.AP", "eess.SP"]}}
 
-Input: "एचडीएफसी और एसबीआई की वर्तमान एफडी ब्याज दरें क्या हैं?"
-Output: {{"sub_queries": ["एचडीएफसी वर्तमान एफडी ब्याज दरें", \
-"एसबीआई वर्तमान एफडी ब्याज दरें"], "year_from": null, "domain_hints": []}}
+Input: "ऐंटीना अनुकूलन के लिए किन मशीन लर्निंग विधियों का उपयोग किया गया है?"
+Output: {{"sub_queries": ["ऐंटीना अनुकूलन मशीन लर्निंग विधियाँ", \
+"न्यूरल नेटवर्क आधारित ऐंटीना डिज़ाइन"], "year_from": null, \
+"domain_hints": ["eess.AP"]}}
+
+Input: "What is the reported bandwidth of the proposed MIMO antenna?"
+Output: {{"sub_queries": ["reported bandwidth proposed MIMO antenna"], \
+"year_from": null, "domain_hints": ["eess.AP"]}}
 
 Input: "What transformer attention mechanisms were introduced after 2020 \
 for long document understanding?"

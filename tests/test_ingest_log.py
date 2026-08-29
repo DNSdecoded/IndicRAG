@@ -129,3 +129,91 @@ def test_changed_chunker_is_reported_as_NOT_replayable():
                "chunker_version": vector_store.CHUNKER_VERSION + 1}]
     problems = reindex._drift_report(events)
     assert any("CANNOT" in p and "Re-ingest" in p for p in problems)
+
+
+# ── snapshots (backup.py) ───────────────────────────────────────────────────
+
+def test_snapshot_and_restore_round_trip(tmp_path):
+    """A snapshot is the whole recovery story: the indexes are derived, so the
+    log is the only thing whose loss is unrecoverable."""
+    import backup
+
+    kept = str(uuid.uuid4())
+    _record(kept, ["kept chunk"])
+    snapshot = backup.create(out_dir=tmp_path)
+
+    after = str(uuid.uuid4())
+    _record(after, ["written after the snapshot"])
+    assert persistence.get_ingest_events(after)
+
+    result = persistence.restore_from(snapshot)
+    try:
+        assert result["papers"] >= 1
+        assert persistence.get_ingest_events(kept), "restore lost a recorded paper"
+        assert not persistence.get_ingest_events(after), (
+            "restore kept a paper the snapshot predates")
+    finally:
+        persistence.delete_ingest_events(kept)
+
+
+def test_snapshot_manifest_describes_what_it_holds(tmp_path):
+    import json as _json
+    import backup
+
+    pid = str(uuid.uuid4())
+    _record(pid, ["a", "b"])
+    try:
+        snapshot = backup.create(out_dir=tmp_path)
+        manifest = _json.loads(snapshot.with_suffix(".json").read_text(encoding="utf-8"))
+        assert manifest["papers"] >= 1
+        assert manifest["chunks"] >= 2
+        assert "BAAI/bge-m3" in manifest["embed_models"]
+    finally:
+        persistence.delete_ingest_events(pid)
+
+
+def test_restore_refuses_a_database_that_is_not_indicrag(tmp_path):
+    """Restoring an arbitrary SQLite file would silently wipe the system of record."""
+    import sqlite3
+
+    import pytest
+
+    stranger = tmp_path / "not-indicrag.db"
+    conn = sqlite3.connect(stranger)
+    conn.execute("CREATE TABLE unrelated (x TEXT)")
+    conn.commit()
+    conn.close()
+
+    pid = str(uuid.uuid4())
+    _record(pid, ["still here"])
+    try:
+        with pytest.raises(ValueError):
+            persistence.restore_from(stranger)
+        assert persistence.get_ingest_events(pid), "a refused restore must change nothing"
+    finally:
+        persistence.delete_ingest_events(pid)
+
+
+def test_batch_writes_commits_once_and_rolls_back_as_a_unit():
+    """A partial log is the exact divergence the log exists to prevent, so a bulk
+    write must land whole or not at all."""
+    import pytest
+
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    try:
+        with pytest.raises(RuntimeError):
+            with persistence.batch_writes():
+                _record(a, ["one"])
+                _record(b, ["two"])
+                raise RuntimeError("failure mid-batch")
+        assert not persistence.get_ingest_events(a)
+        assert not persistence.get_ingest_events(b)
+
+        with persistence.batch_writes():
+            _record(a, ["one"])
+            _record(b, ["two"])
+        assert persistence.get_ingest_events(a)
+        assert persistence.get_ingest_events(b)
+    finally:
+        persistence.delete_ingest_events(a)
+        persistence.delete_ingest_events(b)

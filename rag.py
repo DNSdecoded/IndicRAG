@@ -321,7 +321,21 @@ def retrieve_context(
     # Decide cacheability BEFORE `collection` is materialized below — the store
     # step used to re-test `collection is None`, which is never true by then, so
     # nothing was ever cached and every repeat query re-embedded and re-searched.
-    cacheable = collection is None and filter_dict is None
+    #
+    # Filtered and paper-scoped queries are cacheable too: `cache_key` already
+    # hashes `filter_dict`, so a scoped repeat cannot collide with an unscoped
+    # one. Excluding them meant every repeat of a paper-scoped question paid the
+    # full pipeline — and scoped retrieval is the exhaustive path, the expensive
+    # one. Degraded (sparse-only) results are still never stored; see below.
+    cacheable = collection is None
+
+    def _cache_and_return(res: Dict) -> Dict:
+        if cacheable:
+            # Store a copy, not the object being returned — otherwise the very
+            # first caller still holds a handle on the cached lists.
+            retrieval_cache.put(cache_key, _copy_retrieval_result(res))
+        return res
+
     if cacheable:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
@@ -351,8 +365,8 @@ def retrieve_context(
                 chunks=filtered["chunks"], metadatas=filtered["metadatas"])
             filtered["formatted_context"] = formatted_context
             filtered["chunks_used"] = chunks_used
-            return filtered
-        return scoped
+            return _cache_and_return(filtered)
+        return _cache_and_return(scoped)
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
@@ -468,11 +482,7 @@ def retrieve_context(
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
-    if cacheable:
-        # Store a copy, not the object being returned — otherwise the very first
-        # caller still holds a handle on the cached lists.
-        retrieval_cache.put(cache_key, _copy_retrieval_result(result))
-    return result
+    return _cache_and_return(result)
 
 
 def format_context(chunks: List[str], metadatas: List[Dict],
@@ -883,7 +893,12 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
                           target_lang=detected_lang, strategy=strategy)
     history_str = "\n\n".join(history_lines)
     if history_str:
-        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
+        # Tagged, like every other section of this prompt. As a bare markdown
+        # heading prepended in front of <context>, prior turns were the only
+        # untagged block in the prompt — and the one made of user-supplied text,
+        # so a turn that looked like an instruction had nothing marking it as
+        # transcript rather than direction.
+        prompt = f"<history>\n{history_str}\n</history>\n\n{prompt}"
 
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
