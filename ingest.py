@@ -184,7 +184,7 @@ def _build_paper_chunks(
     }
 
 
-def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
+def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> bool:
     """Write one paper's ingest-log row.
 
     Shared by both ingest paths on purpose. ingest_paper() and ingest_directory()
@@ -193,8 +193,11 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
     uses — unlogged, and reindex.py would report an empty log after a perfectly
     successful ingest.
 
-    Best-effort: a logging failure costs replayability for this paper, not the
-    ingest that already succeeded.
+    Returns True when the row landed. A failure is NOT fatal to the ingest — the
+    chunks are already in the indexes and are searchable — but it is a real
+    divergence: the log no longer describes the corpus, so a replay silently
+    omits this paper and the reconciler reports it as `not_in_log`. Callers are
+    expected to surface a False, not ignore it.
     """
     try:
         import persistence
@@ -213,9 +216,18 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> None:
             created_at=datetime.now(timezone.utc).isoformat(),
             embed_backend=vector_store._embed_backend(),
         )
+        return True
     except Exception:
-        logger.warning("Could not record ingest log for %s — this paper will not be "
-                       "replayable by reindex.py", prepared.get('paper_id'), exc_info=True)
+        logger.error("INGEST LOG WRITE FAILED for %s. Its chunks are indexed and "
+                     "searchable but absent from the log, so a reindex would drop "
+                     "them. Run reindex.py --backfill-log, or re-ingest the paper.",
+                     prepared.get('paper_id'), exc_info=True)
+        try:
+            import metrics
+            metrics.record_cascade_failure("ingest_log_write")
+        except Exception:
+            pass  # instrumentation must never mask the real failure
+        return False
 
 
 def ingest_paper(
@@ -591,10 +603,23 @@ def ingest_directory(
         # Same log write as the single-paper path, after the indexes are written.
         # One transaction for the batch: per-paper commits meant one fsync each
         # to record work that succeeded or failed as a single upsert anyway.
+        #
+        # A row that fails commits the REST of the batch rather than rolling back,
+        # deliberately. Every paper here is already in the indexes, so discarding
+        # the rows that did succeed would turn one unlogged paper into a whole
+        # batch of them — the failure is surfaced instead, in stats and in the
+        # log, because the fix is per-paper (backfill or re-ingest).
         import persistence
+        unlogged = []
         with persistence.batch_writes():
             for p in prepared_papers:
-                _record_ingest(p)
+                if not _record_ingest(p):
+                    unlogged.append(p.get('paper_id'))
+        if unlogged:
+            stats["unlogged_papers"] = unlogged
+            logger.error("%d paper(s) are indexed but missing from the ingest log: %s. "
+                         "They are searchable now and would vanish on the next reindex.",
+                         len(unlogged), ", ".join(str(u) for u in unlogged[:5]))
 
     # Print summary
     logger.info("\n" + "=" * 60)
