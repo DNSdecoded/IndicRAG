@@ -159,3 +159,37 @@ def test_streaming_capacity_is_bounded(monkeypatch):
 
     assert any("streaming capacity" in e for e in events)
     assert events[-1] == "data: [DONE]\n\n"
+
+
+def test_dropped_chunks_still_reach_the_final_answer(monkeypatch):
+    """Review finding: the answer was assembled from what survived the queue, so
+    backpressure silently deleted text from the answer that gets compacted,
+    cited, logged and stored."""
+    import asyncio
+    import json as _json
+
+    import sse_utils
+
+    pieces = [f"w{i} " for i in range(400)]
+
+    def _many(prompt, max_tokens, model=None, provider=None):
+        yield from pieces
+
+    monkeypatch.setattr(sse_utils.llm_client, "llm_generate_stream", _many)
+    monkeypatch.setattr(sse_utils.rag, "compact_citations",
+                        lambda text, metas, visible_chunks=None: (text, []))
+
+    async def _drain_slowly():
+        out = []
+        async for event in sse_utils.sse_stream("p", [], "en"):
+            out.append(event)
+            await asyncio.sleep(0)
+        return out
+
+    events = asyncio.run(_drain_slowly())
+
+    done = [e for e in events if '"type": "done"' in e]
+    assert done, "a done event must arrive"
+    payload = _json.loads(done[-1].removeprefix("data: ").strip())
+    assert payload["answer"] == "".join(pieces), (
+        "the done answer must be the whole generation, not just what the reader kept up with")

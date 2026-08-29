@@ -242,7 +242,11 @@ def _run_bulk_ingest(job_id: str):
         )
         _post_ingest_refresh()
         processing_time = time.time() - start_time
-        status_value = "partial" if stats.get("failed", 0) > 0 else "success"
+        # Unlogged papers count toward partial: their chunks are searchable, so
+        # they are not failures, but a run that leaves the log unable to describe
+        # the corpus has not fully succeeded either.
+        _incomplete = stats.get("failed", 0) > 0 or stats.get("unlogged_papers")
+        status_value = "partial" if _incomplete else "success"
         _update_job(
             job_id,
             status=status_value,

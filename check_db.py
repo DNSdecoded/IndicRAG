@@ -8,7 +8,7 @@ one is invisible from the outside: retrieval simply cites a paper that is gone,
 or silently stops returning one that is not.
 
 Run it as a command (`python check_db.py`, exit 1 on divergence) or through
-`GET /reconcile`, which caches the result for `/quality` to surface.
+`POST /reconcile`, which caches the result for `/quality` to surface.
 
 ponytail: one full metadata scan of the collection per run, which is why this is
 a maintenance command and not a per-request check. If the corpus outgrows that,

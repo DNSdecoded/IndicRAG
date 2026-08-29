@@ -46,6 +46,11 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
     stop_event = threading.Event()
 
     dropped = 0
+    # Producer-owned, and the ONLY complete copy of the answer. The consumer sees
+    # whatever survived the queue; anything dropped for a slow reader is still
+    # text the model generated, and the done event has to carry it.
+    produced: list[str] = []
+    produced_lock = threading.Lock()
 
     def _enqueue_terminal(item):
         """Block until the queue has space. Only for error/done, which must land."""
@@ -63,6 +68,8 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
         oldest chunk rather than stopping the generation that fills it.
         """
         nonlocal dropped
+        with produced_lock:
+            produced.append(item[1])
 
         def _put():
             nonlocal dropped
@@ -86,12 +93,27 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
                     break
                 _offer_chunk(("chunk", chunk))
         except Exception as exc:
-            _enqueue_terminal(("error", str(exc)))
+            try:
+                _enqueue_terminal(("error", str(exc)))
+            except Exception:
+                logger.warning("Could not deliver the stream error event", exc_info=True)
         finally:
-            _enqueue_terminal(("done", None))
-            _producer_slots.release()
+            # Nested, because delivery can raise on its own (a 30s timeout, or a
+            # loop already closed by a disconnect). A slot leaked here is
+            # permanent: SSE_MAX_PRODUCERS shrinks by one for the process.
+            try:
+                _enqueue_terminal(("done", None))
+            except Exception:
+                logger.warning("Could not deliver the stream done event", exc_info=True)
+            finally:
+                _producer_slots.release()
 
-    if not _producer_slots.acquire(timeout=config.ADMISSION_WAIT_S):
+    # Off-loop: a blocking semaphore wait here would stall every other request
+    # on this worker for up to ADMISSION_WAIT_S, which is the opposite of what
+    # bounding producers is for.
+    got_slot = await asyncio.to_thread(
+        _producer_slots.acquire, True, config.ADMISSION_WAIT_S)
+    if not got_slot:
         # Same shape as any other stream error, so the client renders it
         # instead of hanging on a connection that will never produce.
         payload = json.dumps({'type': 'error',
@@ -138,7 +160,11 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
             logger.info("SSE backpressure: %d chunk event(s) dropped for a slow client",
                         dropped)
 
-        assembled = "".join(full_answer)
+        # produced[], not full_answer[]: the queue is a delivery channel and may
+        # have dropped chunks for a slow reader, but the answer that gets
+        # compacted, cited, logged and stored must be the whole generation.
+        with produced_lock:
+            assembled = "".join(produced) if produced else "".join(full_answer)
         # Compact BEFORE translating, so the translated answer inherits the dense
         # numbering (same order rag.answer_question uses). Chunks already streamed
         # carry the raw markers — an answer citing papers 1 and 4 of 4 renders

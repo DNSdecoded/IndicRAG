@@ -43,8 +43,20 @@ def create(out_dir=None) -> Path:
 
     out_dir = Path(out_dir or BACKUP_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation, not just a timestamp: the stamp has second resolution,
+    # so two snapshots started in the same second would silently overwrite each
+    # other — and a backup that quietly replaces another backup is worse than no
+    # backup at all.
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     snapshot = out_dir / f"indicrag-{stamp}.db"
+    suffix = 1
+    while True:
+        try:
+            snapshot.touch(exist_ok=False)
+            break
+        except FileExistsError:
+            snapshot = out_dir / f"indicrag-{stamp}-{suffix}.db"
+            suffix += 1
 
     persistence.snapshot_to(snapshot)
 
