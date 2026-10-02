@@ -1,5 +1,3 @@
-import chromadb
-import config
 import vector_store
 
 def dump_collection():
