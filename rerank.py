@@ -36,7 +36,12 @@ def rerank(query: str, docs: List[str], metadatas: List[dict],
     if not docs:
         return [], [], []
     model = _load()
-    scores = model.predict([(query, d) for d in docs], convert_to_numpy=True)
+    # One pair per forward pass. Batched, every pair is padded to the longest one
+    # (pairs here run ~240 tokens mean, ~440 p95), and that padding was most of
+    # the work: measured 13.2s -> 7.8s p50 per 15-pair rerank on a 4-core CPU.
+    # It also makes scores independent of batch-mates: int8 dynamic quantization
+    # derives activation scales per batch, so a padded batch shifted rankings.
+    scores = model.predict([(query, d) for d in docs], batch_size=1, convert_to_numpy=True)
     order = scores.argsort()[::-1][:top_k]
     return ([docs[i] for i in order],
             [metadatas[i] for i in order],
