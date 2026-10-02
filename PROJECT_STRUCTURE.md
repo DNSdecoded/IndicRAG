@@ -118,8 +118,7 @@ IndicRAG/
 │   └── nginx.example.conf           # Nginx reverse proxy config
 │
 ├── 🛠️ Utilities
-│   ├── check_db.py                  # ChromaDB inspection utility
-│   └── test_gen.py                  # Generation test script
+│   └── check_db.py                  # ChromaDB inspection utility
 │
 └── 📊 Data Directories (git-ignored)
     ├── papers/                      # Your PDF documents
