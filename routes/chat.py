@@ -94,7 +94,7 @@ async def chat(
     # session must not each answer from a history that omits the other's turn.
     async with session_turn_lock(body.session_id):
         try:
-            session_id, messages = _get_or_create_session(body.session_id, owner)
+            session_id, messages = await run_in_threadpool(_get_or_create_session, body.session_id, owner)
         except PermissionError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"Session '{body.session_id}' not found.")
@@ -118,7 +118,7 @@ async def chat(
             logger.error(f"Error in /chat: {e}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": "Internal server error. Please try again.", "code": "INTERNAL_ERROR"})
 
-        _append_session_messages(session_id, body.message, result["answer"], owner,
+        await run_in_threadpool(_append_session_messages, session_id, body.message, result["answer"], owner,
                                  result.get("citations"))
 
     processing_time = time.time() - start_time
@@ -164,7 +164,7 @@ async def chat_stream(
     await lock.acquire()
     try:
         try:
-            session_id, messages = _get_or_create_session(body.session_id, owner)
+            session_id, messages = await run_in_threadpool(_get_or_create_session, body.session_id, owner)
         except PermissionError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"Session '{body.session_id}' not found.")
@@ -182,7 +182,7 @@ async def chat_stream(
             # The turn is already complete on this branch (nothing streams from the
             # model), so release here rather than handing the lock to a generator
             # that has no answer left to append.
-            _append_session_messages(session_id, body.message, prepared["no_docs_msg"], owner)
+            await run_in_threadpool(_append_session_messages, session_id, body.message, prepared["no_docs_msg"], owner)
             lock.release()
             return StreamingResponse(_no_docs(), media_type="text/event-stream")
     except BaseException:
@@ -220,7 +220,7 @@ async def chat_stream(
             if not hit_error:
                 # Persist the compacted answer, not the raw streamed chunks — otherwise
                 # the follow-up turns inherit gapped and dangling [N] markers.
-                _append_session_messages(
+                await run_in_threadpool(_append_session_messages,
                     session_id, body.message, final_answer or "".join(full_answer), owner,
                     final_cites)
         finally:

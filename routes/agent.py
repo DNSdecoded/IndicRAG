@@ -147,7 +147,7 @@ async def agent_query(
     # omits the turn running beside it.
     async with session_turn_lock(body.session_id):
         try:
-            session_id, messages = _get_or_create_session(body.session_id, owner)
+            session_id, messages = await run_in_threadpool(_get_or_create_session, body.session_id, owner)
         except PermissionError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"Session '{body.session_id}' not found.")
@@ -231,7 +231,7 @@ async def agent_query(
         except Exception:
             pass  # fall through to dedup-only logic below
 
-        _append_session_messages(session_id, body.question, final_answer, owner, cits)
+        await run_in_threadpool(_append_session_messages, session_id, body.question, final_answer, owner, cits)
     processing_time = time.time() - start_time
 
     logger.info(
@@ -263,7 +263,7 @@ async def agent_query(
 
     query_id = str(uuid.uuid4())
     try:
-        persistence.log_query(
+        await run_in_threadpool(persistence.log_query,
             query_id=query_id, question=body.question, answer=final_answer,
             mode=f"agent_{body.strategy}", model=body.model or "default",
             language=result.get("detected_language", "en"),
@@ -311,7 +311,7 @@ async def agent_stream(
     lock = session_turn_lock(body.session_id)
     await lock.acquire()
     try:
-        session_id, messages = _get_or_create_session(body.session_id, owner)
+        session_id, messages = await run_in_threadpool(_get_or_create_session, body.session_id, owner)
     except PermissionError:
         lock.release()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -479,7 +479,7 @@ async def agent_stream(
             except Exception:
                 pass
 
-            _append_session_messages(session_id, body.question, final_answer, owner, cits)
+            await run_in_threadpool(_append_session_messages, session_id, body.question, final_answer, owner, cits)
 
             # --- Phase 3b: fallback for answers that never streamed ---
             # A regenerated draft, a non-streaming provider path, or a client that
@@ -515,7 +515,7 @@ async def agent_stream(
             # --- Phase 5: done event with full metadata ---
             query_id = str(uuid.uuid4())
             try:
-                persistence.log_query(
+                await run_in_threadpool(persistence.log_query,
                     query_id=query_id, question=body.question, answer=final_answer,
                     mode=f"agent_{body.strategy}", model=body.model or "default",
                     language=result.get("detected_language", "en"),

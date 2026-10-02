@@ -256,7 +256,7 @@ async def query_question(
 
         query_id = str(uuid.uuid4())
         try:
-            persistence.log_query(
+            await run_in_threadpool(persistence.log_query,
                 query_id=query_id, question=body.question, answer=result['answer'],
                 mode=f"standard_{body.strategy}", model=body.model or "default",
                 language=result['language'], confidence=result.get('answer_confidence', 0.0),
