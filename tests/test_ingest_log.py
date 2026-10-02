@@ -257,3 +257,42 @@ def test_a_failed_log_write_does_not_discard_the_rows_that_succeeded():
     finally:
         persistence.delete_ingest_events(ok_pid)
         persistence.delete_ingest_events(bad_pid)
+
+
+def test_a_concurrent_write_is_not_swept_into_a_rolled_back_batch():
+    """Review finding: the batch depth was process-global and the lock was not
+    held between writes, so another request's write landing mid-batch joined the
+    batch's transaction and vanished with it on rollback."""
+    import threading
+
+    import pytest
+
+    sid = str(uuid.uuid4())
+    session = {"id": sid, "messages": [], "owner": None,
+               "created_at": "2026-10-02T00:00:00+00:00",
+               "updated_at": "2026-10-02T00:00:00+00:00"}
+    writer = threading.Thread(target=persistence.save_session, args=(sid, session))
+    try:
+        with pytest.raises(RuntimeError):
+            with persistence.batch_writes():
+                writer.start()          # another request writes while the batch is open
+                writer.join(timeout=0.2)
+                raise RuntimeError("batch fails")
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+        assert sid in persistence.load_sessions(), "the other request's write was rolled back"
+    finally:
+        persistence.delete_session(sid)
+
+
+def test_a_failed_snapshot_does_not_leave_a_listed_backup(tmp_path):
+    """Review finding: the snapshot name is reserved before the copy runs, so a
+    failed copy left an empty .db behind that list_backups() showed as a backup."""
+    import pytest
+
+    import backup
+
+    with patch.object(persistence, "snapshot_to", side_effect=OSError("disk full")):
+        with pytest.raises(OSError):
+            backup.create(out_dir=tmp_path)
+    assert not list(tmp_path.glob("*.db"))

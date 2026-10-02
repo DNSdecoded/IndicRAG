@@ -234,22 +234,23 @@ def batch_writes():
     operation. Nested use is refcounted, and a failure inside the block rolls the
     whole batch back rather than leaving half of it recorded.
 
-    ponytail: the depth counter is process-global, so a concurrent write from
-    another thread joins whichever batch is open. Single-writer by design; make
-    it thread-local if writes ever fan out.
+    The (re-entrant) DB lock is held for the WHOLE block. All writes share one
+    connection, so a write from another thread landing mid-batch would sit inside
+    the batch's transaction: skipped commit, then discarded with the batch on a
+    rollback, after its caller had been told it succeeded. Holding the lock makes
+    other writers wait for the batch instead. Batches wrap short DB-only loops
+    (ingest log, reindex backfill), so the wait is milliseconds.
     """
     global _batch_depth
     with _db_lock:
         _batch_depth += 1
-    try:
-        yield
-    except Exception:
-        with _db_lock:
+        try:
+            yield
+        except Exception:
             _batch_depth -= 1
             if _batch_depth == 0:
                 _conn.rollback()
-        raise
-    with _db_lock:
+            raise
         _batch_depth -= 1
         if _batch_depth == 0:
             _conn.commit()
@@ -283,7 +284,7 @@ _conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_paper ON ingest_log(paper_i
 _conn.execute("CREATE INDEX IF NOT EXISTS idx_ingest_hash ON ingest_log(content_hash)")
 
 _conn.commit()
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()  # re-entrant: batch_writes holds it across nested writes
 
 
 def snapshot_to(dest_path) -> dict:

@@ -58,7 +58,13 @@ def create(out_dir=None) -> Path:
             snapshot = out_dir / f"indicrag-{stamp}-{suffix}.db"
             suffix += 1
 
-    persistence.snapshot_to(snapshot)
+    try:
+        persistence.snapshot_to(snapshot)
+    except BaseException:
+        # The name was reserved above; a failed snapshot must not stay behind as
+        # an empty or torn .db that list_backups() presents as a recovery point.
+        snapshot.unlink(missing_ok=True)
+        raise
 
     events = persistence.get_ingest_events()
     manifest = {
