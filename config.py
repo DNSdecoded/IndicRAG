@@ -458,10 +458,10 @@ AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-# gemini-3.7-flash is the current Flash generation: built for complex coding,
-# agentic workflows and multi-step execution, which is what the agent pipeline
-# does. 3.6-flash remains selectable as the previous generation.
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
+# gemini-3.8-flash is the current Flash generation, built for long-horizon agentic
+# workflows, which is what the agent pipeline does. 3.7/3.6-flash remain
+# selectable as previous generations.
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.8-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
 # Gemini 3.x Flash already does IMPLICIT caching for free; explicit caching adds
@@ -470,7 +470,10 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
 GEMINI_CACHE_ENABLED = os.getenv("GEMINI_CACHE_ENABLED", "false").lower() == "true"
 GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL", "3600"))  # seconds cache lives
-LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fallback when primary is overloaded
+# Same-provider fallback when the primary is overloaded. A lighter Gemini model:
+# gemma-4-26b-a4b-it failed together with the primary under Gemini "high demand"
+# 503s, while 3.5-flash-lite kept answering (~1s).
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
 # LLM API Keys (required for Gemini)
 # Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
@@ -505,7 +508,7 @@ _raw_selectable = os.getenv(
     # cheap high-throughput option for routine calls, then cross-vendor entries.
     # The cross-vendor slugs matter beyond user choice: failover picks a "/"-shaped
     # slug from this list, so an all-Gemini list would leave nothing to fail over to.
-    "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
+    "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
     "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]

@@ -103,3 +103,4 @@ docs/Eval/eval_history/
 
 # Database snapshots (backup.py)
 backups/
+.env.bak*
