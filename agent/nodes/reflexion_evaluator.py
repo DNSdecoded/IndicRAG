@@ -7,6 +7,7 @@ import rag
 import config
 import verify
 import llm_client
+import metrics
 from agent.state import AgentState, ReflexionFeedback
 from agent.json_utils import extract_json_with_gemini_retry
 
@@ -127,7 +128,8 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
     _nli_t0 = time.monotonic()
     try:
-        claims = verify.check_claims(answer, chunks, chunk_metas)
+        with metrics.stage("nli_verify"):
+            claims = verify.check_claims(answer, chunks, chunk_metas)
         logger.info(
             "[Reflexion] NLI scored %d claims in %.1fs",
             len(claims), time.monotonic() - _nli_t0,
