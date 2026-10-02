@@ -27,6 +27,7 @@ server takes on before it degrades for everyone.
 |------|------|------|
 | **Index integrity** | Nothing checked the log against the indexes | **Reconciler** (`check_db.py`, `POST /reconcile`) diffs the ingest log against ChromaDB and BM25 per paper; `/quality` reports the result |
 | **Delete cascade** | Best-effort, warn-and-continue | **Compensating retry**, then ERROR + `indicrag_cascade_failures_total` — a partial delete is no longer silent |
+| **LLM providers** | Gemini + OpenRouter only | **Any OpenAI-compatible provider from `.env`** (NVIDIA NIM, OpenAI, Groq, Ollama, any `LLM_<NAME>_BASE_URL`), `provider:model` selection, and a preferred failover order (`LLM_PROVIDER_ORDER`) |
 | **Backup** | None (copying `sessions.db` mid-write tears it) | **`backup.py`** — online SQLite snapshot + manifest; restore replays the log into the indexes |
 | **Schema changes** | `_ensure_column()` at import, no record of what ran | **Versioned migrations** recorded in a `schema_migrations` table |
 | **Load handling** | Unbounded; heavy queries starved `/health` and job polls | **Admission control** — bounded pools per workload, `429` + `Retry-After`, agents shed first |
@@ -233,8 +234,15 @@ LLM_API_KEY=your_gemini_api_key_here
 
 # Optional — enables multi-provider mode (OpenRouter)
 # OPENROUTER_API_KEY=your_openrouter_key_here
-# LLM_PROVIDER=gemini          # gemini|openrouter
 # LLM_FALLBACK_PROVIDER=openrouter
+
+# Optional — any OpenAI-compatible provider, in your preferred failover order
+# LLM_PROVIDER_ORDER=gemini,nvidia,openai
+# LLM_NVIDIA_API_KEY=nvapi-...                      # NVIDIA NIM
+# LLM_NVIDIA_MODEL=meta/llama-3.3-70b-instruct
+# LLM_OPENAI_API_KEY=sk-...
+# LLM_OPENAI_MODEL=<an OpenAI chat model>
+# LLM_MODEL_NAME=nvidia:meta/llama-3.3-70b-instruct # make a non-Gemini model primary
 
 # Optional — enables agent web search tool
 TAVILY_API_KEY=your_tavily_key_here
@@ -533,12 +541,19 @@ Key settings (all overridable via environment variables):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LLM_API_KEY` | (required) | Google Gemini API key (comma-separate for a round-robin pool) |
-| `LLM_PROVIDER` | `gemini` | Primary LLM provider: `gemini` or `openrouter` |
-| `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down |
+| `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down (used when `LLM_PROVIDER_ORDER` is empty) |
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
-| `LLM_MODEL_NAME` | `gemini-3.7-flash` | Gemini model for generation |
-| `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
+| `LLM_MODEL_NAME` | `gemini-3.8-flash` | Primary model. A bare name is Gemini; `provider:model` (e.g. `nvidia:meta/llama-3.3-70b-instruct`) makes another provider primary |
+| `LLM_FALLBACK_MODEL` | `gemini-3.5-flash-lite` | Same-provider Gemini fallback when the primary is overloaded (503/429) |
+| `AGENT_UTILITY_MODEL` | `gemini-3.5-flash-lite` | Model for the agent's planner, tool routing and completeness calls; empty = use the answer model |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). Bare name → Gemini, `/` slug → OpenRouter, `provider:model` → that provider. Without `LLM_PROVIDER_ORDER`, keep at least one `/` slug — the default cross-vendor failover picks the first one |
+| `LLM_PROVIDER_ORDER` | (empty) | Preferred failover order across providers, e.g. `gemini,nvidia,openai`. Tried after the requested model; providers without a key or model are skipped. Empty keeps the built-in chain |
+| `LLM_<NAME>_API_KEY` | (none) | API key for an OpenAI-compatible provider (`<NAME>_API_KEY`, e.g. `NVIDIA_API_KEY`, also works) |
+| `LLM_<NAME>_BASE_URL` | preset | Endpoint for the provider. Presets: `openai`, `nvidia` (NIM), `groq`, `openrouter`, `ollama`; anything else (e.g. Anthropic's OpenAI-compatible endpoint, vLLM) must set it |
+| `LLM_<NAME>_MODEL` | (none) | Model used when failing over to that provider |
+| `LLM_<NAME>_RPM` | `40` for `nvidia`, else `0` | Client-side requests/min cap (0 = none). Per process: N workers = N x cap |
+| `LLM_RATE_LIMIT_MAX_WAIT_S` | `5` | How long a call waits for a free slot under the cap before failing over |
+| `LLM_GEMINI_MODEL` | (none) | Gemini model to use when Gemini is a fallback and the primary is another provider's model |
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
@@ -610,6 +625,32 @@ Key settings (all overridable via environment variables):
 | `LLM_CACHE_SIZE` / `LLM_CACHE_TTL` | `128` / `600` | LLM response cache |
 | `RETRIEVAL_CACHE_SIZE` / `RETRIEVAL_CACHE_TTL` | `64` / `300` | Retrieval cache |
 | `TOOL_CACHE_SIZE` / `TOOL_CACHE_TTL` | `64` / `180` | Agent tool cache |
+
+### LLM providers and failover
+
+Gemini is native; every other provider goes through one OpenAI-compatible
+backend, so adding one (NVIDIA NIM, OpenAI, Groq, Ollama, vLLM, any
+`LLM_<NAME>_BASE_URL`) is a `.env` change, not a code change.
+
+```ini
+LLM_PROVIDER_ORDER=gemini,nvidia,openrouter      # failover order
+LLM_NVIDIA_API_KEY=nvapi-...                     # NVIDIA NIM (build.nvidia.com)
+LLM_NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
+LLM_NVIDIA_RPM=40                                # free-tier cap (default for nvidia)
+OPENROUTER_API_KEY=sk-or-...
+LLM_SELECTABLE_MODELS=gemini-3.8-flash,nvidia:nvidia/nemotron-3-super-120b-a12b,google/gemma-4-31b-it:free
+```
+
+A failing call walks this chain:
+
+1. The requested model.
+2. `LLM_FALLBACK_MODEL` (same-provider Gemini fallback).
+3. Each provider in `LLM_PROVIDER_ORDER` with its `LLM_<NAME>_MODEL` (OpenRouter uses the
+   first OpenRouter slug in `LLM_SELECTABLE_MODELS`). Providers with no key are skipped.
+
+Model ids: bare name → Gemini, `vendor/model` → OpenRouter, `provider:model` → that
+provider. A provider over its RPM cap waits up to `LLM_RATE_LIMIT_MAX_WAIT_S`, then
+the call fails over. A model that fails 3 times in a row is skipped for a cooldown.
 
 ---
 

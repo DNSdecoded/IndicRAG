@@ -104,3 +104,6 @@ docs/Eval/eval_history/
 # Database snapshots (backup.py)
 backups/
 .env.bak*
+
+# Local RAG test queries
+docs/RAG_TEST_QUERIES.md

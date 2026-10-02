@@ -7,6 +7,7 @@ and leading signatures — rag.py re-exports them and ~52 tests patch them.
 
 import itertools
 import logging
+import os
 import threading
 import time
 
@@ -90,14 +91,41 @@ def _init_backends() -> None:
 def get_backend(provider: str) -> LLMBackend:
     _init_backends()
     if provider not in _backends:
-        raise ValueError(f"Unknown provider: {provider}")
+        # Any OpenAI-compatible provider configured in env (LLM_<NAME>_*) is built
+        # on first use, so adding one is a .env change, not a code change.
+        settings = _config.provider_settings(provider)
+        if settings is None:
+            raise ValueError(f"Unknown or unconfigured provider: {provider}")
+        with _backends_lock:
+            if provider not in _backends:
+                _backends[provider] = OpenRouterBackend(
+                    name=provider, base_url=settings["base_url"], api_key=settings["api_key"],
+                    rpm=settings["rpm"])
     return _backends[provider]
 
 
+def split_model(model: str | None) -> tuple[str | None, str]:
+    """'nvidia:meta/llama-3.3-70b-instruct' -> ('nvidia', 'meta/llama-3.3-70b-instruct').
+
+    The prefix counts only when it names a usable provider and has no '/', so an
+    OpenRouter slug like 'nvidia/nemotron-3-super:free' is left untouched.
+    """
+    model = model or ""
+    head, sep, rest = model.partition(":")
+    if sep and rest and "/" not in head and (
+            head == "gemini" or head in _backends or _config.provider_settings(head)):
+        return head, rest
+    return None, model
+
+
 def resolve_provider(model: str, provider: str | None = None) -> str:
-    """Explicit provider wins; else infer from model shape ('/' → openrouter)."""
+    """Explicit provider wins; then a 'provider:model' prefix; else infer from the
+    model shape ('/' → openrouter, bare name → gemini)."""
     if provider:
         return provider
+    prefixed, _ = split_model(model)
+    if prefixed:
+        return prefixed
     return "openrouter" if "/" in (model or "") else "gemini"
 
 
@@ -126,9 +154,20 @@ def _fallback_model_for(provider: str) -> str:
     (and onto a paid route, while the allowlist lists :free slugs).
     """
     if provider == "gemini":
-        return _config.LLM_MODEL_NAME
+        # LLM_MODEL_NAME may itself be another provider's model ("nvidia:..."),
+        # which must never be sent to Gemini.
+        explicit = os.getenv("LLM_GEMINI_MODEL", "").strip()
+        if explicit:
+            return explicit
+        prefixed, _ = split_model(_config.LLM_MODEL_NAME)
+        return _config.LLM_MODEL_NAME if prefixed in (None, "gemini") else _config.LLM_FALLBACK_MODEL
+    configured = (_config.provider_settings(provider) or {}).get("model")
+    if configured:
+        return configured
+    if provider != "openrouter":
+        return ""
     for model in _config.LLM_SELECTABLE_MODELS:
-        if "/" in model:                      # slug shape == OpenRouter
+        if resolve_provider(model) == "openrouter":   # skips 'nvidia:...' entries
             return model
     return _config.LLM_MODEL_NAME
 
@@ -148,9 +187,22 @@ def model_supports_tools(provider: str, model: str) -> bool:
 def _attempts(model: str, provider: str) -> list[tuple[str, str]]:
     """Ordered (provider, model) attempts: requested → same-provider fallback →
     cross-provider fallback."""
+    _, model = split_model(model)   # the backend gets the bare model id
     attempts = [(provider, model)]
     if provider == "gemini" and _config.LLM_FALLBACK_MODEL and _config.LLM_FALLBACK_MODEL != model:
         attempts.append((provider, _config.LLM_FALLBACK_MODEL))
+    if _config.LLM_PROVIDER_ORDER:
+        # User-defined preference order replaces the built-in cross-provider chain.
+        # Providers that are not configured (no key / no model) are skipped.
+        for prov in _config.LLM_PROVIDER_ORDER:
+            mdl = _fallback_model_for(prov)
+            if prov == provider or not mdl:
+                continue
+            if prov != "gemini" and _config.provider_settings(prov) is None:
+                logger.debug("[failover] provider %s in LLM_PROVIDER_ORDER is not configured", prov)
+                continue
+            attempts.append((prov, mdl))
+        return attempts
     fb_provider = _config.LLM_FALLBACK_PROVIDER
     if fb_provider and fb_provider != provider:
         attempts.append((fb_provider, _fallback_model_for(fb_provider)))

@@ -39,6 +39,13 @@ import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _default_provider_order(monkeypatch):
+    """A developer's .env may set LLM_PROVIDER_ORDER; tests assume the built-in chain."""
+    import config
+    monkeypatch.setattr(config, "LLM_PROVIDER_ORDER", [])
+
+
+@pytest.fixture(autouse=True)
 def _reset_llm_circuits():
     """The LLM breaker counts consecutive failures process-wide; a count left by
     one test would open a circuit in another. Only touch it if already imported."""

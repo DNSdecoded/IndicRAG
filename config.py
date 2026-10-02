@@ -507,6 +507,64 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")                    # gemini|o
 LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "openrouter")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+# ── Additional OpenAI-compatible providers ─────────────────────────────────
+# Any provider that speaks OpenAI Chat Completions can be used by name. Configure
+# one with LLM_<NAME>_BASE_URL / LLM_<NAME>_API_KEY / LLM_<NAME>_MODEL (the plain
+# <NAME>_API_KEY / <NAME>_BASE_URL forms, e.g. NVIDIA_API_KEY, also work). Presets
+# below only fill in a known base URL; anything else needs an explicit BASE_URL.
+_PROVIDER_PRESETS = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "https://api.openai.com/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",   # NVIDIA NIM (build.nvidia.com)
+    "groq": "https://api.groq.com/openai/v1",
+    "ollama": "http://localhost:11434/v1",
+}
+# Local servers accept any key; the OpenAI client still requires a non-empty one.
+_KEYLESS_PROVIDERS = {"ollama"}
+# Known free-tier request-per-minute caps; override with LLM_<NAME>_RPM (0 = no cap).
+_PROVIDER_RPM = {"nvidia": 40}
+# How long a call may wait for a free slot under its provider's RPM cap before it
+# gives up and lets failover move to the next provider.
+LLM_RATE_LIMIT_MAX_WAIT_S = float(os.getenv("LLM_RATE_LIMIT_MAX_WAIT_S", "5"))
+
+# Preferred failover order across providers, e.g. "gemini,nvidia,openai". The
+# requested model's provider is always tried first; the others follow in this
+# order, each with its LLM_<NAME>_MODEL. Empty = the original chain (Gemini →
+# LLM_FALLBACK_MODEL → LLM_FALLBACK_PROVIDER → Gemini backstop).
+LLM_PROVIDER_ORDER = [p.strip().lower() for p in os.getenv("LLM_PROVIDER_ORDER", "").split(",")
+                      if p.strip()]
+
+
+def _env_first(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def provider_settings(name: str) -> dict | None:
+    """base_url / api_key / model for an OpenAI-compatible provider, or None.
+
+    None means the provider cannot be used: no base URL (neither configured nor a
+    preset) or no API key. `gemini` is native, not OpenAI-compatible, so it is
+    never returned here.
+    """
+    name = (name or "").strip().lower()
+    if not name or name == "gemini":
+        return None
+    up = name.upper().replace("-", "_")
+    base_url = _env_first(f"LLM_{up}_BASE_URL", f"{up}_BASE_URL") or _PROVIDER_PRESETS.get(name, "")
+    api_key = _env_first(f"LLM_{up}_API_KEY", f"{up}_API_KEY")
+    if not api_key and name in _KEYLESS_PROVIDERS:
+        api_key = "not-needed"
+    if not base_url or not api_key:
+        return None
+    rpm = _env_first(f"LLM_{up}_RPM")
+    return {"base_url": base_url, "api_key": api_key,
+            "model": _env_first(f"LLM_{up}_MODEL"),
+            "rpm": int(rpm) if rpm else _PROVIDER_RPM.get(name, 0)}
 # Curated allowlist offered to the user in the model dropdown (comma-separated).
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(

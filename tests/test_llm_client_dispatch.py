@@ -205,3 +205,107 @@ def test_a_success_resets_the_failure_count(monkeypatch):
     llm_client._circuit_clear(key)
     llm_client._circuit_fail(key, Exception("503"))
     assert not llm_client._circuit_blocked(key)
+
+
+# ── configurable OpenAI-compatible providers + preferred order ─────────────
+
+def _set_env(monkeypatch, **env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_provider_prefix_routes_to_that_provider_and_strips_it(monkeypatch):
+    _set_env(monkeypatch, NVIDIA_API_KEY="k")
+    assert llm_client.resolve_provider("nvidia:meta/llama-3.3-70b-instruct") == "nvidia"
+    assert llm_client.split_model("nvidia:meta/llama-3.3-70b-instruct") == ("nvidia", "meta/llama-3.3-70b-instruct")
+    # An OpenRouter slug that merely contains a colon is not a provider prefix.
+    assert llm_client.resolve_provider("nvidia/nemotron-3-super-120b-a12b:free") == "openrouter"
+    assert llm_client.resolve_provider("gemini-3.8-flash") == "gemini"
+
+
+def test_unconfigured_prefix_is_not_treated_as_a_provider(monkeypatch):
+    monkeypatch.delenv("FOO_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_FOO_API_KEY", raising=False)
+    assert llm_client.split_model("foo:bar") == (None, "foo:bar")
+
+
+def test_preset_and_explicit_base_urls(monkeypatch):
+    _set_env(monkeypatch, LLM_NVIDIA_API_KEY="k", LLM_NVIDIA_MODEL="meta/llama-3.3-70b-instruct")
+    s = llm_client._config.provider_settings("nvidia")
+    assert s["base_url"] == "https://integrate.api.nvidia.com/v1" and s["model"] == "meta/llama-3.3-70b-instruct"
+    # No preset: unusable until a base URL is configured.
+    _set_env(monkeypatch, LLM_ACME_API_KEY="k")
+    assert llm_client._config.provider_settings("acme") is None
+    _set_env(monkeypatch, LLM_ACME_BASE_URL="https://llm.acme.example/v1")
+    assert llm_client._config.provider_settings("acme")["base_url"] == "https://llm.acme.example/v1"
+
+
+def test_get_backend_builds_configured_provider_lazily(monkeypatch):
+    _set_env(monkeypatch, LLM_GROQ_API_KEY="k")
+    llm_client._init_backends()
+    monkeypatch.delitem(llm_client._backends, "groq", raising=False)
+    b = llm_client.get_backend("groq")
+    assert b.name == "groq" and b._base_url == "https://api.groq.com/openai/v1"
+    llm_client._backends.pop("groq", None)
+
+
+def test_preferred_order_drives_the_failover_chain(monkeypatch):
+    _set_env(monkeypatch, LLM_NVIDIA_API_KEY="k", LLM_NVIDIA_MODEL="meta/llama-3.3-70b-instruct",
+             LLM_OPENAI_API_KEY="k", LLM_OPENAI_MODEL="gpt-x")
+    monkeypatch.delenv("LLM_ACME_BASE_URL", raising=False)
+    monkeypatch.setattr(llm_client._config, "LLM_PROVIDER_ORDER", ["nvidia", "acme", "openai", "gemini"])
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
+    monkeypatch.setattr(llm_client._config, "LLM_MODEL_NAME", "gemini-3.8-flash")
+    assert llm_client._attempts("gemini-3.8-flash", "gemini") == [
+        ("gemini", "gemini-3.8-flash"),
+        ("nvidia", "meta/llama-3.3-70b-instruct"),   # acme skipped: not configured
+        ("openai", "gpt-x"),
+    ]
+
+
+def test_prefixed_primary_never_sends_its_model_to_gemini(monkeypatch):
+    _set_env(monkeypatch, LLM_NVIDIA_API_KEY="k")
+    monkeypatch.delenv("LLM_GEMINI_MODEL", raising=False)
+    monkeypatch.setattr(llm_client._config, "LLM_PROVIDER_ORDER", ["gemini"])
+    monkeypatch.setattr(llm_client._config, "LLM_MODEL_NAME", "nvidia:meta/llama-3.3-70b-instruct")
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+    assert llm_client._attempts("nvidia:meta/llama-3.3-70b-instruct", "nvidia") == [
+        ("nvidia", "meta/llama-3.3-70b-instruct"),
+        ("gemini", "gemini-3.5-flash-lite"),
+    ]
+
+
+def test_openai_uses_max_completion_tokens():
+    from providers.openrouter import OpenRouterBackend
+    from google.genai import types
+    cfg = types.GenerateContentConfig(max_output_tokens=50)
+    assert "max_completion_tokens" in OpenRouterBackend("openai", "u", "k")._params("m", "hi", cfg, False)
+    assert "max_tokens" in OpenRouterBackend("nvidia", "u", "k")._params("m", "hi", cfg, False)
+
+
+def test_rpm_limiter_caps_requests_then_raises(monkeypatch):
+    from providers import openrouter
+    monkeypatch.setattr(openrouter.config, "LLM_RATE_LIMIT_MAX_WAIT_S", 0)
+    lim = openrouter._RpmLimiter(2)
+    lim.acquire("nvidia")
+    lim.acquire("nvidia")
+    import pytest
+    with pytest.raises(openrouter.LocalRateLimitError):
+        lim.acquire("nvidia")
+    assert openrouter.OpenRouterBackend("nvidia", "u", "k").is_transient(openrouter.LocalRateLimitError("x"))
+
+
+def test_nvidia_defaults_to_40_rpm(monkeypatch):
+    monkeypatch.setenv("LLM_NVIDIA_API_KEY", "k")
+    monkeypatch.delenv("LLM_NVIDIA_RPM", raising=False)
+    assert llm_client._config.provider_settings("nvidia")["rpm"] == 40
+    monkeypatch.setenv("LLM_NVIDIA_RPM", "10")
+    assert llm_client._config.provider_settings("nvidia")["rpm"] == 10
+
+
+def test_openrouter_fallback_skips_prefixed_slugs(monkeypatch):
+    monkeypatch.setenv("LLM_NVIDIA_API_KEY", "k")
+    monkeypatch.delenv("LLM_OPENROUTER_MODEL", raising=False)
+    monkeypatch.setattr(llm_client._config, "LLM_SELECTABLE_MODELS",
+                        ["gemini-3.8-flash", "nvidia:meta/llama-3.3-70b-instruct", "google/gemma-4-31b-it:free"])
+    assert llm_client._fallback_model_for("openrouter") == "google/gemma-4-31b-it:free"

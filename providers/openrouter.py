@@ -5,9 +5,11 @@ wraps the reply in ShimResponse so agent nodes read it unchanged. SAFETY_SETTING
 has no OpenRouter equivalent and is silently dropped — a stated behavior gap.
 """
 
+import collections
 import json
 import logging
 import threading
+import time
 from typing import Iterator
 
 import config
@@ -77,29 +79,78 @@ def _to_tools(gen_config):
     return out or None
 
 
+class LocalRateLimitError(RuntimeError):
+    """Our own per-provider RPM cap is full; treated like a 429 so failover moves on."""
+
+
+class _RpmLimiter:
+    """Sliding 60s window. Waits up to LLM_RATE_LIMIT_MAX_WAIT_S for a slot, else raises.
+
+    ponytail: per-process; with N uvicorn workers the effective cap is N x rpm.
+    Share it via Redis if multi-worker deployments hit the provider's 429s.
+    """
+
+    def __init__(self, rpm: int):
+        self.rpm = rpm
+        self._sent = collections.deque()
+        self._lock = threading.Lock()
+
+    def acquire(self, name: str) -> None:
+        deadline = time.monotonic() + config.LLM_RATE_LIMIT_MAX_WAIT_S
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._sent and now - self._sent[0] >= 60:
+                    self._sent.popleft()
+                if len(self._sent) < self.rpm:
+                    self._sent.append(now)
+                    return
+                wait = 60 - (now - self._sent[0])
+            if now + wait > deadline:
+                raise LocalRateLimitError(f"{name}: {self.rpm} requests/min cap reached")
+            time.sleep(min(wait, 0.5))
+
+
 class OpenRouterBackend(LLMBackend):
-    def __init__(self):
+    """OpenAI Chat Completions backend. Defaults to OpenRouter; any other
+    OpenAI-compatible provider (NVIDIA NIM, OpenAI, Groq, Ollama, vLLM...) is the
+    same class with its own name, base URL and key (see config.provider_settings)."""
+
+    def __init__(self, name: str = "openrouter", base_url: str | None = None,
+                 api_key: str | None = None, rpm: int = 0):
+        self._limiter = _RpmLimiter(rpm) if rpm > 0 else None
         self._client = None
         self._lock = threading.Lock()
+        self._name = name
+        self._base_url = base_url
+        self._api_key = api_key
+        # Current OpenAI models reject `max_tokens` on Chat Completions and require
+        # `max_completion_tokens`; other compatible servers expect `max_tokens`.
+        self._token_param = "max_completion_tokens" if name == "openai" else "max_tokens"
 
     @property
     def name(self) -> str:
-        return "openrouter"
+        return self._name
 
     def _get_client(self):
         if self._client is None:
             with self._lock:
                 if self._client is None:
-                    if not config.OPENROUTER_API_KEY:
+                    # OpenRouter reads config lazily so its env can change in tests.
+                    api_key = self._api_key or (config.OPENROUTER_API_KEY if self._name == "openrouter" else "")
+                    base_url = self._base_url or config.OPENROUTER_BASE_URL
+                    if not api_key:
+                        env = self._name.upper().replace("-", "_")
                         raise ValueError(
-                            "OPENROUTER_API_KEY not configured. Set it in .env to use OpenRouter."
+                            f"{env}_API_KEY not configured. Set it (or LLM_{env}_API_KEY) "
+                            f"in .env to use {self._name}."
                         )
                     from openai import OpenAI
                     # SDK defaults are 600s per request with 2 retries — one stalled
                     # call would outlive the agent budget and 504 the whole run.
                     self._client = OpenAI(
-                        api_key=config.OPENROUTER_API_KEY,
-                        base_url=config.OPENROUTER_BASE_URL,
+                        api_key=api_key,
+                        base_url=base_url,
                         timeout=config.LLM_REQUEST_TIMEOUT_S,
                         max_retries=1,
                     )
@@ -121,7 +172,7 @@ class OpenRouterBackend(LLMBackend):
             params["temperature"] = temp
         max_tok = getattr(gen_config, "max_output_tokens", None)
         if max_tok is not None:
-            params["max_tokens"] = max_tok
+            params[self._token_param] = max_tok
         tools = _to_tools(gen_config)
         if tools:
             params["tools"] = tools
@@ -131,6 +182,8 @@ class OpenRouterBackend(LLMBackend):
 
     def generate(self, model: str, contents, gen_config):
         client = self._get_client()
+        if self._limiter:
+            self._limiter.acquire(self._name)
         resp = client.chat.completions.create(**self._params(model, contents, gen_config, stream=False))
         # OpenRouter can answer 200 with an error body and `choices: null` (seen live
         # on an overloaded :free model); indexing it raised an opaque TypeError.
@@ -149,6 +202,8 @@ class OpenRouterBackend(LLMBackend):
 
     def generate_stream(self, model: str, contents, gen_config) -> Iterator[str]:
         client = self._get_client()
+        if self._limiter:
+            self._limiter.acquire(self._name)
         emitted = False
         finish = None
         for chunk in client.chat.completions.create(**self._params(model, contents, gen_config, stream=True)):
@@ -173,7 +228,8 @@ class OpenRouterBackend(LLMBackend):
         if status in (429, 500, 502, 503):
             return True
         name = type(exc).__name__
-        return name in ("RateLimitError", "APIConnectionError", "InternalServerError", "APITimeoutError")
+        return name in ("RateLimitError", "LocalRateLimitError", "APIConnectionError",
+                        "InternalServerError", "APITimeoutError")
 
     def is_permanent(self, exc: Exception) -> bool:
         status = getattr(exc, "status_code", None)
