@@ -162,3 +162,46 @@ def test_no_deadline_keeps_the_old_behaviour(monkeypatch):
     monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
 
     assert llm_client.generate_with_failover("gemini-3.5-flash", "q", object()) == "OR_RESP"
+
+
+# ── circuit threshold ───────────────────────────────────────────────────────
+
+def test_one_blip_does_not_open_the_circuit_but_three_in_a_row_do(monkeypatch):
+    """Tripping on the first 503 took a path out process-wide for a minute; with
+    the fallbacks also blipping, every LLM call then failed instantly."""
+    calls = []
+
+    class Flaky:
+        name = "gemini"
+        def generate(self, model, contents, gen_config):
+            calls.append(model)
+            raise Exception("503 UNAVAILABLE")
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    class Ok:
+        name = "openrouter"
+        def generate(self, model, contents, gen_config): return "OR_RESP"
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    _fake_backends(monkeypatch, Flaky(), Ok())
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
+    key = llm_client._circuit_key("gemini", "gemini-3.5-flash")
+
+    for attempt in range(1, llm_client._CIRCUIT_TRIP_AFTER + 1):
+        assert not llm_client._circuit_blocked(key), f"open after {attempt - 1} failure(s)"
+        assert llm_client.generate_with_failover("gemini-3.5-flash", "q", object()) == "OR_RESP"
+    assert llm_client._circuit_blocked(key)
+    assert len(calls) == llm_client._CIRCUIT_TRIP_AFTER
+
+
+def test_a_success_resets_the_failure_count(monkeypatch):
+    llm_client._circuit_failures.clear()
+    key = llm_client._circuit_key("gemini", "m")
+    for _ in range(llm_client._CIRCUIT_TRIP_AFTER - 1):
+        llm_client._circuit_fail(key, Exception("503"))
+    llm_client._circuit_clear(key)
+    llm_client._circuit_fail(key, Exception("503"))
+    assert not llm_client._circuit_blocked(key)

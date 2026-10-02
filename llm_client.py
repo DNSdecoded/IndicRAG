@@ -11,6 +11,7 @@ import threading
 import time
 
 import config as _config
+import metrics
 from providers.base import LLMBackend
 from providers.gemini import GeminiBackend
 from providers.openrouter import OpenRouterBackend
@@ -20,8 +21,15 @@ logger = logging.getLogger(__name__)
 _backends: dict[str, LLMBackend] = {}
 _backends_lock = threading.Lock()
 _circuit_breaker: dict[tuple[str, str], float] = {}
+_circuit_failures: dict[tuple[str, str], int] = {}
 _circuit_lock = threading.Lock()
 _CIRCUIT_COOLDOWN = 60
+# Consecutive failures before a path is skipped for _CIRCUIT_COOLDOWN. Tripping
+# on the FIRST failure meant one 503 "high demand" blip took a path out for every
+# request in the process for a minute; when the fallbacks blipped too, every LLM
+# call then failed instantly (measured: an agent run returned "model unavailable"
+# after 25.7s). Same threshold as the ChromaDB breaker in vector_store.py.
+_CIRCUIT_TRIP_AFTER = 3
 
 
 def _circuit_blocked(key: tuple[str, str]) -> bool:
@@ -29,14 +37,32 @@ def _circuit_blocked(key: tuple[str, str]) -> bool:
         return time.monotonic() < _circuit_breaker.get(key, 0)
 
 
-def _circuit_trip(key: tuple[str, str]) -> None:
+def _circuit_fail(key: tuple[str, str], exc: Exception) -> None:
+    """Count a failed attempt; open the circuit once failures are consecutive enough."""
+    metrics.record_failover(key[0], key[1], type(exc).__name__)
     with _circuit_lock:
+        _circuit_failures[key] = _circuit_failures.get(key, 0) + 1
+        if _circuit_failures[key] < _CIRCUIT_TRIP_AFTER:
+            return
+        _circuit_failures.pop(key, None)
         _circuit_breaker[key] = time.monotonic() + _CIRCUIT_COOLDOWN
+    metrics.record_circuit_trip(f"llm:{key[0]}:{key[1]}")
 
 
 def _circuit_clear(key: tuple[str, str]) -> None:
     with _circuit_lock:
         _circuit_breaker.pop(key, None)
+        _circuit_failures.pop(key, None)
+
+
+def _record_usage(provider: str, model: str, response) -> None:
+    """Export token counts when the provider reports them (Gemini does)."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    metrics.record_tokens(provider, model,
+                          prompt=getattr(usage, "prompt_token_count", 0) or 0,
+                          completion=getattr(usage, "candidates_token_count", 0) or 0)
 
 # ponytail: legacy back-compat shim. Pool state now lives in GeminiBackend;
 # these module globals are unused by the dispatcher and exist only so
@@ -170,15 +196,17 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
         backend = get_backend(prov)
         any_attempted = True
         try:
-            result = backend.generate(mdl, contents, gen_config)
+            with metrics.stage("llm_generate"):
+                result = backend.generate(mdl, contents, gen_config)
             _circuit_clear(key)
+            _record_usage(prov, mdl, result)
             return result
         except Exception as exc:
             last_exc = exc
             if backend.is_permanent(exc):
                 raise
             logger.warning(f"[failover] {prov}:{mdl} failed ({exc!s:.120}) — next path")
-            _circuit_trip(key)
+            _circuit_fail(key, exc)
             continue
 
     if not any_attempted:
@@ -215,8 +243,11 @@ def generate_stream_with_failover(model: str, contents, gen_config,
         backend = get_backend(prov)
         any_attempted = True
         emitted = False
+        started = time.monotonic()
         try:
             for chunk in backend.generate_stream(mdl, contents, gen_config):
+                if not emitted:
+                    metrics.stage_seconds.labels(stage="llm_ttft").observe(time.monotonic() - started)
                 emitted = True
                 yield chunk
             _circuit_clear(key)
@@ -232,7 +263,7 @@ def generate_stream_with_failover(model: str, contents, gen_config,
                 raise
             logger.warning(f"[failover] {prov}:{mdl} failed before first token "
                            f"({exc!s:.120}) — next path")
-            _circuit_trip(key)
+            _circuit_fail(key, exc)
             continue
 
     if not any_attempted:
@@ -313,6 +344,8 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
         started = time.monotonic()
         try:
             for chunk in backend.generate_stream(mdl, prompt, gen_config):
+                if not emitted:
+                    metrics.stage_seconds.labels(stage="llm_ttft").observe(time.monotonic() - started)
                 emitted = True
                 chars += len(chunk)
                 yield chunk
@@ -334,7 +367,7 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
             if backend.is_permanent(exc):
                 raise
             logger.warning(f"[stream failover] {prov}:{mdl} failed ({exc!s:.120}) — next path")
-            _circuit_trip(key)
+            _circuit_fail(key, exc)
             continue
 
     if not any_attempted:

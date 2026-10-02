@@ -132,6 +132,11 @@ class OpenRouterBackend(LLMBackend):
     def generate(self, model: str, contents, gen_config):
         client = self._get_client()
         resp = client.chat.completions.create(**self._params(model, contents, gen_config, stream=False))
+        # OpenRouter can answer 200 with an error body and `choices: null` (seen live
+        # on an overloaded :free model); indexing it raised an opaque TypeError.
+        if not getattr(resp, "choices", None):
+            raise RuntimeError(f"OpenRouter returned no choices for {model}: "
+                               f"{getattr(resp, 'error', None)!s:.200}")
         msg = resp.choices[0].message
         function_calls = []
         for tc in (getattr(msg, "tool_calls", None) or []):
