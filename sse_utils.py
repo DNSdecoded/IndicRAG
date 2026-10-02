@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -28,6 +29,22 @@ INTERRUPTED_NOTE = (
     "\n\n*[Answer incomplete — the connection to the model dropped mid-response. "
     "The sources below cover only what was generated.]*"
 )
+
+
+async def _acquire_producer_slot(wait_s: float, poll_s: float = 0.05) -> bool:
+    """Take a producer slot, waiting up to wait_s without blocking the loop.
+
+    Non-blocking attempts between short sleeps, not a blocking acquire in a worker
+    thread: a client that disconnects mid-wait cancels this coroutine, and a thread
+    cannot be cancelled. That thread could later win a slot nothing would release,
+    shrinking SSE_MAX_PRODUCERS for good. Here a cancelled wait holds nothing.
+    """
+    deadline = time.monotonic() + wait_s
+    while not _producer_slots.acquire(blocking=False):
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(poll_s)
+    return True
 
 
 async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str = "A",
@@ -108,12 +125,7 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
             finally:
                 _producer_slots.release()
 
-    # Off-loop: a blocking semaphore wait here would stall every other request
-    # on this worker for up to ADMISSION_WAIT_S, which is the opposite of what
-    # bounding producers is for.
-    got_slot = await asyncio.to_thread(
-        _producer_slots.acquire, True, config.ADMISSION_WAIT_S)
-    if not got_slot:
+    if not await _acquire_producer_slot(config.ADMISSION_WAIT_S):
         # Same shape as any other stream error, so the client renders it
         # instead of hanging on a connection that will never produce.
         payload = json.dumps({'type': 'error',
