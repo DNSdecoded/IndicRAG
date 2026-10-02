@@ -114,7 +114,7 @@ a{color:var(--indigo);text-decoration:none;}
 .rail-btn.on{background:var(--indigo-soft);color:var(--indigo);}
 .rail-btn.on::before{content:'';position:absolute;left:-9px;top:9px;bottom:9px;width:2.5px;border-radius:0 2px 2px 0;background:var(--indigo);}
 .rail-btn .tip{position:absolute;left:calc(100% + 9px);top:50%;transform:translateY(-50%);background:var(--ink);color:var(--paper);font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:6px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .13s;z-index:60;}
-.rail-btn:hover .tip{opacity:1;}
+.rail-btn:hover .tip,.rail-btn:focus-visible .tip{opacity:1;}
 .rail-sp{flex:1;}
 .rail-dot{width:22px;height:1px;background:var(--rule-hard);margin:7px 0;}
 .avatar{width:29px;height:29px;border-radius:50%;background:var(--patina);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:600;margin-top:5px;}
@@ -219,9 +219,15 @@ select.fld{cursor:pointer;padding-right:26px;}
 
 /* runbar dropdown menus */
 .rb-wrap{position:relative;}
-.rb-drop{position:absolute;bottom:calc(100% + 5px);left:0;min-width:200px;max-width:340px;max-height:44vh;overflow-y:auto;background:var(--paper);border:1px solid var(--rule-hard);border-radius:10px;box-shadow:var(--shadow-lg);z-index:60;padding:4px;display:none;}
-.rb-drop.open{display:block;}
-.rb-drop-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer;transition:background .12s;color .12s;white-space:nowrap;}
+/* The menu grows out of the button that opened it (it opens upward, so the
+   origin is bottom-left) rather than popping in: display can't animate, so
+   visibility + opacity + transform do, with the same near-critically-damped
+   curve as the palette. Closing reverses the same path. */
+.rb-drop{position:absolute;bottom:calc(100% + 5px);left:0;min-width:200px;max-width:340px;max-height:44vh;overflow-y:auto;background:var(--paper);border:1px solid var(--rule-hard);border-radius:10px;box-shadow:var(--shadow-lg);z-index:60;padding:4px;
+  visibility:hidden;opacity:0;pointer-events:none;transform:scale(.96) translateY(4px);transform-origin:bottom left;
+  transition:opacity .14s ease,transform .22s cubic-bezier(.32,.72,0,1),visibility 0s .22s;}
+.rb-drop.open{visibility:visible;opacity:1;pointer-events:auto;transform:none;transition-delay:0s;}
+.rb-drop-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;color:var(--ink-2);cursor:pointer;transition:background .12s,color .12s;white-space:nowrap;}
 .rb-drop-item:hover{background:var(--indigo-soft);color:var(--indigo);}
 .rb-drop-item.on{background:var(--indigo-soft);color:var(--indigo);font-weight:600;}
 .rb-drop-item.on::after{content:'✓';margin-left:auto;font-size:11px;color:var(--indigo);}
@@ -380,7 +386,11 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
 
 /* ── TOAST ────────────────────────────────────────────── */
 .toast-wrap{position:fixed;bottom:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px;}
-.toast{padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:var(--shadow);transition:opacity .3s;max-width:380px;}
+/* Enters from the corner it lives in and leaves the same way (spatial
+   consistency), instead of popping in and fading out in place. */
+.toast{padding:10px 16px;border-radius:10px;font-size:13px;font-weight:500;box-shadow:var(--shadow);max-width:380px;
+  opacity:0;transform:translateY(10px);transition:opacity .2s ease,transform .3s cubic-bezier(.32,.72,0,1);}
+.toast.in{opacity:1;transform:none;}
 .toast-success{background:var(--patina-soft);color:var(--patina);border:1px solid var(--patina);}
 .toast-error{background:var(--madder-soft);color:var(--madder);border:1px solid var(--madder);}
 .toast-info{background:var(--indigo-soft);color:var(--indigo);border:1px solid var(--indigo);}
@@ -397,7 +407,9 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
 /* ── RESPONSIVE ───────────────────────────────────────── */
 .mobile-only{display:none;}
 @media(max-width:1180px){
-  .evidence{position:fixed;right:0;top:0;bottom:0;z-index:50;box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .22s ease;}
+  /* A sheet: same near-critically-damped curve as the rest of the app's motion,
+     response ~0.3s, rather than a generic ease. */
+  .evidence{position:fixed;right:0;top:0;bottom:0;z-index:50;box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);}
   .evidence.open{transform:none;}
   .mobile-only{display:grid;}
 }
@@ -423,9 +435,14 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
     transition-duration:150ms !important;
   }
   .btn:active,.rail-btn:active,.send:active,.rb:active,.tact:active,
-  .iconbtn:active,.seed:active,.scrim>*,.evidence>*{transform:none !important;}
+  .iconbtn:active,.seed:active,.scrim>*,.evidence>*,.rb-drop,.toast{transform:none !important;}
   .evidence{transition:none !important;}
 }
+/* Ease the light/dark swap instead of a full-screen brightness jump. Applied only
+   for the moment of the switch (see setTheme), so it never slows other changes.
+   Colour-only, so it stays on under reduced motion. */
+html.theme-fade,html.theme-fade *,html.theme-fade *::before,html.theme-fade *::after{
+  transition:background-color .25s ease,color .25s ease,border-color .25s ease,fill .25s ease !important;}
 @media(prefers-reduced-transparency:reduce){
   .scrim{backdrop-filter:none !important;background:rgba(20,22,31,.72);}
   [data-theme="dark"] .scrim{background:rgba(0,0,0,.8);}
@@ -857,7 +874,7 @@ table.tbl tbody tr:hover{background:var(--paper-2);}
   </div>
 </div>
 
-<div class="toast-wrap" id="toastWrap"></div>
+<div class="toast-wrap" id="toastWrap" role="status" aria-live="polite"></div>
 
 <script>
 (function () {
@@ -943,13 +960,20 @@ $('#keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey
 // ══ THEME ══════════════════════════════════════════════════
 const SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
 const MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
-function setTheme(dark) {
-  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+let _themeFadeTimer = 0;
+function setTheme(dark, animate) {
+  const root = document.documentElement;
+  if (animate) {  // ease the swap; never on page load, where it would flash
+    root.classList.add('theme-fade');
+    clearTimeout(_themeFadeTimer);
+    _themeFadeTimer = setTimeout(() => root.classList.remove('theme-fade'), 300);
+  }
+  root.setAttribute('data-theme', dark ? 'dark' : 'light');
   $('#themeIcon').innerHTML = dark ? SUN : MOON;
   try { localStorage.setItem('irag-theme', dark ? 'dark' : 'light'); } catch (e) {}
 }
 $('#themeBtn').addEventListener('click', () =>
-  setTheme(document.documentElement.getAttribute('data-theme') !== 'dark'));
+  setTheme(document.documentElement.getAttribute('data-theme') !== 'dark', true));
 (function () {
   let saved = 'light';
   try { saved = localStorage.getItem('irag-theme') || 'light'; } catch (e) {}
@@ -1014,7 +1038,12 @@ $('#langScrim').addEventListener('click', e => { if (e.target === $('#langScrim'
 
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPal(); return; }
-  if (e.key === 'Escape') { closePal(); closeDocModal(); closeEditModal(); return; }
+  if (e.key === 'Escape') {
+    closePal(); closeDocModal(); closeEditModal(); closeDrops();
+    $('#langScrim').classList.remove('on');
+    $('#evidence').classList.remove('open');  // mobile evidence sheet: always a way out
+    return;
+  }
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   const map = { a:'ask', e:'retrieve', l:'library', c:'compare', r:'reviews', s:'signals', h:'health' };
@@ -1029,7 +1058,9 @@ function showToast(msg, type = 'info') {
   t.className = 'toast toast-' + type;
   t.textContent = msg;
   wrap.appendChild(t);
-  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add('in')));
+  // Leave the way it came: drop .in, then remove once the transition is done.
+  setTimeout(() => { t.classList.remove('in'); setTimeout(() => t.remove(), 300); }, 4000);
 }
 
 // ══ RENDER CONTENT (Markdown + KaTeX) ══════════════════════
@@ -1372,10 +1403,36 @@ function updateEvidenceSources(cites, data) {
   }
 }
 
-function scrollThread() {
+// `instant` while streaming: a smooth scroll restarted on every chunk never
+// finishes, stutters, and can fall behind the 100px follow window and stop
+// following altogether. Smooth is kept for discrete events.
+function scrollThread(instant) {
   const t = $('#thread');
   if (t.scrollHeight - t.scrollTop - t.clientHeight < 100)
-    t.scrollTo({ top: t.scrollHeight, behavior: 'smooth' });
+    t.scrollTo({ top: t.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
+}
+
+// Streaming paint, batched to at most one render per frame. Every chunk used to
+// re-parse the WHOLE answer (marked + KaTeX + DOMPurify) and swap innerHTML, so
+// a long answer did quadratic work and several renders per frame on a fast
+// stream. The latest text wins; intermediate states nobody could see are skipped.
+const STREAM_CARET = '<span style="opacity:.35">▍</span>';
+let _paintRaf = 0, _paintEl = null, _paintText = '';
+function _paintNow() {
+  _paintRaf = 0;
+  if (_paintEl) _paintEl.innerHTML = renderContent(_paintText) + STREAM_CARET;
+  scrollThread(true);
+}
+function paintStream(text) {
+  _paintEl = $('#streamBody'); _paintText = text;
+  if (!_paintRaf) _paintRaf = requestAnimationFrame(_paintNow);
+}
+// done: the final render replaces whatever is pending, so drop it.
+function cancelStreamPaint() { cancelAnimationFrame(_paintRaf); _paintRaf = 0; _paintEl = null; }
+// error/abort: show the latest partial text rather than lose the last frame.
+function flushStreamPaint() {
+  if (_paintRaf) { cancelAnimationFrame(_paintRaf); _paintNow(); }
+  _paintEl = null;
 }
 
 // ══ COPY ═══════════════════════════════════════════════════
@@ -1598,8 +1655,7 @@ async function sendMessage() {
             // First real token: the progress panel has done its job, replace it.
             acc += evt.text;
             stopTimer();
-            $('#streamBody').innerHTML = renderContent(acc) + '<span style="opacity:.35">▍</span>';
-            scrollThread();
+            paintStream(acc);
           } else if (evt.type === 'error') {
             stopTimer();
             throw new Error(evt.message);
@@ -1611,6 +1667,7 @@ async function sendMessage() {
             // event carries a compacted answer (dense numbering, dangling markers
             // dropped) it matches the citation panel, so re-render from that.
             const finalText = evt.answer || acc;
+            cancelStreamPaint();
             $('#streamBody').innerHTML = renderContent(finalText);
             lastAnswerText = finalText; lastCites = cites;
             turnDiv.querySelector('.asst-meta').innerHTML =
@@ -1656,8 +1713,7 @@ async function sendMessage() {
           let evt; try { evt = JSON.parse(raw); } catch { continue; }
           if (evt.type === 'chunk') {
             acc += evt.text;
-            $('#streamBody').innerHTML = renderContent(acc) + '<span style="opacity:.35">▍</span>';
-            scrollThread();
+            paintStream(acc);
           } else if (evt.type === 'done') {
             const cites = evt.citations || [];
             if (evt.session_id) sessionId = evt.session_id;
@@ -1665,6 +1721,7 @@ async function sendMessage() {
             // event carries a compacted answer (dense numbering, dangling markers
             // dropped) it matches the citation panel, so re-render from that.
             const finalText = evt.answer || acc;
+            cancelStreamPaint();
             $('#streamBody').innerHTML = renderContent(finalText);
             lastAnswerText = finalText; lastCites = cites;
             turnDiv.querySelector('.asst-meta').innerHTML =
@@ -1689,6 +1746,7 @@ async function sendMessage() {
   } finally {
     // Covers every exit: done, error, and the Stop button (AbortError returns
     // from the catch above without reaching the rest of the happy path).
+    flushStreamPaint();
     stopAgentTimer();
     resetSendBtn();
     input.focus();
