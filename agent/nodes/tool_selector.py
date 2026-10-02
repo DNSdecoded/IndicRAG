@@ -54,22 +54,25 @@ Prefer the academic tools for peer-reviewed literature.
 ROUTING RULES — apply in order, stop at first match:
 0. USER OVERRIDE: If the user's message explicitly names tools \
    (e.g. "use arxiv", "search open access", "use open search"), call ONLY \
-   those named tools. Skip rules 1–4.
+   those named tools. Skip rules 1–5.
 1. CORPUS FIRST: For document/corpus questions call indicrag_retrieval.
-2. ACADEMIC EXTERNAL: For research questions beyond the local corpus, \
+2. GREY LITERATURE & CURRENT EVENTS: For news, current events, standards, \
+   government or agency reports, technical documentation or datasheets, \
+   call web_search — academic databases do not index these.
+3. ACADEMIC EXTERNAL: For research questions beyond the local corpus, \
    call arxiv_search and/or open_access_search.
-3. TEMPORAL FORWARDING: If year_from is present in state, ALWAYS pass it \
+4. TEMPORAL FORWARDING: If year_from is present in state, ALWAYS pass it \
    as year_from to arxiv_search AND as year_range "YYYY-" to open_access_search. \
    Never omit it on retry.
-4. COMBINED: For questions spanning local + external literature, combine \
+5. COMBINED: For questions spanning local + external literature, combine \
    indicrag_retrieval with arxiv_search or open_access_search.
 
 RETRY RULES:
-5. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
+6. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
    Never repeat the original query verbatim. Re-use year_from from state.
-6. reformulate: The query was misunderstood — build a corrected query \
+7. reformulate: The query was misunderstood — build a corrected query \
    from missing_aspects before selecting tools.
-7. regenerate: Context is adequate; answer needs rewriting. \
+8. regenerate: Context is adequate; answer needs rewriting. \
    Return an EMPTY tool list so the answer generator runs without re-retrieval.\
 """
 
