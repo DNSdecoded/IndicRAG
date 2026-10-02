@@ -1416,6 +1416,18 @@ function scrollThread(instant) {
 // re-parse the WHOLE answer (marked + KaTeX + DOMPurify) and swap innerHTML, so
 // a long answer did quadratic work and several renders per frame on a fast
 // stream. The latest text wins; intermediate states nobody could see are skipped.
+// Every streaming turn is built with the same fixed ids (streamBody, the agent
+// progress panel's apLabel/apTime/apSteps). Earlier turns kept them, and an id
+// lookup returns the FIRST match, so from the second question on, the answer
+// was written into the first turn's body and the new turn stayed stuck on its
+// progress panel. Retire the old turn's ids before building the next one.
+const TURN_IDS = ['streamBody', 'agentProgress', 'apLabel', 'apTime', 'apSteps'];
+function retireTurnIds() {
+  for (const id of TURN_IDS) {
+    let el;
+    while ((el = document.getElementById(id))) el.removeAttribute('id');
+  }
+}
 const STREAM_CARET = '<span style="opacity:.35">▍</span>';
 let _paintRaf = 0, _paintEl = null, _paintText = '';
 function _paintNow() {
@@ -1588,6 +1600,7 @@ async function sendMessage() {
       if (!res.ok) { if (handle401(res)) { removeTyping(); return; } const d = await res.json().catch(() => ({})); throw new Error(d?.detail?.error || d?.detail || 'Agent request failed'); }
       removeTyping();
       // Build streaming turn
+      retireTurnIds();  // ids must point at THIS turn
       const turnDiv = document.createElement('div');
       turnDiv.className = 'turn-asst';
       turnDiv.innerHTML = '<div class="asst-meta"><span class="pill ag">Agentic</span><span class="pill">Streaming</span></div>' +
@@ -1693,6 +1706,7 @@ async function sendMessage() {
       if (!res.ok) { if (handle401(res)) { removeTyping(); return; } const d = await res.json().catch(() => ({})); throw new Error(d?.detail?.error || 'Stream failed'); }
       removeTyping();
       // Build streaming turn
+      retireTurnIds();  // ids must point at THIS turn
       const turnDiv = document.createElement('div');
       turnDiv.className = 'turn-asst';
       turnDiv.innerHTML = '<div class="asst-meta"><span class="pill">Streaming</span></div><div class="asst-body" id="streamBody"><span style="opacity:.35">▍</span></div>';
