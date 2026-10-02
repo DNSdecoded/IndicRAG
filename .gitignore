@@ -21,6 +21,7 @@ wheels/
 *.egg
 
 # Virtual Environment
+.venv/
 venv/
 ENV/
 env/
@@ -62,6 +63,7 @@ Thumbs.db
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -71,7 +73,6 @@ htmlcov/
 # Project specific
 quick_test.py
 test_gemini.py
-check_db.py
 
 # Backup files
 *.backup
@@ -87,6 +88,8 @@ graphify-out/
 .agents/
 .claude/
 .commandcode/
+.superpowers/
+.semgrep/
 skills-lock.json
 repo.md
 
