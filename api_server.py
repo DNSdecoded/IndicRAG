@@ -70,7 +70,13 @@ async def lifespan(app):
                        len(reaped), ", ".join(j.get("job_id", "?") for j in reaped))
     if config.USE_RERANKER:
         import rerank
-        rerank._load()
+        # A dummy pass, not just a load: ONNX Runtime's first inference pays its
+        # own init, and the first real rerank after start measured ~3x slower.
+        rerank._load().predict([("warm-up", "warm-up")])
+    # NLI faithfulness runs on every /query and /chat answer; left lazy, the first
+    # one paid a 3.3s model load inside the request.
+    import verify
+    verify._load().predict([("warm-up", "warm-up")])
     if config.USE_COLBERT_RERANK:
         # Warm here or the FIRST query after start pays the model load inside the
         # retrieval path, while holding the loader lock every concurrent query
