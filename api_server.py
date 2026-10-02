@@ -70,13 +70,23 @@ async def lifespan(app):
                        len(reaped), ", ".join(j.get("job_id", "?") for j in reaped))
     if config.USE_RERANKER:
         import rerank
+        model = rerank._load()
         # A dummy pass, not just a load: ONNX Runtime's first inference pays its
         # own init, and the first real rerank after start measured ~3x slower.
-        rerank._load().predict([("warm-up", "warm-up")])
+        try:
+            model.predict([("warm-up", "warm-up")])
+        except Exception:
+            logger.warning("Reranker warm-up inference failed; first query pays it", exc_info=True)
     # NLI faithfulness runs on every /query and /chat answer; left lazy, the first
-    # one paid a 3.3s model load inside the request.
-    import verify
-    verify._load().predict([("warm-up", "warm-up")])
+    # one paid a 3.3s model load inside the request. Fail open, as the request
+    # path always has (rag._run_faithfulness catches it): an offline box without
+    # NLI weights must still start and serve answers, just unverified.
+    try:
+        import verify
+        verify._load().predict([("warm-up", "warm-up")])
+    except Exception:
+        logger.warning("NLI model unavailable at startup; answers will be unverified "
+                       "until it loads", exc_info=True)
     if config.USE_COLBERT_RERANK:
         # Warm here or the FIRST query after start pays the model load inside the
         # retrieval path, while holding the loader lock every concurrent query
