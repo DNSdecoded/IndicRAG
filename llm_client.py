@@ -101,6 +101,17 @@ def resolve_provider(model: str, provider: str | None = None) -> str:
     return "openrouter" if "/" in (model or "") else "gemini"
 
 
+def agent_utility_model(state) -> tuple[str, str | None]:
+    """(model, provider) for the agent's planner, tool routing and completeness calls.
+
+    AGENT_UTILITY_MODEL when set; otherwise the model the answer uses (the user's
+    pick, else LLM_MODEL_NAME), which was the only behaviour before it existed.
+    """
+    if _config.AGENT_UTILITY_MODEL:
+        return _config.AGENT_UTILITY_MODEL, resolve_provider(_config.AGENT_UTILITY_MODEL)
+    return state.get("requested_model") or _config.LLM_MODEL_NAME, state.get("requested_provider")
+
+
 def _circuit_key(provider: str, model: str) -> tuple[str, str]:
     return (provider, model)
 

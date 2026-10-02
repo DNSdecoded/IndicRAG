@@ -475,6 +475,13 @@ GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL", "3600"))  # seconds cache l
 # 503s, while 3.5-flash-lite kept answering (~1s).
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 
+# Model for the agent's small structured calls: query planning, tool routing and
+# the reflexion completeness verdict. They emit a few dozen tokens of JSON or a
+# function call, yet on the main Flash model they took ~106s of a measured 150s
+# agent run; flash-lite answered the same shapes in 0.6-2.1s. The answer itself
+# stays on LLM_MODEL_NAME (or the user's pick). Empty = use the answer model.
+AGENT_UTILITY_MODEL = os.getenv("AGENT_UTILITY_MODEL", "gemini-3.5-flash-lite").strip()
+
 # LLM API Keys (required for Gemini)
 # Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
 # Falls back to single LLM_API_KEY for backward compatibility.

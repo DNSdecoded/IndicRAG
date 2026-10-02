@@ -17,8 +17,7 @@ def _gate_model(state) -> tuple[str, str]:
     If the user picked a model that can't call functions, fall back to the
     Gemini default so the agent doesn't silently degrade to the retrieval
     default and *look* like it worked."""
-    model = state.get("requested_model") or config.LLM_MODEL_NAME
-    provider = state.get("requested_provider")
+    model, provider = llm_client.agent_utility_model(state)
     provider = llm_client.resolve_provider(model, provider)
     if not llm_client.model_supports_tools(provider, model):
         logger.warning(

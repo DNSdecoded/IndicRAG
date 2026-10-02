@@ -156,8 +156,7 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
     raw_text = ""
     try:
-        _model = state.get("requested_model") or config.LLM_MODEL_NAME
-        _provider = state.get("requested_provider")
+        _model, _provider = llm_client.agent_utility_model(state)
         _completeness_prompt = _COMPLETENESS_PROMPT.format(
             query=state["original_query"],
             source_titles=source_titles,

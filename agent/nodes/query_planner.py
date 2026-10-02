@@ -98,8 +98,7 @@ def query_planner_node(state: AgentState) -> dict:
     raw_resp = ""
 
     try:
-        _model = state.get("requested_model") or config.LLM_MODEL_NAME
-        _provider = state.get("requested_provider")
+        _model, _provider = llm_client.agent_utility_model(state)
         _prompt = _DECOMPOSE_PROMPT.format(query=query, max_sq=_MAX_SUB_QUERIES)
         resp = rag.generate_with_failover(
             model=_model,
