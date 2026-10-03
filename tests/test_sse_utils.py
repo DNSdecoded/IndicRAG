@@ -179,14 +179,24 @@ def test_dropped_chunks_still_reach_the_final_answer(monkeypatch):
     monkeypatch.setattr(sse_utils.rag, "compact_citations",
                         lambda text, metas, visible_chunks=None: (text, []))
 
+    # A 4-slot queue, because with the real 128 the consumer below keeps up and
+    # nothing is ever dropped — the test would then pass with or without the fix.
+    real_queue = asyncio.Queue
+    monkeypatch.setattr(sse_utils.asyncio, "Queue",
+                        lambda maxsize=0: real_queue(maxsize=4))
+
     async def _drain_slowly():
         out = []
         async for event in sse_utils.sse_stream("p", [], "en"):
             out.append(event)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.001)   # a reader that cannot keep up
         return out
 
     events = asyncio.run(_drain_slowly())
+
+    delivered = [e for e in events if '"type": "chunk"' in e]
+    assert len(delivered) < len(pieces), (
+        "this test is only meaningful if backpressure actually dropped chunks")
 
     done = [e for e in events if '"type": "done"' in e]
     assert done, "a done event must arrive"

@@ -465,12 +465,14 @@ def retrieve_context(
     if config.USE_RERANKER and docs:
         import rerank
         with metrics.stage("rerank_cross_encoder"):
-            # The caller's top_k, not the global default: hardcoding the default
-            # here meant a caller asking for more passages was silently cut back
-            # to it, so the agent's top_k parameter advertised a range it could
-            # not deliver. top_k is None-defaulted to MAX_CONTEXT_CHUNKS above.
+            # Deliberately MAX_CONTEXT_CHUNKS and not the caller's top_k: top_k
+            # defaults to DEFAULT_TOP_K (15), which is the pre-rerank candidate
+            # width, while this is the post-rerank budget (12). Passing top_k
+            # here would widen every default /query and /chat by three chunks —
+            # more NLI work per answer — for no requested reason. Callers that
+            # want fewer are bounded by _MAX_TOOL_TOP_K on the agent side.
             docs, metas, scores = rerank.rerank(
-                user_query, docs, metas, top_k=top_k)
+                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
         dists = scores
 
     # Format context for LLM
