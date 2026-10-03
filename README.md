@@ -5,19 +5,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.7%20Flash-blueviolet.svg)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.8%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.6--dev-blue.svg)
+![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
 A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
 
-Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini + OpenRouter), **topic watches**, and **literature review reports**.
+Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini, OpenRouter and any OpenAI-compatible provider such as NVIDIA NIM), **topic watches**, and **literature review reports**.
 
 ---
 
-## What's New in v2.6 (in progress)
+## What's New in v2.6
 
 **Theme: bounded, honest serving.** The search indexes are derived views over the
 ingest log; v2.6 adds the machinery that verifies that claim, and bounds what the
@@ -48,6 +48,34 @@ server takes on before it degrades for everyone.
 * **`python check_db.py`** does the same from the command line and exits non-zero on divergence.
 * **`python backup.py create | list | restore <file> --yes`** snapshots the system of record. Restoring replays it into the indexes, because a restored log with stale vectors is worse than either snapshot.
 * **`python purge.py --segments`** deletes only segment directories Chroma's own metadata does not reference, and refuses to act if that metadata is unreadable.
+
+### v2.6 — performance
+
+Measured on the real corpus on a 4-core CPU host (no GPU).
+
+| Path | Before | After | Change |
+|------|--------|-------|--------|
+| Cross-encoder rerank, 15 pairs (p50) | 13.2 s | 7.8 s | Score one pair per forward pass — batched pairs were mostly padding |
+| Cold `retrieve_context` (p50 / p95) | 19.0 s / 35.9 s | 8.6 s / 11.5 s | Same change; rerank was 99.96% of retrieval time |
+| Agent run, end to end | 150.6 s | 86.6–89.6 s | Planner, tool routing and completeness run on `AGENT_UTILITY_MODEL` (each call 0.9–1.6 s, was up to 57 s) |
+| First request after start | +3.3 s NLI load, ~3× slower first rerank | Warm | NLI loaded and every cross-encoder run once in the lifespan |
+| Session + query-log writes | ~6 ms fsync on the event loop per completion | Off the loop | Moved to the threadpool — no longer stalls every in-flight SSE stream |
+| Streaming UI, 300-chunk answer | 301 full re-renders | 1 per frame | Render batched to animation frames |
+| LLM provider blip | One 503 opened the circuit for 60 s, process-wide | 3 consecutive failures to trip | A measured agent run had returned "model unavailable" after 25.7 s |
+
+### v2.6 — reliability and correctness
+
+* **arXiv titles.** The rotated `arXiv:XXXX.XXXXXvN [cs.XX]` margin stamp was extracted as the title, so title dedup skipped new arXiv papers as duplicates of each other (0 chunks). Near-vertical text is now ignored; `/ingest/reindex` returns `422` instead of "success, 0 chunks".
+* **Explicit `top_k` is honored** through the reranker — `/query` and `/chat` requests for 13–20 chunks get 13–20.
+* **Ingest log atomicity.** The log row and its `paper_index` mirror are written in one savepoint; a failed delete cascade raises `DeleteIncomplete` (`DELETE /papers` → `500`) instead of reporting success.
+* **Failover hygiene.** A full local RPM cap no longer trips the provider's circuit, and the Gemini backstop never receives another provider's model id.
+* **Semantic Scholar** requests are spaced to the key's 1 req/s limit and retried once on `429`.
+* **BM25 warm-up race** that raised `KeyError` when an ingest invalidated the index mid-build is fixed.
+* Backups are created owner-only (`0700` / `0600`).
+
+### v2.6 — retrieval tuning
+
+`RERANK_POOL_MULT` and `MAX_CONTEXT_CHUNKS` are now environment-overridable (defaults unchanged). A golden-set sweep of context size and reranker pool is recorded in [`docs/Eval/RESULTS_2026-10-03.md`](docs/Eval/RESULTS_2026-10-03.md): retrieval plateaus at `top_k` 8, while answer completeness rises from 17 to 19 of 26 key facts at 16 chunks.
 
 ---
 
@@ -583,6 +611,9 @@ Key settings (all overridable via environment variables):
 | `REPORT_MAX_SECTIONS` | `6` | Cap report sections to bound cost/latency |
 | `USE_HYBRID_SEARCH` | `true` | BM25 + dense fusion |
 | `USE_RERANKER` | `true` | Cross-encoder reranking |
+| `MAX_CONTEXT_CHUNKS` | `12` | Chunks kept after reranking when no `top_k` is given |
+| `RERANK_POOL_MULT` | `1` | Reranker candidate pool = `top_k × N` (capped by `RERANK_POOL_MAX`); wider finds more but costs one CPU pair per candidate |
+| `RERANK_POOL_MAX` | `40` | Ceiling on the reranker candidate pool |
 | `USE_COLBERT_RERANK` | `false` | ColBERT multi-vector rerank layer |
 | `COLBERT_WEIGHT` | `0.5` | Dense-vs-ColBERT fusion weight |
 | `USE_HYDE` | `false` | Hypothetical document embeddings |
@@ -851,6 +882,9 @@ migrated when you did not. Papers ingested before the log existed are not replay
 cd docs/Eval
 python run_live.py                 # run judged queries through the live pipeline
 python evaluate.py --ci --threshold 0.85
+
+# answer-level eval on one model, no failover (default: LLM_NVIDIA_MODEL)
+python run_live.py --with-answers --model nvidia:<model>
 ```
 
 `evaluate.py` scores whatever sits in `answers_and_citations.json`. That file was
@@ -865,6 +899,8 @@ the indexed corpus, since that produces a uniform 0.000 indistinguishable from
 ## 🤝 Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
+
+**v2.6 highlights:** log-vs-index reconciler · online backup and replayed restore · versioned migrations · admission control and deadline-aware failover · real agent token streaming · any OpenAI-compatible LLM provider · 1.7× faster reranking and ~42% faster agent runs · golden-set retrieval tuning results.
 
 **v2.5 highlights:** gemini-3.7-flash default · per-API-key data isolation actually enforced · SSRF DNS pinning · BM25 inverted index with incremental updates and disk persistence · ChromaDB circuit breaker and sparse-only degraded mode · leased jobs reaped on restart · claimed watch scheduling · index provenance stamps · replayable ingest log and `reindex.py` · per-stage Prometheus metrics · integration test suite.
 
