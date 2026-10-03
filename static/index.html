@@ -1406,10 +1406,13 @@ function updateEvidenceSources(cites, data) {
 // `instant` while streaming: a smooth scroll restarted on every chunk never
 // finishes, stutters, and can fall behind the 100px follow window and stop
 // following altogether. Smooth is kept for discrete events.
-function scrollThread(instant) {
+function nearBottom() {
   const t = $('#thread');
-  if (t.scrollHeight - t.scrollTop - t.clientHeight < 100)
-    t.scrollTo({ top: t.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
+  return t.scrollHeight - t.scrollTop - t.clientHeight < 100;
+}
+function scrollThread(instant, follow = nearBottom()) {
+  const t = $('#thread');
+  if (follow) t.scrollTo({ top: t.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
 }
 
 // Streaming paint, batched to at most one render per frame. Every chunk used to
@@ -1432,8 +1435,11 @@ const STREAM_CARET = '<span style="opacity:.35">▍</span>';
 let _paintRaf = 0, _paintEl = null, _paintText = '';
 function _paintNow() {
   _paintRaf = 0;
+  // Measure BEFORE painting: one frame can add >100px, and measuring after
+  // made a reader who was following look like they had scrolled away.
+  const follow = nearBottom();
   if (_paintEl) _paintEl.innerHTML = renderContent(_paintText) + STREAM_CARET;
-  scrollThread(true);
+  scrollThread(true, follow);
 }
 function paintStream(text) {
   _paintEl = $('#streamBody'); _paintText = text;

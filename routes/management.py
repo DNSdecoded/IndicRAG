@@ -298,7 +298,12 @@ async def delete_paper(
 ):
     """Delete all indexed chunks for a specific paper from the vector store."""
     import vector_store
-    chunks_deleted = await run_in_threadpool(vector_store.delete_by_paper_id, paper_id)
+    incomplete = None
+    try:
+        chunks_deleted = await run_in_threadpool(vector_store.delete_by_paper_id, paper_id)
+    except vector_store.DeleteIncomplete as e:
+        # Chunks are gone; still refresh BM25 and caches below, then report it.
+        incomplete, chunks_deleted = e, e.chunks_deleted
     if chunks_deleted == 0:
         raise HTTPException(status_code=404, detail="paper not found or already deleted")
     try:
@@ -313,6 +318,8 @@ async def delete_paper(
         tool_cache.invalidate()
     except Exception:
         logger.warning("Failed to invalidate caches after paper deletion", exc_info=True)
+    if incomplete is not None:
+        raise HTTPException(status_code=500, detail=str(incomplete))
     return DeletePaperResponse(paper_id=paper_id, chunks_deleted=chunks_deleted, status="deleted")
 
 

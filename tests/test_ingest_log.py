@@ -267,10 +267,14 @@ def test_a_concurrent_write_is_not_swept_into_a_rolled_back_batch():
 
     import pytest
 
+    from datetime import datetime, timezone
+
     sid = str(uuid.uuid4())
+    # Now, not a fixed date: load_sessions() prunes sessions older than
+    # SESSION_MAX_AGE_HOURS, so a hardcoded stamp fails once it ages out.
+    now = datetime.now(timezone.utc).isoformat()
     session = {"id": sid, "messages": [], "owner": None,
-               "created_at": "2026-10-02T00:00:00+00:00",
-               "updated_at": "2026-10-02T00:00:00+00:00"}
+               "created_at": now, "updated_at": now}
     writer = threading.Thread(target=persistence.save_session, args=(sid, session))
     try:
         with pytest.raises(RuntimeError):
@@ -296,3 +300,16 @@ def test_a_failed_snapshot_does_not_leave_a_listed_backup(tmp_path):
         with pytest.raises(OSError):
             backup.create(out_dir=tmp_path)
     assert not list(tmp_path.glob("*.db"))
+
+
+def test_a_failed_mirror_write_does_not_commit_the_log_row():
+    """Review finding: record_ingest wrote ingest_log, then a paper_index failure
+    left that row in the open transaction for the batch to commit anyway."""
+    pid = "mirror_fail_" + uuid.uuid4().hex[:8]
+    with patch.object(persistence, "_year_of", side_effect=RuntimeError("mirror")):
+        with persistence.batch_writes():
+            try:
+                _record(pid, ["chunk"])
+            except RuntimeError:
+                pass        # what ingest._record_ingest does: report, keep batching
+    assert persistence.get_ingest_events(pid) == []

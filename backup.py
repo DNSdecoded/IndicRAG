@@ -42,7 +42,9 @@ def create(out_dir=None) -> Path:
     import persistence
 
     out_dir = Path(out_dir or BACKUP_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Owner-only: a snapshot holds sessions, reports, feedback and the ingest log.
+    # (No effect on Windows, where these mode bits are ignored.)
+    out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Exclusive creation, not just a timestamp: the stamp has second resolution,
     # so two snapshots started in the same second would silently overwrite each
     # other — and a backup that quietly replaces another backup is worse than no
@@ -52,7 +54,7 @@ def create(out_dir=None) -> Path:
     suffix = 1
     while True:
         try:
-            snapshot.touch(exist_ok=False)
+            snapshot.touch(mode=0o600, exist_ok=False)
             break
         except FileExistsError:
             snapshot = out_dir / f"indicrag-{stamp}-{suffix}.db"

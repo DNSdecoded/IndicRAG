@@ -651,28 +651,42 @@ def record_ingest(event_id: str, paper_id: str, content_hash: str, title: str,
     superseded versions would make a replay reinstate deleted chunks.
     """
     with _db_lock:
-        _conn.execute(
-            "INSERT INTO ingest_log (event_id, paper_id, content_hash, title, source_path, "
-            "chunks, metadatas, ids, embed_model, chunker_version, created_at, embed_backend) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(event_id) DO UPDATE SET content_hash=excluded.content_hash, "
-            "title=excluded.title, source_path=excluded.source_path, chunks=excluded.chunks, "
-            "metadatas=excluded.metadatas, ids=excluded.ids, embed_model=excluded.embed_model, "
-            "chunker_version=excluded.chunker_version, created_at=excluded.created_at, "
-            "embed_backend=excluded.embed_backend",
-            (event_id, paper_id, content_hash, title, source_path,
-             json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
-             embed_model, chunker_version, created_at, embed_backend),
-        )
-        # Same transaction as the log write: the mirror is only trustworthy if it
-        # cannot lag the row it mirrors.
-        _conn.execute(
-            "INSERT INTO paper_index (paper_id, title, year, chunk_count, updated_at) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(paper_id) DO UPDATE SET "
-            "title=excluded.title, year=excluded.year, "
-            "chunk_count=excluded.chunk_count, updated_at=excluded.updated_at",
-            (paper_id, title, _year_of(json.dumps(metadatas)), len(ids), created_at),
-        )
+        # Savepoint: if the mirror write fails, the log write must go with it.
+        # Otherwise the half-written row sat in the open transaction and was
+        # committed by the enclosing batch (or by the next writer's commit).
+        # BEGIN first: a savepoint that opens the transaction itself commits it
+        # on RELEASE, which would slip this row out of an enclosing batch.
+        if not _conn.in_transaction:
+            _conn.execute("BEGIN")
+        _conn.execute("SAVEPOINT record_ingest")
+        try:
+            _conn.execute(
+                "INSERT INTO ingest_log (event_id, paper_id, content_hash, title, source_path, "
+                "chunks, metadatas, ids, embed_model, chunker_version, created_at, embed_backend) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(event_id) DO UPDATE SET content_hash=excluded.content_hash, "
+                "title=excluded.title, source_path=excluded.source_path, chunks=excluded.chunks, "
+                "metadatas=excluded.metadatas, ids=excluded.ids, embed_model=excluded.embed_model, "
+                "chunker_version=excluded.chunker_version, created_at=excluded.created_at, "
+                "embed_backend=excluded.embed_backend",
+                (event_id, paper_id, content_hash, title, source_path,
+                 json.dumps(chunks), json.dumps(metadatas), json.dumps(ids),
+                 embed_model, chunker_version, created_at, embed_backend),
+            )
+            # Same transaction as the log write: the mirror is only trustworthy if
+            # it cannot lag the row it mirrors.
+            _conn.execute(
+                "INSERT INTO paper_index (paper_id, title, year, chunk_count, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(paper_id) DO UPDATE SET "
+                "title=excluded.title, year=excluded.year, "
+                "chunk_count=excluded.chunk_count, updated_at=excluded.updated_at",
+                (paper_id, title, _year_of(json.dumps(metadatas)), len(ids), created_at),
+            )
+        except BaseException:
+            _conn.execute("ROLLBACK TO record_ingest")
+            _conn.execute("RELEASE record_ingest")
+            raise
+        _conn.execute("RELEASE record_ingest")
         _maybe_commit()
 
 

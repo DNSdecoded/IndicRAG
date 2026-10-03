@@ -41,6 +41,10 @@ def _circuit_blocked(key: tuple[str, str]) -> bool:
 def _circuit_fail(key: tuple[str, str], exc: Exception) -> None:
     """Count a failed attempt; open the circuit once failures are consecutive enough."""
     metrics.record_failover(key[0], key[1], type(exc).__name__)
+    # Our own RPM cap being full says nothing about the provider's health;
+    # counting it opened the circuit and skipped a healthy provider for 60s.
+    if type(exc).__name__ == "LocalRateLimitError":
+        return
     with _circuit_lock:
         _circuit_failures[key] = _circuit_failures.get(key, 0) + 1
         if _circuit_failures[key] < _CIRCUIT_TRIP_AFTER:
@@ -209,8 +213,11 @@ def _attempts(model: str, provider: str) -> list[tuple[str, str]]:
     # Guarantee a gemini backstop. A selected OpenRouter model whose fallback
     # provider is also OpenRouter (fb_provider == provider) would otherwise have
     # no working fallback and fail outright when the free-tier model 429s.
-    if _config.LLM_MODEL_NAME and not any(p == "gemini" for p, _ in attempts):
-        attempts.append(("gemini", _config.LLM_MODEL_NAME))
+    # _fallback_model_for, not LLM_MODEL_NAME: that may be another provider's
+    # model ("nvidia:meta/..."), which Gemini cannot run.
+    gemini_model = _fallback_model_for("gemini")
+    if gemini_model and not any(p == "gemini" for p, _ in attempts):
+        attempts.append(("gemini", gemini_model))
     return attempts
 
 

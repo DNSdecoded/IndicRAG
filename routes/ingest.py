@@ -441,7 +441,12 @@ async def reindex_document(
     safe_pdf_path = _resolve_papers_path(f"{body.paper_id}.pdf")
 
     # Delete first so ingest_pdf's unchanged-file-hash check doesn't skip it.
-    await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
+    try:
+        await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
+    except vector_store.DeleteIncomplete as e:
+        # Re-ingest below overwrites the log row and refreshes BM25, which is
+        # exactly the cleanup that failed — so proceed rather than abort.
+        logger.warning("Reindex continuing past incomplete delete: %s", e)
 
     num_chunks, title = await run_in_threadpool(
         ingest_module.ingest_pdf,

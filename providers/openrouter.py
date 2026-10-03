@@ -137,7 +137,12 @@ class OpenRouterBackend(LLMBackend):
             with self._lock:
                 if self._client is None:
                     # OpenRouter reads config lazily so its env can change in tests.
-                    api_key = self._api_key or (config.OPENROUTER_API_KEY if self._name == "openrouter" else "")
+                    # provider_settings also reads LLM_OPENROUTER_API_KEY, the
+                    # documented form; the pre-registered backend saw only the old name.
+                    api_key = self._api_key or (
+                        config.OPENROUTER_API_KEY
+                        or (config.provider_settings("openrouter") or {}).get("api_key", "")
+                        if self._name == "openrouter" else "")
                     base_url = self._base_url or config.OPENROUTER_BASE_URL
                     if not api_key:
                         env = self._name.upper().replace("-", "_")

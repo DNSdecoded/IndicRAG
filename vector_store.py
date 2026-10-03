@@ -496,6 +496,15 @@ def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, 
     return counts
 
 
+class DeleteIncomplete(RuntimeError):
+    """The chunks are gone from Chroma, but a cascade step failed twice."""
+
+    def __init__(self, paper_id: str, chunks_deleted: int, steps: list):
+        super().__init__(f"Deleted {chunks_deleted} chunks of {paper_id}, but "
+                         f"{', '.join(steps)} cleanup failed; run check_db.py")
+        self.chunks_deleted = chunks_deleted
+
+
 def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) -> int:
     """
     Delete all chunks for a specific paper.
@@ -510,6 +519,8 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
     ids = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[])['ids']
     _chroma_call(collection.delete, where={'paper_id': paper_id})
     if ids:
+        failed: list[str] = []
+
         def _compensate(step: str, fn, consequence: str):
             """Run one cascade step; retry once, then say so loudly and count it.
 
@@ -539,6 +550,7 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
                         metrics.record_cascade_failure(step)
                     except Exception:
                         pass  # instrumentation must never mask the real failure
+                    failed.append(step)
 
         import bm25_search
         _compensate(
@@ -555,6 +567,10 @@ def delete_by_paper_id(paper_id: str, collection: chromadb.Collection = None) ->
             lambda: persistence.delete_ingest_events(paper_id),
             "A reindex would resurrect this paper.",
         )
+        if failed:
+            # Logged and counted is not enough: a caller reporting this delete as
+            # done would leave the paper citable or replayable with no signal.
+            raise DeleteIncomplete(paper_id, len(ids), failed)
     return len(ids)
 
 
