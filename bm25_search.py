@@ -405,7 +405,10 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
 
     if config.BM25_PERSIST:
         save_index(coll_name)
-    return _indices[coll_name]
+    # Return the index we built, not _indices[coll_name]: an ingest finishing
+    # meanwhile calls invalidate(), which empties _indices, and the re-lookup
+    # raised KeyError. save_index() skips an invalidated name on its own.
+    return idx
 
 
 def add_to_index(ids: List[str], texts: List[str], collection_name: str = None) -> bool:

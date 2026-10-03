@@ -239,6 +239,18 @@ def _cache_dir(tmp_path, monkeypatch):
     bm25_search.invalidate()
 
 
+def test_build_survives_an_invalidate_racing_the_save(_cache_dir, monkeypatch):
+    """An ingest can call invalidate() between the build and the return; the
+    builder must still hand back its index instead of raising KeyError."""
+    def _racing_save(name=None):
+        bm25_search.invalidate()
+        return False
+    monkeypatch.setattr(bm25_search, "save_index", _racing_save)
+
+    idx = bm25_search.get_or_build_index(_Coll({"a": "antenna optimization"}))
+    assert idx.search("antenna", 5)[0] == ["a"]
+
+
 def test_index_is_persisted_and_reloaded_without_rereading_the_corpus(_cache_dir):
     """The point of persisting: a restart must not re-read every document."""
     coll = _Coll({"a": "antenna optimization", "b": "protein folding"})
