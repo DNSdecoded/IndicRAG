@@ -309,6 +309,9 @@ def retrieve_context(
             - 'formatted_context': Formatted context string for LLM
             - 'chunks_used': Number of chunks actually used in formatted context
     """
+    # An explicit top_k is the number of passages the caller wants back; None
+    # means "the configured budget" (MAX_CONTEXT_CHUNKS after reranking).
+    rerank_k = config.MAX_CONTEXT_CHUNKS if top_k is None else top_k
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
     if use_hyde is None:
@@ -317,7 +320,8 @@ def retrieve_context(
     from cache import retrieval_cache, make_key
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
     cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
-                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde)
+                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde,
+                         config.RERANK_POOL_MULT, config.RERANK_POOL_MAX)
     # Decide cacheability BEFORE `collection` is materialized below — the store
     # step used to re-test `collection is None`, which is never true by then, so
     # nothing was ever cached and every repeat query re-embedded and re-searched.
@@ -388,9 +392,14 @@ def retrieve_context(
     # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
     # doc in a 13-doc corpus, top_k=5 → 0 results). Widen the fetch when tags are
     # active and narrow back to top_k once the filter has been applied.
-    search_k = top_k
+    # With the reranker on, hand it a wider pool than it returns (see
+    # RERANK_POOL_MULT); it cuts back to rerank_k below.
+    pool_k = top_k
+    if config.USE_RERANKER:
+        pool_k = max(top_k, min(top_k * config.RERANK_POOL_MULT, config.RERANK_POOL_MAX))
+    search_k = pool_k
     if tags_post_filter:
-        search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+        search_k = max(pool_k, min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX))
 
     # Search vector store (dense)
     with metrics.stage("retrieval_dense"):
@@ -433,10 +442,10 @@ def retrieve_context(
 
     if tags_post_filter:
         results = _apply_tags_post_filter(results, tags_post_filter)
-        # Back down to the caller's budget now that the filter has run.
+        # Back down to the pool now that the filter has run (top_k without a reranker).
         for key in _TAGS_POST_FILTER_KEYS:
             if key in results:
-                results[key] = results[key][:top_k]
+                results[key] = results[key][:pool_k]
 
     # Check if search returned results
     if not results['documents']:
@@ -465,14 +474,12 @@ def retrieve_context(
     if config.USE_RERANKER and docs:
         import rerank
         with metrics.stage("rerank_cross_encoder"):
-            # Deliberately MAX_CONTEXT_CHUNKS and not the caller's top_k: top_k
-            # defaults to DEFAULT_TOP_K (15), which is the pre-rerank candidate
-            # width, while this is the post-rerank budget (12). Passing top_k
-            # here would widen every default /query and /chat by three chunks —
-            # more NLI work per answer — for no requested reason. Callers that
-            # want fewer are bounded by _MAX_TOOL_TOP_K on the agent side.
+            # rerank_k, not top_k: a defaulted top_k is DEFAULT_TOP_K (15), the
+            # pre-rerank candidate width, and passing it would widen every default
+            # /query and /chat past the post-rerank budget (12). An explicit
+            # top_k is honored, so /query asking for 13-20 gets 13-20.
             docs, metas, scores = rerank.rerank(
-                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+                user_query, docs, metas, top_k=rerank_k)
         dists = scores
 
     # Format context for LLM

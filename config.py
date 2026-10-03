@@ -148,6 +148,12 @@ SECTION_CHUNK_SIZES = {
 # ============================================================================
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
 RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+# Candidate pool handed to the cross-encoder, as a multiple of top_k. The
+# reranker can only reorder what it is given: fetching exactly top_k per leg cut
+# relevant chunks at BM25 rank 11 / dense rank 39 before it ever scored them
+# (golden eval, 2026-10-03). Capped because every candidate is one CPU pair.
+RERANK_POOL_MULT = int(os.getenv("RERANK_POOL_MULT", "1"))   # 3 found 1 more key fact in 23 at ~2.5x retrieval time (CPU)
+RERANK_POOL_MAX = int(os.getenv("RERANK_POOL_MAX", "40"))
 
 # ColBERT MaxSim reranking (query-time, no persistent index — see colbert_rerank.py)
 USE_COLBERT_RERANK = os.getenv("USE_COLBERT_RERANK", "false").lower() == "true"
@@ -232,7 +238,7 @@ REPORT_MAX_SECTIONS = int(os.getenv("REPORT_MAX_SECTIONS", "6"))  # cap sections
 # ============================================================================
 RETRIEVE_CANDIDATES = 15  # wider net for agent; keep moderate for CPU embedding speed
 DEFAULT_TOP_K = 15  # dense + BM25 fusion, then rerank narrow
-MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
+MAX_CONTEXT_CHUNKS = int(os.getenv("MAX_CONTEXT_CHUNKS", "12"))  # gated by the reranker so quality stays high
 MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
 
 # Tags are applied as a Python-side post-filter (ChromaDB can't match one tag

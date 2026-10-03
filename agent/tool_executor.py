@@ -122,15 +122,10 @@ def _combine_filters(*filters):
 
 
 # An LLM-supplied top_k reaches a ChromaDB n_results and a CPU cross-encoder
-# batch, so it is bounded rather than trusted.
-#
-# With the reranker on, retrieve_context returns at most MAX_CONTEXT_CHUNKS no
-# matter how wide the fetch was, so advertising more than that would let the
-# model ask for passages it can never receive. Without the reranker the fetch
-# width IS the result width, and 3x leaves room for a genuine survey query
-# without letting one sub-query monopolise the CPU.
-_MAX_TOOL_TOP_K = (config.MAX_CONTEXT_CHUNKS if config.USE_RERANKER
-                   else config.MAX_CONTEXT_CHUNKS * 3)
+# batch, so it is bounded rather than trusted. retrieve_context honors an
+# explicit top_k through the reranker, so 3x the configured budget is room for a
+# genuine survey query without letting one sub-query monopolise the CPU.
+_MAX_TOOL_TOP_K = config.MAX_CONTEXT_CHUNKS * 3
 
 
 def _clamp_top_k(top_k) -> int:
