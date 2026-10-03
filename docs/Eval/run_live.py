@@ -90,8 +90,54 @@ def _corpus_mismatch(judgments_path: Path, collection) -> set:
     return judged - live
 
 
+def _use_eval_model(model: str = None) -> str:
+    """Point every LLM call in this process at one eval model; return its id.
+
+    Defaults to the configured NVIDIA NIM model: Gemini's free-tier quotas 429
+    mid-run, and failover then answers some queries with another model, so the
+    run silently scores a mix. Process-wide on purpose — translation and failover
+    read config directly, not the model passed to answer_question.
+    """
+    import config
+
+    if model is None:
+        nim = config.provider_settings("nvidia")
+        if not (nim and nim.get("model")):
+            return config.LLM_MODEL_NAME   # no NIM configured: leave config alone
+        model = f"nvidia:{nim['model']}"
+    config.LLM_MODEL_NAME = model
+    # No failover: a fallback answer from another provider would be scored under
+    # this model's name (seen when the configured NIM model was retired, 410 Gone).
+    # Listing only the model's own provider leaves _attempts nothing to add.
+    import llm_client
+    config.LLM_PROVIDER_ORDER = [llm_client.resolve_provider(model)]
+    # Queue for a slot under NIM's 40 RPM cap instead of failing over after 5s.
+    config.LLM_RATE_LIMIT_MAX_WAIT_S = max(config.LLM_RATE_LIMIT_MAX_WAIT_S, 90.0)
+    return model
+
+
+def _answer_with_retry(rag, text: str, top_k: int, strategy: str):
+    """answer_question, retried on the SAME model; None if it never succeeds.
+
+    The eval runs without failover, so a provider blip (NIM returns 503
+    "Service temporarily overloaded" under load) would otherwise abort the whole
+    run and lose every answer already generated.
+    """
+    import time
+
+    for wait in (15, 45, 90, None):
+        try:
+            return rag.answer_question(text, top_k=top_k, strategy=strategy)
+        except Exception as e:
+            if wait is None:
+                print(f"    FAILED: {str(e)[:120]}", flush=True)
+                return None
+            print(f"    retry in {wait}s: {str(e)[:80]}", flush=True)
+            time.sleep(wait)
+
+
 def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
-        strategy: str) -> dict:
+        strategy: str, llm_model: str = None) -> dict:
     import config
     import rag
 
@@ -117,7 +163,11 @@ def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
             print(f"    WARNING: retrieval degraded ({ctx['degraded']})", flush=True)
 
         if with_answers:
-            answer_data = rag.answer_question(text, top_k=top_k, strategy=strategy)
+            answer_data = _answer_with_retry(rag, text, top_k, strategy)
+            if answer_data is None:
+                entry["error"] = "answer generation failed after retries"
+                results.append(entry)
+                continue
             answer = answer_data.get("answer", "")
             # The answer's OWN context, not the ctx retrieved above: strategy B
             # retrieves on the translated query, so the two differ and resolving
@@ -164,6 +214,7 @@ def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
             "with_answers": with_answers,
             "strategy": strategy,
             "embed_model": config.EMBEDDING_MODEL_NAME,
+            "llm_model": llm_model if with_answers else None,
         },
         "results": results,
     }
@@ -183,6 +234,9 @@ def main() -> int:
                     help="also generate answers (needs an LLM key; costs tokens)")
     ap.add_argument("--skip-corpus-check", action="store_true",
                     help="run even when the judged papers are not indexed (scores will be 0)")
+    ap.add_argument("--model", default=None,
+                    help="LLM for --with-answers, e.g. 'nvidia:meta/llama-3.3-70b-instruct'. "
+                         "Default: the configured NVIDIA NIM model (LLM_NVIDIA_MODEL).")
     args = ap.parse_args()
 
     import config
@@ -219,7 +273,12 @@ def main() -> int:
                 file=sys.stderr)
             return 3
 
-    run(Path(args.judgments), Path(args.out), args.top_k, args.with_answers, args.strategy)
+    llm_model = None
+    if args.with_answers:
+        llm_model = _use_eval_model(args.model)
+        print(f"Answer model: {llm_model} (no failover)")
+    run(Path(args.judgments), Path(args.out), args.top_k, args.with_answers, args.strategy,
+        llm_model)
     return 0
 
 
