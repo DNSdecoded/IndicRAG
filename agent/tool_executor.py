@@ -10,6 +10,8 @@ import urllib.error
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 import numexpr
 import arxiv
@@ -583,6 +585,23 @@ def _fetch_openalex(query: str, max_results: int, year_range: str, open_access_o
     return passages
 
 
+_s2_lock = threading.Lock()
+_s2_last_call = 0.0
+
+
+def _s2_throttle() -> None:
+    """S2 keys allow 1 request/second cumulative across endpoints; space calls out."""
+    # ponytail: per-process lock; multiple workers share the key, so use a shared
+    # limiter (e.g. Redis) if 429s show up under multi-worker deploys.
+    global _s2_last_call
+    with _s2_lock:
+        # 1.05s still drew 429s; S2's 1-second windows are strict.
+        wait = _s2_last_call + 1.5 - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _s2_last_call = time.monotonic()
+
+
 def execute_open_access_search(
     query: str,
     max_results: int = 5,
@@ -606,8 +625,16 @@ def execute_open_access_search(
             headers={"x-api-key": _S2_API_KEY, "User-Agent": "IndicRAG/2.0"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode())
+            for attempt in range(2):
+                _s2_throttle()
+                try:
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        data = json.loads(resp.read().decode())
+                    break
+                except urllib.error.HTTPError as e:
+                    # S2 sheds load with 429 even within the key's 1 req/s budget.
+                    if e.code != 429 or attempt:
+                        raise
             passages = _parse_s2_papers(data)
             if passages:
                 return {"passages": passages}
