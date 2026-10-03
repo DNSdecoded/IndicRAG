@@ -242,7 +242,11 @@ def _run_bulk_ingest(job_id: str):
         )
         _post_ingest_refresh()
         processing_time = time.time() - start_time
-        status_value = "partial" if stats.get("failed", 0) > 0 else "success"
+        # Unlogged papers count toward partial: their chunks are searchable, so
+        # they are not failures, but a run that leaves the log unable to describe
+        # the corpus has not fully succeeded either.
+        _incomplete = stats.get("failed", 0) > 0 or stats.get("unlogged_papers")
+        status_value = "partial" if _incomplete else "success"
         _update_job(
             job_id,
             status=status_value,
@@ -437,7 +441,12 @@ async def reindex_document(
     safe_pdf_path = _resolve_papers_path(f"{body.paper_id}.pdf")
 
     # Delete first so ingest_pdf's unchanged-file-hash check doesn't skip it.
-    await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
+    try:
+        await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
+    except vector_store.DeleteIncomplete as e:
+        # Re-ingest below overwrites the log row and refreshes BM25, which is
+        # exactly the cleanup that failed — so proceed rather than abort.
+        logger.warning("Reindex continuing past incomplete delete: %s", e)
 
     num_chunks, title = await run_in_threadpool(
         ingest_module.ingest_pdf,
@@ -446,6 +455,15 @@ async def reindex_document(
     )
 
     _post_ingest_refresh()
+
+    if not num_chunks:
+        # ingest_pdf returns 0 for unreadable PDFs and dedup skips alike; the old
+        # chunks are already deleted, so this is a failure, not a success.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Re-index produced 0 chunks (unreadable PDF or skipped as a "
+                   "duplicate of another paper). See server log.",
+        )
 
     return IngestResponse(
         status="success",

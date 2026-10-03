@@ -787,6 +787,60 @@ def test_indicrag_tags_and_year_combined_with_and():
     }
 
 
+def test_indicrag_top_k_forwarded_and_clamped():
+    """F3: the agent may size its own retrieval, but top_k comes from an LLM and
+    reaches a Chroma n_results and a CPU cross-encoder batch, so it is bounded."""
+    import config
+    import agent.tool_executor as te
+
+    with patch("rag.retrieve_context", return_value={"chunks": [], "metadatas": []}) as rc:
+        te.execute_indicrag("q", top_k=3)
+        assert rc.call_args[1]["top_k"] == 3
+
+        te.execute_indicrag("q")
+        assert rc.call_args[1]["top_k"] == config.MAX_CONTEXT_CHUNKS
+
+        te.execute_indicrag("q", top_k=10_000)
+        assert rc.call_args[1]["top_k"] == te._MAX_TOOL_TOP_K
+
+        te.execute_indicrag("q", top_k=0)
+        assert rc.call_args[1]["top_k"] == 1
+
+        te.execute_indicrag("q", top_k="lots")
+        assert rc.call_args[1]["top_k"] == config.MAX_CONTEXT_CHUNKS
+
+
+def test_arxiv_search_declares_arxiv_id_and_dispatch_forwards_it():
+    """F2: the executor has always supported an ID lookup, but the schema never
+    declared it, so the model could not ask for one."""
+    from agent.tool_declarations import FUNCTION_DECLARATIONS
+    from agent.tool_executor import TOOL_DISPATCH
+
+    decl = next(d for d in FUNCTION_DECLARATIONS if d.name == "arxiv_search")
+    assert "arxiv_id" in decl.parameters.properties
+    assert "query" not in (decl.parameters.required or []), "an ID lookup needs no query"
+
+    with patch("agent.tool_executor.execute_arxiv_search") as ex:
+        TOOL_DISPATCH["arxiv_search"]({"arxiv_id": "2301.07041"})
+    assert ex.call_args[0][4] == "2301.07041"
+
+
+def test_arxiv_search_without_query_or_id_errors_without_calling_arxiv():
+    import agent.tool_executor as te
+
+    with patch("agent.tool_executor.arxiv") as arxiv_mod:
+        result = te.execute_arxiv_search("  ")
+    assert "error" in result
+    arxiv_mod.Client.assert_not_called()
+
+
+def test_indicrag_top_k_declared():
+    from agent.tool_declarations import FUNCTION_DECLARATIONS
+
+    decl = next(d for d in FUNCTION_DECLARATIONS if d.name == "indicrag_retrieval")
+    assert "top_k" in decl.parameters.properties
+
+
 def test_indicrag_blank_tags_no_filter():
     import agent.tool_executor as te
 
@@ -974,3 +1028,146 @@ def test_tool_executor_tags_and_interleaves():
     assert all("retriever" in c for c in ctxs), "every passage must be tagged with its tool"
     first12 = ctxs[:12]
     assert sum(1 for c in first12 if c["retriever"] == "indicrag_retrieval") == 3
+
+
+# ── token streaming (C11) ───────────────────────────────────────────────────
+
+def test_answer_generator_streams_tokens_to_the_sink():
+    """/agent/stream used to re-chunk a finished answer at 80 chars: the user
+    waited for the whole generation, then watched it replay."""
+    import agent.nodes.answer_generator as ag
+
+    seen = []
+    state = {
+        "original_query": "q",
+        "retrieved_contexts": [{"text": "ctx", "title": "P", "section": "body"}],
+        "conversation_history": [],
+        "reflexion_count": 0,
+        "token_sink": seen.append,
+    }
+
+    with patch.object(ag.llm_client, "generate_stream_with_failover",
+                      return_value=iter(["Hel", "lo ", "world"])):
+        out = ag.answer_generator_node(state)
+
+    assert seen == ["Hel", "lo ", "world"], "every token must reach the client as it arrives"
+    assert out["draft_answer"] == "Hello world"
+
+
+def test_regenerated_draft_does_not_stream_over_the_first():
+    """A reflexion regeneration would otherwise type a second answer on top of
+    the one already on screen."""
+    import agent.nodes.answer_generator as ag
+
+    seen = []
+    state = {
+        "original_query": "q",
+        "retrieved_contexts": [{"text": "ctx", "title": "P", "section": "body"}],
+        "conversation_history": [],
+        "reflexion_count": 1,
+        "token_sink": seen.append,
+    }
+
+    with patch.object(ag.rag, "generate_with_failover", return_value=object()), \
+         patch.object(ag.rag, "safe_extract_text", return_value="second draft"), \
+         patch.object(ag.llm_client, "generate_stream_with_failover",
+                      side_effect=AssertionError("must not stream a regeneration")):
+        out = ag.answer_generator_node(state)
+
+    assert seen == []
+    assert out["draft_answer"] == "second draft"
+
+
+def test_a_disconnected_client_does_not_abort_the_generation():
+    """The answer still has to reach the session log and the query log."""
+    import agent.nodes.answer_generator as ag
+
+    def _gone(_text):
+        raise RuntimeError("client gone")
+
+    state = {
+        "original_query": "q",
+        "retrieved_contexts": [{"text": "ctx", "title": "P", "section": "body"}],
+        "conversation_history": [],
+        "reflexion_count": 0,
+        "token_sink": _gone,
+    }
+
+    with patch.object(ag.llm_client, "generate_stream_with_failover",
+                      return_value=iter(["a", "b"])):
+        out = ag.answer_generator_node(state)
+
+    assert out["draft_answer"] == "ab"
+
+
+def test_stream_failover_only_before_the_first_token(monkeypatch):
+    """Switching models mid-answer would splice two different answers together
+    in front of the user."""
+    import pytest
+
+    import llm_client
+
+    class BreaksMidStream:
+        name = "gemini"
+        def generate_stream(self, model, contents, gen_config):
+            yield "half an answer"
+            raise Exception("503 UNAVAILABLE")
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    class NeverReached:
+        name = "openrouter"
+        def generate_stream(self, *a, **k):
+            raise AssertionError("must not continue someone else's answer")
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    monkeypatch.setattr(llm_client, "_backends",
+                        {"gemini": BreaksMidStream(), "openrouter": NeverReached()})
+    monkeypatch.setattr(llm_client, "get_backend", lambda p: llm_client._backends[p])
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
+    llm_client._circuit_breaker.clear()
+
+    got = []
+    try:
+        with pytest.raises(Exception):
+            for piece in llm_client.generate_stream_with_failover("gemini-3.5-flash", "q", object()):
+                got.append(piece)
+        assert got == ["half an answer"]
+    finally:
+        # The breaker is process-global: a trip left behind here makes a later
+        # test's healthy gemini path look circuit-open.
+        llm_client._circuit_breaker.clear()
+
+
+def test_stream_failover_does_switch_before_any_token(monkeypatch):
+    import llm_client
+
+    class DeadBeforeFirstToken:
+        name = "gemini"
+        def generate_stream(self, *a, **k):
+            raise Exception("503 UNAVAILABLE")
+            yield  # pragma: no cover
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    class OkOpenRouter:
+        name = "openrouter"
+        def generate_stream(self, *a, **k):
+            yield "from the fallback"
+        def is_permanent(self, e): return False
+        def is_transient(self, e): return True
+
+    monkeypatch.setattr(llm_client, "_backends",
+                        {"gemini": DeadBeforeFirstToken(), "openrouter": OkOpenRouter()})
+    monkeypatch.setattr(llm_client, "get_backend", lambda p: llm_client._backends[p])
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
+    monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
+    llm_client._circuit_breaker.clear()
+
+    try:
+        assert list(llm_client.generate_stream_with_failover(
+            "gemini-3.5-flash", "q", object())) == ["from the fallback"]
+    finally:
+        llm_client._circuit_breaker.clear()

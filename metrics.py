@@ -44,6 +44,9 @@ class _NoopMetric:
     def set(self, *a, **k):
         pass
 
+    def dec(self, *a, **k):
+        pass
+
 
 if _ENABLED:
     # Buckets span the real spread: a cache hit is sub-millisecond, a cross-encoder
@@ -97,10 +100,27 @@ if _ENABLED:
         "indicrag_corpus_chunks",
         "Chunks currently indexed",
     )
+    admission_inflight = Gauge(
+        "indicrag_admission_inflight",
+        "Requests currently holding an admission slot, by pool",
+        ["pool"],
+    )
+    admission_shed = Counter(
+        "indicrag_admission_shed_total",
+        "Requests rejected with 429 because the pool was saturated",
+        ["pool"],
+    )
+    cascade_failures = Counter(
+        "indicrag_cascade_failures_total",
+        "Delete-cascade steps that failed after a retry, leaving a derived view "
+        "diverged from the ingest log",
+        ["step"],
+    )
 else:  # pragma: no cover
     stage_seconds = stage_errors = cache_events = _NoopMetric()
     llm_tokens = llm_failovers = circuit_trips = _NoopMetric()
     reflexion_iterations = answers = corpus_chunks = _NoopMetric()
+    cascade_failures = admission_inflight = admission_shed = _NoopMetric()
 
 
 @contextmanager
@@ -138,6 +158,23 @@ def record_failover(provider: str, model: str, reason: str) -> None:
 
 def record_circuit_trip(component: str) -> None:
     circuit_trips.labels(component=component).inc()
+
+
+def admission_enter(pool: str) -> None:
+    admission_inflight.labels(pool=pool).inc()
+
+
+def admission_exit(pool: str) -> None:
+    admission_inflight.labels(pool=pool).dec()
+
+
+def record_admission_shed(pool: str) -> None:
+    admission_shed.labels(pool=pool).inc()
+
+
+def record_cascade_failure(step: str) -> None:
+    """step: bm25 | ingest_log. A delete that left a derived view behind."""
+    cascade_failures.labels(step=step).inc()
 
 
 def record_answer(mode: str, outcome: str) -> None:

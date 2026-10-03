@@ -309,6 +309,9 @@ def retrieve_context(
             - 'formatted_context': Formatted context string for LLM
             - 'chunks_used': Number of chunks actually used in formatted context
     """
+    # An explicit top_k is the number of passages the caller wants back; None
+    # means "the configured budget" (MAX_CONTEXT_CHUNKS after reranking).
+    rerank_k = config.MAX_CONTEXT_CHUNKS if top_k is None else top_k
     if top_k is None:
         top_k = config.DEFAULT_TOP_K
     if use_hyde is None:
@@ -317,11 +320,26 @@ def retrieve_context(
     from cache import retrieval_cache, make_key
     cache_scope = None if collection is None else getattr(collection, "name", id(collection))
     cache_key = make_key(user_query, top_k, filter_dict, cache_scope,
-                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde)
+                         config.USE_RERANKER, config.MAX_CONTEXT_CHUNKS, use_hyde,
+                         config.RERANK_POOL_MULT, config.RERANK_POOL_MAX)
     # Decide cacheability BEFORE `collection` is materialized below — the store
     # step used to re-test `collection is None`, which is never true by then, so
     # nothing was ever cached and every repeat query re-embedded and re-searched.
-    cacheable = collection is None and filter_dict is None
+    #
+    # Filtered and paper-scoped queries are cacheable too: `cache_key` already
+    # hashes `filter_dict`, so a scoped repeat cannot collide with an unscoped
+    # one. Excluding them meant every repeat of a paper-scoped question paid the
+    # full pipeline — and scoped retrieval is the exhaustive path, the expensive
+    # one. Degraded (sparse-only) results are still never stored; see below.
+    cacheable = collection is None
+
+    def _cache_and_return(res: Dict) -> Dict:
+        if cacheable:
+            # Store a copy, not the object being returned — otherwise the very
+            # first caller still holds a handle on the cached lists.
+            retrieval_cache.put(cache_key, _copy_retrieval_result(res))
+        return res
+
     if cacheable:
         cached = retrieval_cache.get(cache_key)
         if cached is not None:
@@ -351,8 +369,8 @@ def retrieve_context(
                 chunks=filtered["chunks"], metadatas=filtered["metadatas"])
             filtered["formatted_context"] = formatted_context
             filtered["chunks_used"] = chunks_used
-            return filtered
-        return scoped
+            return _cache_and_return(filtered)
+        return _cache_and_return(scoped)
 
     # Embed the query — HyDE embeds a drafted hypothetical answer instead of
     # the bare question; lexical (BM25) search below always uses the real query.
@@ -374,9 +392,14 @@ def retrieve_context(
     # nothing whenever the tagged papers rank below the cut (measured: 1 tagged
     # doc in a 13-doc corpus, top_k=5 → 0 results). Widen the fetch when tags are
     # active and narrow back to top_k once the filter has been applied.
-    search_k = top_k
+    # With the reranker on, hand it a wider pool than it returns (see
+    # RERANK_POOL_MULT); it cuts back to rerank_k below.
+    pool_k = top_k
+    if config.USE_RERANKER:
+        pool_k = max(top_k, min(top_k * config.RERANK_POOL_MULT, config.RERANK_POOL_MAX))
+    search_k = pool_k
     if tags_post_filter:
-        search_k = min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX)
+        search_k = max(pool_k, min(top_k * config.TAGS_OVERFETCH, config.TAGS_OVERFETCH_MAX))
 
     # Search vector store (dense)
     with metrics.stage("retrieval_dense"):
@@ -419,10 +442,10 @@ def retrieve_context(
 
     if tags_post_filter:
         results = _apply_tags_post_filter(results, tags_post_filter)
-        # Back down to the caller's budget now that the filter has run.
+        # Back down to the pool now that the filter has run (top_k without a reranker).
         for key in _TAGS_POST_FILTER_KEYS:
             if key in results:
-                results[key] = results[key][:top_k]
+                results[key] = results[key][:pool_k]
 
     # Check if search returned results
     if not results['documents']:
@@ -451,8 +474,12 @@ def retrieve_context(
     if config.USE_RERANKER and docs:
         import rerank
         with metrics.stage("rerank_cross_encoder"):
+            # rerank_k, not top_k: a defaulted top_k is DEFAULT_TOP_K (15), the
+            # pre-rerank candidate width, and passing it would widen every default
+            # /query and /chat past the post-rerank budget (12). An explicit
+            # top_k is honored, so /query asking for 13-20 gets 13-20.
             docs, metas, scores = rerank.rerank(
-                user_query, docs, metas, top_k=config.MAX_CONTEXT_CHUNKS)
+                user_query, docs, metas, top_k=rerank_k)
         dists = scores
 
     # Format context for LLM
@@ -468,11 +495,7 @@ def retrieve_context(
         'formatted_context': formatted_context,
         'chunks_used': chunks_used
     }
-    if cacheable:
-        # Store a copy, not the object being returned — otherwise the very first
-        # caller still holds a handle on the cached lists.
-        retrieval_cache.put(cache_key, _copy_retrieval_result(result))
-    return result
+    return _cache_and_return(result)
 
 
 def format_context(chunks: List[str], metadatas: List[Dict],
@@ -883,7 +906,12 @@ def prepare_chat_for_stream(messages: List[Dict[str, str]], strategy: str = "A",
                           target_lang=detected_lang, strategy=strategy)
     history_str = "\n\n".join(history_lines)
     if history_str:
-        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
+        # Tagged, like every other section of this prompt. As a bare markdown
+        # heading prepended in front of <context>, prior turns were the only
+        # untagged block in the prompt — and the one made of user-supplied text,
+        # so a turn that looked like an instruction had nothing marking it as
+        # transcript rather than direction.
+        prompt = f"<history>\n{history_str}\n</history>\n\n{prompt}"
 
     return {"chunks_used": context_data["chunks_used"], "prompt": prompt,
             "metadatas": context_data["metadatas"], "detected_lang": detected_lang,
@@ -1254,7 +1282,9 @@ def answer_with_history(
         strategy=strategy,
     )
     if history_str:
-        prompt = f"## Conversation History\n{history_str}\n\n---\n\n{prompt}"
+        # Same framing as prepare_chat_for_stream: /chat and /chat/stream must
+        # not build different prompts for the same request.
+        prompt = f"<history>\n{history_str}\n</history>\n\n{prompt}"
 
     english_answer = llm_generate(prompt, model=model, provider=provider)
     # Compact before any translation so the translated answer carries the same numbers.

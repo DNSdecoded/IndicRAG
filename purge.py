@@ -20,6 +20,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ChromaDB segment index directories are named after the segment UUID.
+_UUID_DIR_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
+
 def confirm_action(prompt: str) -> bool:
     """
     Ask user for confirmation.
@@ -141,7 +145,34 @@ def purge_database(confirmed: bool = False) -> bool:
         logger.error(f"Failed to reset database via ChromaDB client: {e}")
         logger.error("Ensure the API server is stopped before running --db purge.")
         return False
-    
+
+    # The vectors are gone, but the ingest log is the system of record a reindex
+    # replays from and the BM25 cache is a second copy of the same corpus. Leaving
+    # either behind means a purged instance still claims a corpus it cannot serve:
+    # `/stats` reads zero, reindex.py rebuilds the papers the operator just purged,
+    # and the next start loads a lexical index for chunks ChromaDB no longer holds.
+    try:
+        import persistence
+        cleared = persistence.clear_ingest_log()
+        logger.info("Ingest log cleared (%d event(s)) — a reindex can no longer "
+                    "resurrect purged papers", cleared)
+    except Exception as e:
+        logger.error("Vector database was reset but the ingest log could NOT be "
+                     "cleared (%s). Run reindex.py --into to rebuild, or delete "
+                     "sessions.db, before ingesting again — a replay would restore "
+                     "the purged corpus.", e)
+        return False
+
+    # config.BM25_CACHE_DIR, not db_dir: they happen to be the same directory
+    # today, and a purge that silently stops cleaning the cache when that changes
+    # is exactly the kind of coherence bug this block exists to close.
+    for cache_file in config.BM25_CACHE_DIR.glob("bm25_*.json.gz"):
+        try:
+            cache_file.unlink()
+            logger.info("Removed stale BM25 cache: %s", cache_file.name)
+        except OSError as e:
+            logger.warning("Could not remove BM25 cache %s: %s", cache_file.name, e)
+
     return True
 
 
@@ -198,6 +229,70 @@ def purge_models(confirmed: bool = False) -> bool:
     return True
 
 
+def purge_orphan_segments(confirmed: bool = False) -> bool:
+    """Remove HNSW segment directories no live collection references.
+
+    ChromaDB names each segment's index directory after a UUID and never garbage
+    collects them: a reset or a collection recreate points the metadata at a new
+    UUID and orphans the old tree on disk, whole copies of a corpus that nothing
+    can read. This diffs the directory names against `segments.id` in Chroma's
+    own SQLite metadata and deletes only what is unreferenced.
+
+    Stop the API server first, same as `--db`: a running server holds these
+    directories open, and Chroma is the only writer allowed to decide what is live.
+    """
+    import re as _re
+    import sqlite3
+
+    db_dir = config.CHROMA_DB_DIR
+    meta_db = db_dir / "chroma.sqlite3"
+    if not meta_db.exists():
+        logger.info("No ChromaDB metadata at %s — nothing to collect", meta_db)
+        return True
+
+    try:
+        conn = sqlite3.connect(f"file:{meta_db}?mode=ro", uri=True)
+        try:
+            referenced = {row[0] for row in conn.execute("SELECT id FROM segments")}
+        finally:
+            conn.close()
+    except Exception as e:
+        # Never guess here: an unreadable metadata DB means every directory looks
+        # unreferenced, and deleting on that reading would destroy the live index.
+        logger.error("Could not read segment metadata (%s) — refusing to collect", e)
+        return False
+
+    uuid_re = _re.compile(_UUID_DIR_PATTERN)
+    orphans = [d for d in db_dir.iterdir()
+               if d.is_dir() and uuid_re.match(d.name) and d.name not in referenced]
+
+    if not orphans:
+        logger.info("No orphaned segment directories (%d referenced)", len(referenced))
+        return True
+
+    total = sum(f.stat().st_size for d in orphans for f in d.rglob("*") if f.is_file())
+    logger.info("Found %d orphaned segment director(ies), %.1f MB, "
+                "against %d referenced by live collections",
+                len(orphans), total / (1024 * 1024), len(referenced))
+    for d in orphans:
+        logger.info("  %s", d.name)
+
+    if not confirmed:
+        if not confirm_action(f"Delete {len(orphans)} orphaned segment director(ies)?"):
+            logger.info("Cancelled segment collection")
+            return False
+
+    ok = True
+    for d in orphans:
+        try:
+            shutil.rmtree(d)
+            logger.info("Removed %s", d.name)
+        except OSError as e:
+            logger.error("Could not remove %s: %s (is the API server running?)", d.name, e)
+            ok = False
+    return ok
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -209,6 +304,7 @@ Examples:
   python purge.py --db              # Clear vector database
   python purge.py --all --yes       # Delete everything without prompts
   python purge.py --db --papers     # Delete PDFs and database
+  python purge.py --segments        # Reclaim orphaned HNSW segment dirs
         """
     )
     
@@ -226,6 +322,12 @@ Examples:
         '--models',
         action='store_true',
         help='Delete cached models (they will be re-downloaded on next use)'
+    )
+    parser.add_argument(
+        '--segments',
+        action='store_true',
+        help='Delete orphaned ChromaDB HNSW segment directories (safe: keeps everything '
+             'a live collection references). Not included in --all.'
     )
     parser.add_argument(
         '--all',
@@ -253,9 +355,14 @@ Examples:
     purge_papers_flag = args.papers or args.all
     purge_db_flag = args.db or args.all
     purge_models_flag = args.models or args.all
+    # Deliberately NOT part of --all: --all is the destructive sweep, while this
+    # only reclaims disk nothing references, and it is the one operation an
+    # operator may want to run on a corpus they intend to keep.
+    purge_segments_flag = args.segments
     
     # Check if any action requested
-    if not (purge_papers_flag or purge_db_flag or purge_models_flag):
+    if not (purge_papers_flag or purge_db_flag or purge_models_flag
+            or purge_segments_flag):
         parser.print_help()
         logger.error("\nError: No action specified. Use --papers, --db, --models, or --all")
         sys.exit(1)
@@ -272,6 +379,8 @@ Examples:
         logger.info("  ✓ Delete vector database")
     if purge_models_flag:
         logger.info("  ✓ Delete cached models")
+    if purge_segments_flag:
+        logger.info("  ✓ Delete orphaned ChromaDB segment directories")
     logger.info("")
     
     # Confirm if not auto-yes
@@ -302,6 +411,13 @@ Examples:
         logger.info("Purging model cache...")
         logger.info("-" * 60)
         if not purge_models(confirmed=args.yes):
+            success = False
+
+    if purge_segments_flag:
+        logger.info("-" * 60)
+        logger.info("Collecting orphaned segment directories...")
+        logger.info("-" * 60)
+        if not purge_orphan_segments(confirmed=args.yes):
             success = False
     
     # Summary

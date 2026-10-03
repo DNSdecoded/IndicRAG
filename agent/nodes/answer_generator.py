@@ -72,9 +72,34 @@ def answer_generator_node(state: AgentState) -> dict:
     model = state.get("requested_model") or config.LLM_MODEL_NAME
     provider = state.get("requested_provider")
 
+    # The failover chain walks up to three attempts; without a deadline a stalled
+    # chain can outlast the agent's own budget, so the request 504s with nothing
+    # to show instead of finalising what it already has.
+    start = state.get("start_time")
+    deadline = (start + config.AGENT_TIMEOUT) if start is not None else None
+
+    # Stream only the FIRST draft. A reflexion loop that regenerates would
+    # otherwise type a second answer over the first; the done event carries the
+    # final text and the client re-renders from it either way.
+    sink = state.get("token_sink") if state.get("reflexion_count", 0) == 0 else None
+
     try:
-        resp = rag.generate_with_failover(model, contents, gen_config, provider=provider)
-        answer = rag.safe_extract_text(resp)
+        if callable(sink):
+            parts = []
+            for piece in llm_client.generate_stream_with_failover(
+                    model, contents, gen_config, provider=provider, deadline=deadline):
+                parts.append(piece)
+                try:
+                    sink(piece)
+                except Exception:
+                    # The reader is gone (client disconnected). Finish the
+                    # generation for the log and the session, just stop shipping.
+                    sink = None
+            answer = "".join(parts)
+        else:
+            resp = rag.generate_with_failover(model, contents, gen_config, provider=provider,
+                                              deadline=deadline)
+            answer = rag.safe_extract_text(resp)
     except Exception as e:
         logger.error(f"[AnswerGenerator] LLM call failed: {e}", exc_info=True)
         return {"draft_answer": "The AI model is temporarily unavailable. Please try again."}

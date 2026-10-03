@@ -17,8 +17,7 @@ def _gate_model(state) -> tuple[str, str]:
     If the user picked a model that can't call functions, fall back to the
     Gemini default so the agent doesn't silently degrade to the retrieval
     default and *look* like it worked."""
-    model = state.get("requested_model") or config.LLM_MODEL_NAME
-    provider = state.get("requested_provider")
+    model, provider = llm_client.agent_utility_model(state)
     provider = llm_client.resolve_provider(model, provider)
     if not llm_client.model_supports_tools(provider, model):
         logger.warning(
@@ -45,30 +44,35 @@ Use for cutting-edge research, recent preprints, or when the user requests arXiv
 Supports: query (str), max_results (int), year_range (str "YYYY-YYYY" or "YYYY-"), \
 open_access_only (bool, default true). \
 Use for citation counts, peer-reviewed papers, or wide literature surveys.
-  "web_search"  Live web search. Use ONLY for current events, news, or \
-non-academic queries. Do NOT use for scientific literature.
+  "web_search"  Live web search. Use primarily for current events, news, \
+non-academic queries, and grey literature that academic databases do not index — \
+standards, government or agency reports, technical documentation, datasheets. \
+Prefer the academic tools for peer-reviewed literature.
   "calculate"  Evaluate a mathematical expression.
   "execute_python"  Run sandboxed Python for data manipulation.
 
 ROUTING RULES — apply in order, stop at first match:
 0. USER OVERRIDE: If the user's message explicitly names tools \
    (e.g. "use arxiv", "search open access", "use open search"), call ONLY \
-   those named tools. Skip rules 1–4.
+   those named tools. Skip rules 1–5.
 1. CORPUS FIRST: For document/corpus questions call indicrag_retrieval.
-2. ACADEMIC EXTERNAL: For research questions beyond the local corpus, \
+2. GREY LITERATURE & CURRENT EVENTS: For news, current events, standards, \
+   government or agency reports, technical documentation or datasheets, \
+   call web_search — academic databases do not index these.
+3. ACADEMIC EXTERNAL: For research questions beyond the local corpus, \
    call arxiv_search and/or open_access_search.
-3. TEMPORAL FORWARDING: If year_from is present in state, ALWAYS pass it \
+4. TEMPORAL FORWARDING: If year_from is present in state, ALWAYS pass it \
    as year_from to arxiv_search AND as year_range "YYYY-" to open_access_search. \
    Never omit it on retry.
-4. COMBINED: For questions spanning local + external literature, combine \
+5. COMBINED: For questions spanning local + external literature, combine \
    indicrag_retrieval with arxiv_search or open_access_search.
 
 RETRY RULES:
-5. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
+6. retrieve_more: Craft SHARPER queries using missing_aspects from the evaluator. \
    Never repeat the original query verbatim. Re-use year_from from state.
-6. reformulate: The query was misunderstood — build a corrected query \
+7. reformulate: The query was misunderstood — build a corrected query \
    from missing_aspects before selecting tools.
-7. regenerate: Context is adequate; answer needs rewriting. \
+8. regenerate: Context is adequate; answer needs rewriting. \
    Return an EMPTY tool list so the answer generator runs without re-retrieval.\
 """
 

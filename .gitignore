@@ -61,7 +61,7 @@ Thumbs.db
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Testing
+# Testing / lint caches
 .pytest_cache/
 .ruff_cache/
 .coverage
@@ -100,3 +100,10 @@ test_output.txt
 docs/Eval/eval_report.json
 docs/Eval/eval_history/
 .gstack/
+
+# Database snapshots (backup.py)
+backups/
+.env.bak*
+
+# Local RAG test queries
+docs/RAG_TEST_QUERIES.md

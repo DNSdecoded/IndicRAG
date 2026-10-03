@@ -5,15 +5,77 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.130+-00a393.svg)](https://fastapi.tiangolo.com/)
-[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.7%20Flash-blueviolet.svg)](https://ai.google.dev/)
+[![Google Gemini](https://img.shields.io/badge/Google%20Gemini-3.8%20Flash-blueviolet.svg)](https://ai.google.dev/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-agent--pipeline-orange.svg)](https://github.com/langchain-ai/langgraph)
-![Version](https://img.shields.io/badge/version-2.5-blue.svg)
+![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)
 
 ![INDICRAG.png](https://cdn.jsdelivr.net/gh/free-whiteboard-online/Free-Erasorio-Alternative-for-Collaborative-Design@3a5f22554411d3d6df27ee788c2df99d583f2c91/uploads/2025-12-03T05-25-45-007Z-3i36rbzio.png)
 
 A **production-ready** Retrieval-Augmented Generation system with an **agentic pipeline**, multilingual support for 10+ Indian languages, and tools for searching arXiv, Semantic Scholar, OpenAlex, and the web — alongside your own indexed document corpus.
 
-Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini + OpenRouter), **topic watches**, and **literature review reports**.
+Two pipelines ship side-by-side: **Standard RAG** (single-pass hybrid retrieval) and **Agentic RAG** (multi-tool planning with reflexion self-correction). Answers stream token-by-token over SSE, sessions survive restarts, and every retrieval knob is env-configurable. Now with **multi-provider LLM** support (Gemini, OpenRouter and any OpenAI-compatible provider such as NVIDIA NIM), **topic watches**, and **literature review reports**.
+
+---
+
+## What's New in v2.6
+
+**Theme: bounded, honest serving.** The search indexes are derived views over the
+ingest log; v2.6 adds the machinery that verifies that claim, and bounds what the
+server takes on before it degrades for everyone.
+
+| Area | v2.5 | v2.6 |
+|------|------|------|
+| **Index integrity** | Nothing checked the log against the indexes | **Reconciler** (`check_db.py`, `POST /reconcile`) diffs the ingest log against ChromaDB and BM25 per paper; `/quality` reports the result |
+| **Delete cascade** | Best-effort, warn-and-continue | **Compensating retry**, then ERROR + `indicrag_cascade_failures_total` — a partial delete is no longer silent |
+| **LLM providers** | Gemini + OpenRouter only | **Any OpenAI-compatible provider from `.env`** (NVIDIA NIM, OpenAI, Groq, Ollama, any `LLM_<NAME>_BASE_URL`), `provider:model` selection, and a preferred failover order (`LLM_PROVIDER_ORDER`) |
+| **Backup** | None (copying `sessions.db` mid-write tears it) | **`backup.py`** — online SQLite snapshot + manifest; restore replays the log into the indexes |
+| **Schema changes** | `_ensure_column()` at import, no record of what ran | **Versioned migrations** recorded in a `schema_migrations` table |
+| **Load handling** | Unbounded; heavy queries starved `/health` and job polls | **Admission control** — bounded pools per workload, `429` + `Retry-After`, agents shed first |
+| **LLM failover** | Up to 3 attempts x 60s, past the agent's own budget | **Deadline-aware** — an attempt that cannot finish in time is never started |
+| **Agent streaming** | Re-chunked a finished answer at 80 chars | **Real token streaming**; the done event carries the citation-corrected answer |
+| **SSE under load** | A slow client blocked the producer 30s per chunk | **Drop-oldest chunks**, bounded producer threads — generation never waits on a reader |
+| **BM25 deletes** | `df` rescanned per query term against tombstones | **Live `df` counters** + automatic compaction past 20% tombstones |
+| **Dedup on ingest** | Scanned every chunk's metadata out of ChromaDB | **`paper_index` mirror** — a papers-sized table, written in the log's own transaction |
+| **arXiv enrichment** | Serial, 1s+ per paper, re-crawled every run | **Parallel (3 workers) + cached** in SQLite, misses included |
+| **Orphaned HNSW segments** | Accumulated forever (24 dirs / 18 MB measured) | **`purge.py --segments`** reclaims what no live collection references |
+| **SQLite** | One connection, one global lock, commit per write | **Per-thread read connections** + `batch_writes()` — WAL is finally worth having |
+| **Alerting** | Metrics existed, nobody watched them | **`deploy/alerts.example.yml`** — 8 Prometheus rules over latency, capacity and integrity |
+| **Prompts** | Thresholds hardcoded in two places, history untagged | **Config-driven thresholds**, `<history>` / `<contradictions>` sections, grey-literature and empty-context rules |
+
+### v2.6 — new maintenance surface
+
+* **`POST /reconcile`** runs the log-vs-index diff. It walks the whole collection, which is why it is a POST — and why `/quality` reads the cached result rather than triggering a scan.
+* **`python check_db.py`** does the same from the command line and exits non-zero on divergence.
+* **`python backup.py create | list | restore <file> --yes`** snapshots the system of record. Restoring replays it into the indexes, because a restored log with stale vectors is worse than either snapshot.
+* **`python purge.py --segments`** deletes only segment directories Chroma's own metadata does not reference, and refuses to act if that metadata is unreadable.
+
+### v2.6 — performance
+
+Measured on the real corpus on a 4-core CPU host (no GPU).
+
+| Path | Before | After | Change |
+|------|--------|-------|--------|
+| Cross-encoder rerank, 15 pairs (p50) | 13.2 s | 7.8 s | Score one pair per forward pass — batched pairs were mostly padding |
+| Cold `retrieve_context` (p50 / p95) | 19.0 s / 35.9 s | 8.6 s / 11.5 s | Same change; rerank was 99.96% of retrieval time |
+| Agent run, end to end | 150.6 s | 86.6–89.6 s | Planner, tool routing and completeness run on `AGENT_UTILITY_MODEL` (each call 0.9–1.6 s, was up to 57 s) |
+| First request after start | +3.3 s NLI load, ~3× slower first rerank | Warm | NLI loaded and every cross-encoder run once in the lifespan |
+| Session + query-log writes | ~6 ms fsync on the event loop per completion | Off the loop | Moved to the threadpool — no longer stalls every in-flight SSE stream |
+| Streaming UI, 300-chunk answer | 301 full re-renders | 1 per frame | Render batched to animation frames |
+| LLM provider blip | One 503 opened the circuit for 60 s, process-wide | 3 consecutive failures to trip | A measured agent run had returned "model unavailable" after 25.7 s |
+
+### v2.6 — reliability and correctness
+
+* **arXiv titles.** The rotated `arXiv:XXXX.XXXXXvN [cs.XX]` margin stamp was extracted as the title, so title dedup skipped new arXiv papers as duplicates of each other (0 chunks). Near-vertical text is now ignored; `/ingest/reindex` returns `422` instead of "success, 0 chunks".
+* **Explicit `top_k` is honored** through the reranker — `/query` and `/chat` requests for 13–20 chunks get 13–20.
+* **Ingest log atomicity.** The log row and its `paper_index` mirror are written in one savepoint; a failed delete cascade raises `DeleteIncomplete` (`DELETE /papers` → `500`) instead of reporting success.
+* **Failover hygiene.** A full local RPM cap no longer trips the provider's circuit, and the Gemini backstop never receives another provider's model id.
+* **Semantic Scholar** requests are spaced to the key's 1 req/s limit and retried once on `429`.
+* **BM25 warm-up race** that raised `KeyError` when an ingest invalidated the index mid-build is fixed.
+* Backups are created owner-only (`0700` / `0600`).
+
+### v2.6 — retrieval tuning
+
+`RERANK_POOL_MULT` and `MAX_CONTEXT_CHUNKS` are now environment-overridable (defaults unchanged). A golden-set sweep of context size and reranker pool is recorded in [`docs/Eval/RESULTS_2026-10-03.md`](docs/Eval/RESULTS_2026-10-03.md): retrieval plateaus at `top_k` 8, while answer completeness rises from 17 to 19 of 26 key facts at 16 chunks.
 
 ---
 
@@ -200,8 +262,15 @@ LLM_API_KEY=your_gemini_api_key_here
 
 # Optional — enables multi-provider mode (OpenRouter)
 # OPENROUTER_API_KEY=your_openrouter_key_here
-# LLM_PROVIDER=gemini          # gemini|openrouter
 # LLM_FALLBACK_PROVIDER=openrouter
+
+# Optional — any OpenAI-compatible provider, in your preferred failover order
+# LLM_PROVIDER_ORDER=gemini,nvidia,openai
+# LLM_NVIDIA_API_KEY=nvapi-...                      # NVIDIA NIM
+# LLM_NVIDIA_MODEL=meta/llama-3.3-70b-instruct
+# LLM_OPENAI_API_KEY=sk-...
+# LLM_OPENAI_MODEL=<an OpenAI chat model>
+# LLM_MODEL_NAME=nvidia:meta/llama-3.3-70b-instruct # make a non-Gemini model primary
 
 # Optional — enables agent web search tool
 TAVILY_API_KEY=your_tavily_key_here
@@ -343,6 +412,7 @@ for src in data['sources']:
 | `/chat/{session_id}` | GET | Fetch one session's history (owner only; other keys get 404) |
 | `/agent/query` | POST | Agentic pipeline with reflexion loops (timeout → 504) |
 | `/agent/stream` | POST | Agentic pipeline, streamed step-by-step (SSE) |
+| `/reconcile` | POST | Diff the ingest log against ChromaDB + BM25 (v2.6) |
 | `/compare` | POST | Kick off a multi-model answer comparison (async, returns `job_id`) |
 | `/compare/status/{job_id}` | GET | Comparison job status / results |
 | `/models` | GET | Curated model allowlist with tool-capability metadata |
@@ -412,10 +482,12 @@ IndicRAG/
 │   ├── requirements.txt             # dependencies
 │   ├── .env.example                 # LLM_API_KEY(S), TAVILY, AGENT_MAX_TOKENS, ...
 │   ├── start_server.py              # Launcher with pre-flight checks
-│   └── patterns.json                # Regex patterns for PDF cleaning
+│   ├── patterns.json                # Regex patterns for PDF cleaning
+│   ├── backup.py                    # Online DB snapshot + restore-and-replay
+│   └── check_db.py                  # Log-vs-index reconciler (CLI + /reconcile)
 │
 ├── 🐍 Core Modules
-│   ├── config.py                    # Configuration + env parsing (VERSION = 2.4.0-dev)
+│   ├── config.py                    # Configuration + env parsing (VERSION = 2.6.0-dev)
 │   ├── api_server.py                # FastAPI app: lifespan warm-up + router mounting
 │   ├── deps.py                      # Shared deps: auth, rate limit, session/job state
 │   ├── middleware.py                # Request-ID propagation
@@ -497,12 +569,19 @@ Key settings (all overridable via environment variables):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LLM_API_KEY` | (required) | Google Gemini API key (comma-separate for a round-robin pool) |
-| `LLM_PROVIDER` | `gemini` | Primary LLM provider: `gemini` or `openrouter` |
-| `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down |
+| `LLM_FALLBACK_PROVIDER` | `openrouter` | Cross-provider failover when the primary is down (used when `LLM_PROVIDER_ORDER` is empty) |
 | `OPENROUTER_API_KEY` | (none) | OpenRouter API key for multi-provider mode |
-| `LLM_MODEL_NAME` | `gemini-3.7-flash` | Gemini model for generation |
-| `LLM_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Fallback when primary is overloaded (503/429) |
-| `LLM_SELECTABLE_MODELS` | `gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). `.env.example` ships a wider free-tier list. Bare name → Gemini, `/` slug → OpenRouter — **keep at least one `/` slug**, since cross-vendor failover picks the first one here |
+| `LLM_MODEL_NAME` | `gemini-3.8-flash` | Primary model. A bare name is Gemini; `provider:model` (e.g. `nvidia:meta/llama-3.3-70b-instruct`) makes another provider primary |
+| `LLM_FALLBACK_MODEL` | `gemini-3.5-flash-lite` | Same-provider Gemini fallback when the primary is overloaded (503/429) |
+| `AGENT_UTILITY_MODEL` | `gemini-3.5-flash-lite` | Model for the agent's planner, tool routing and completeness calls; empty = use the answer model |
+| `LLM_SELECTABLE_MODELS` | `gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free` | Curated model dropdown (comma-separated; first entry is the default). Bare name → Gemini, `/` slug → OpenRouter, `provider:model` → that provider. Without `LLM_PROVIDER_ORDER`, keep at least one `/` slug — the default cross-vendor failover picks the first one |
+| `LLM_PROVIDER_ORDER` | (empty) | Preferred failover order across providers, e.g. `gemini,nvidia,openai`. Tried after the requested model; providers without a key or model are skipped. Empty keeps the built-in chain |
+| `LLM_<NAME>_API_KEY` | (none) | API key for an OpenAI-compatible provider (`<NAME>_API_KEY`, e.g. `NVIDIA_API_KEY`, also works) |
+| `LLM_<NAME>_BASE_URL` | preset | Endpoint for the provider. Presets: `openai`, `nvidia` (NIM), `groq`, `openrouter`, `ollama`; anything else (e.g. Anthropic's OpenAI-compatible endpoint, vLLM) must set it |
+| `LLM_<NAME>_MODEL` | (none) | Model used when failing over to that provider |
+| `LLM_<NAME>_RPM` | `40` for `nvidia`, else `0` | Client-side requests/min cap (0 = none). Per process: N workers = N x cap |
+| `LLM_RATE_LIMIT_MAX_WAIT_S` | `5` | How long a call waits for a free slot under the cap before failing over |
+| `LLM_GEMINI_MODEL` | (none) | Gemini model to use when Gemini is a fallback and the primary is another provider's model |
 | `LLM_MAX_TOKENS` | `8192` | Max tokens for standard RAG (covers thinking + answer) |
 | `AGENT_MAX_TOKENS` | `8192` | Max tokens for agentic pipeline |
 | `AGENT_TIMEOUT` | `300` | Agent pipeline timeout (seconds) → 504. Must leave room for `AGENT_EVAL_RESERVE_S`, or verification is skipped on every run |
@@ -514,6 +593,14 @@ Key settings (all overridable via environment variables):
 | `LLM_THINKING_LEVEL` | `minimal` | Thinking level for standard RAG — the Gemini 3.x control. `minimal`, `low`, `medium`, `high`, or empty to accept the model default. **Not neutral:** the model's own default is `medium`, and those thought tokens come out of `LLM_MAX_TOKENS`, squeezing the answer. Not every model offers every level — `gemini-3.7-flash` rejects `minimal`; the backend learns that per model and escalates one level up rather than failing |
 | `AGENT_THINKING_LEVEL` | `minimal` | Same, for the agentic pipeline |
 | `AGENT_MAX_SUB_QUERIES` | `3` | Cap per-cycle retrievals to bound latency |
+| `COMPLETENESS_ACCEPT` | `0.75` | Completeness the reflexion evaluator must see to accept an answer. Was hardcoded twice — in the prompt and in the gate — so tuning one silently disagreed with the other |
+| `LLM_MIN_ATTEMPT_S` | `20` | Least remaining budget a deadline-aware caller will start another failover attempt with. Below it the chain stops and hands the time back |
+| `QUERY_CONCURRENCY` | `8` | Concurrent `/query`, `/chat` and `/compare` requests. Beyond it, callers wait `ADMISSION_WAIT_S` and then get `429` |
+| `AGENT_CONCURRENCY` | `4` | Same for `/agent/*`. Smaller on purpose: agents are the expensive shape, so they shed first |
+| `ADMISSION_WAIT_S` | `5` | How long a request may wait for an admission slot before being shed |
+| `ADMISSION_RETRY_AFTER_S` | `10` | `Retry-After` hint sent with a shed request |
+| `SSE_MAX_PRODUCERS` | `16` | Concurrent SSE producer threads. Each holds a provider connection, so unbounded threads let slow clients pin the upstream API |
+| `ENRICH_WORKERS` | `3` | Parallel arXiv metadata lookups during a bulk ingest. Deliberately small — arXiv is a shared public service |
 | `CONTRADICTION_DETECT_ENABLE` | `false` | NLI-based cross-source contradiction flagging |
 | `CONTRADICTION_NLI_THRESHOLD` | `0.6` | NLI score threshold for contradiction detection |
 | `TAVILY_API_KEY` | (optional) | Enables agent web search tool |
@@ -524,6 +611,9 @@ Key settings (all overridable via environment variables):
 | `REPORT_MAX_SECTIONS` | `6` | Cap report sections to bound cost/latency |
 | `USE_HYBRID_SEARCH` | `true` | BM25 + dense fusion |
 | `USE_RERANKER` | `true` | Cross-encoder reranking |
+| `MAX_CONTEXT_CHUNKS` | `12` | Chunks kept after reranking when no `top_k` is given |
+| `RERANK_POOL_MULT` | `1` | Reranker candidate pool = `top_k × N` (capped by `RERANK_POOL_MAX`); wider finds more but costs one CPU pair per candidate |
+| `RERANK_POOL_MAX` | `40` | Ceiling on the reranker candidate pool |
 | `USE_COLBERT_RERANK` | `false` | ColBERT multi-vector rerank layer |
 | `COLBERT_WEIGHT` | `0.5` | Dense-vs-ColBERT fusion weight |
 | `USE_HYDE` | `false` | Hypothetical document embeddings |
@@ -566,6 +656,32 @@ Key settings (all overridable via environment variables):
 | `LLM_CACHE_SIZE` / `LLM_CACHE_TTL` | `128` / `600` | LLM response cache |
 | `RETRIEVAL_CACHE_SIZE` / `RETRIEVAL_CACHE_TTL` | `64` / `300` | Retrieval cache |
 | `TOOL_CACHE_SIZE` / `TOOL_CACHE_TTL` | `64` / `180` | Agent tool cache |
+
+### LLM providers and failover
+
+Gemini is native; every other provider goes through one OpenAI-compatible
+backend, so adding one (NVIDIA NIM, OpenAI, Groq, Ollama, vLLM, any
+`LLM_<NAME>_BASE_URL`) is a `.env` change, not a code change.
+
+```ini
+LLM_PROVIDER_ORDER=gemini,nvidia,openrouter      # failover order
+LLM_NVIDIA_API_KEY=nvapi-...                     # NVIDIA NIM (build.nvidia.com)
+LLM_NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
+LLM_NVIDIA_RPM=40                                # free-tier cap (default for nvidia)
+OPENROUTER_API_KEY=sk-or-...
+LLM_SELECTABLE_MODELS=gemini-3.8-flash,nvidia:nvidia/nemotron-3-super-120b-a12b,google/gemma-4-31b-it:free
+```
+
+A failing call walks this chain:
+
+1. The requested model.
+2. `LLM_FALLBACK_MODEL` (same-provider Gemini fallback).
+3. Each provider in `LLM_PROVIDER_ORDER` with its `LLM_<NAME>_MODEL` (OpenRouter uses the
+   first OpenRouter slug in `LLM_SELECTABLE_MODELS`). Providers with no key are skipped.
+
+Model ids: bare name → Gemini, `vendor/model` → OpenRouter, `provider:model` → that
+provider. A provider over its RPM cap waits up to `LLM_RATE_LIMIT_MAX_WAIT_S`, then
+the call fails over. A model that fails 3 times in a row is skipped for a cooldown.
 
 ---
 
@@ -703,10 +819,41 @@ See [docs/evaluation.md](docs/evaluation.md) for methodology.
 
 ```bash
 python purge.py --papers      # Delete all PDFs
-python purge.py --db          # Clear vector database
+python purge.py --db          # Clear vector DB, ingest log and BM25 cache together
 python purge.py --models      # Remove cached models
-python purge.py --all --yes   # Clear everything
+python purge.py --segments    # Reclaim orphaned ChromaDB HNSW segment dirs
+python purge.py --all --yes   # Clear everything (--segments stays separate: it destroys nothing live)
 ```
+
+`--db` clears the ingest log and the BM25 cache along with the vectors. Wiping the
+indexes alone left a system of record that would replay a corpus which no longer
+existed.
+
+### Integrity checks
+
+```bash
+python check_db.py                 # diff the ingest log against ChromaDB + BM25
+```
+
+Exits non-zero on divergence and names the offending chunk ids. The same check runs
+behind `POST /reconcile`, and `/quality` reports the last result under
+`index_integrity` — answer-quality numbers mean nothing if the corpus being answered
+from has drifted from the log. Repair with `reindex.py` (replay) or
+`reindex.py --backfill-log` (adopt chunks the log never recorded).
+
+### Backups
+
+```bash
+python backup.py create                    # snapshot into backups/
+python backup.py list                      # what is on disk, with manifests
+python backup.py restore <file> --yes      # replace the log, then rebuild the indexes
+```
+
+What gets backed up is the ingest log, not the vector store: the indexes are derived
+views a replay reproduces exactly, so a snapshot is one small SQLite file rather than
+gigabytes of HNSW. It uses SQLite's own online backup API and is safe to take with the
+server running — a plain file copy of `sessions.db` mid-write is torn, and copying it
+without its `-wal` loses the most recent writes.
 
 ### Reindexing
 
@@ -735,6 +882,9 @@ migrated when you did not. Papers ingested before the log existed are not replay
 cd docs/Eval
 python run_live.py                 # run judged queries through the live pipeline
 python evaluate.py --ci --threshold 0.85
+
+# answer-level eval on one model, no failover (default: LLM_NVIDIA_MODEL)
+python run_live.py --with-answers --model nvidia:<model>
 ```
 
 `evaluate.py` scores whatever sits in `answers_and_citations.json`. That file was
@@ -749,6 +899,8 @@ the indexed corpus, since that produces a uniform 0.000 indistinguishable from
 ## 🤝 Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
+
+**v2.6 highlights:** log-vs-index reconciler · online backup and replayed restore · versioned migrations · admission control and deadline-aware failover · real agent token streaming · any OpenAI-compatible LLM provider · 1.7× faster reranking and ~42% faster agent runs · golden-set retrieval tuning results.
 
 **v2.5 highlights:** gemini-3.7-flash default · per-API-key data isolation actually enforced · SSRF DNS pinning · BM25 inverted index with incremental updates and disk persistence · ChromaDB circuit breaker and sparse-only degraded mode · leased jobs reaped on restart · claimed watch scheduling · index provenance stamps · replayable ingest log and `reindex.py` · per-stage Prometheus metrics · integration test suite.
 

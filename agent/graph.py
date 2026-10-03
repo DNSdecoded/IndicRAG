@@ -3,6 +3,8 @@ import time
 
 from langgraph.graph import StateGraph, END
 
+import metrics
+
 from agent.state import AgentState
 from agent.nodes.query_planner import query_planner_node
 from agent.nodes.tool_selector import tool_selector_node
@@ -21,7 +23,8 @@ def _timed(name, fn):
     def wrapped(state):
         t0 = time.monotonic()
         try:
-            return fn(state)
+            with metrics.stage(f"agent_{name}"):
+                return fn(state)
         finally:
             logger.info("[Graph] %s took %.1fs", name, time.monotonic() - t0)
     return wrapped

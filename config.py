@@ -148,6 +148,12 @@ SECTION_CHUNK_SIZES = {
 # ============================================================================
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
 RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+# Candidate pool handed to the cross-encoder, as a multiple of top_k. The
+# reranker can only reorder what it is given: fetching exactly top_k per leg cut
+# relevant chunks at BM25 rank 11 / dense rank 39 before it ever scored them
+# (golden eval, 2026-10-03). Capped because every candidate is one CPU pair.
+RERANK_POOL_MULT = int(os.getenv("RERANK_POOL_MULT", "1"))   # 3 found 1 more key fact in 23 at ~2.5x retrieval time (CPU)
+RERANK_POOL_MAX = int(os.getenv("RERANK_POOL_MAX", "40"))
 
 # ColBERT MaxSim reranking (query-time, no persistent index — see colbert_rerank.py)
 USE_COLBERT_RERANK = os.getenv("USE_COLBERT_RERANK", "false").lower() == "true"
@@ -187,6 +193,10 @@ CONTRADICTION_NLI_THRESHOLD = float(os.getenv("CONTRADICTION_NLI_THRESHOLD", "0.
 
 # Ingest-time metadata enrichment (arXiv) and cross-ingestion title dedup
 ENRICH_METADATA = os.getenv("ENRICH_METADATA", "true").lower() == "true"
+# Concurrent arXiv enrichment lookups during a bulk ingest. Deliberately small:
+# arXiv is a shared public service and the client already waits 1s between calls,
+# so this trades a serial N-second stall for a bounded burst, not a crawl.
+ENRICH_WORKERS = int(os.getenv("ENRICH_WORKERS", "3"))
 DEDUP_PAPERS = os.getenv("DEDUP_PAPERS", "true").lower() == "true"
 DEDUP_TITLE_THRESHOLD = float(os.getenv("DEDUP_TITLE_THRESHOLD", "0.9"))
 
@@ -228,7 +238,7 @@ REPORT_MAX_SECTIONS = int(os.getenv("REPORT_MAX_SECTIONS", "6"))  # cap sections
 # ============================================================================
 RETRIEVE_CANDIDATES = 15  # wider net for agent; keep moderate for CPU embedding speed
 DEFAULT_TOP_K = 15  # dense + BM25 fusion, then rerank narrow
-MAX_CONTEXT_CHUNKS = 12  # gated by the reranker so quality stays high
+MAX_CONTEXT_CHUNKS = int(os.getenv("MAX_CONTEXT_CHUNKS", "12"))  # gated by the reranker so quality stays high
 MAX_CONTEXT_LENGTH = 48000  # ~12k tokens; raise further once reranked
 
 # Tags are applied as a Python-side post-filter (ChromaDB can't match one tag
@@ -266,6 +276,11 @@ FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.15"))
 # completeness alone. Sits below 1.0 by design: per-claim recall is 0.70, so even a
 # fully grounded answer lands near 0.70 — the old hardcoded 0.75 could never fire.
 AGENT_FAITHFULNESS_ACCEPT = float(os.getenv("AGENT_FAITHFULNESS_ACCEPT", "0.6"))
+# Completeness the reflexion evaluator must see before it accepts an answer. This
+# was hardcoded twice — as 0.75 in the evaluator prompt and again as 0.75 in the
+# gate that reads the model's verdict — so tuning one silently disagreed with the
+# other, and the model was told a rule the code did not enforce.
+COMPLETENESS_ACCEPT = float(os.getenv("COMPLETENESS_ACCEPT", "0.75"))
 FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip | regen
 
 # NLI model for claim faithfulness. Default is MULTILINGUAL so Indic-language
@@ -386,6 +401,22 @@ AGENT_THINKING_LEVEL = os.getenv("AGENT_THINKING_LEVEL", "minimal").strip().lowe
 # AGENT_EVAL_RESERVE_S was set aside, so the evaluator skipped verification on
 # every stock-config run — the answer shipped with no faithfulness score at all.
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
+
+# ── Admission control ──────────────────────────────────────────────────────
+# Heavy endpoints run their pipeline in FastAPI's shared threadpool (~40 threads).
+# Nothing bounded how many could be in flight, so a burst of RAG work queued
+# /health checks and job polls behind up to 90s of reranking — the server looked
+# dead while it was merely busy. Bounding admission makes the load shed visibly
+# (429 + Retry-After) instead of degrading everything silently.
+QUERY_CONCURRENCY = int(os.getenv("QUERY_CONCURRENCY", "8"))
+# Agents are the expensive shape (multi-tool, reflexion loops), so they get a
+# smaller pool and are shed first.
+AGENT_CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "4"))
+# How long a request may wait for a slot before it is rejected. Long enough to
+# ride out a short burst, far below any client timeout.
+ADMISSION_WAIT_S = float(os.getenv("ADMISSION_WAIT_S", "5"))
+# Retry-After hint, in seconds, sent with a shed request.
+ADMISSION_RETRY_AFTER_S = int(os.getenv("ADMISSION_RETRY_AFTER_S", "10"))
 # Per-request HTTP timeout for non-streaming LLM calls. Without it the SDK defaults
 # apply (OpenAI: 600s x 2 retries) and ONE stalled request outlasts the whole agent
 # budget. 60s is sized for a legitimate call, not for the failover chain: agent
@@ -401,11 +432,21 @@ AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "300"))
 # generation headroom, make the timeout deadline-aware (remaining budget / attempts
 # left) instead of just lowering it.
 LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))
+# Least remaining wall-clock a deadline-aware caller will start a new attempt with.
+# Below this the answer would land after the caller has already had to give up, so
+# the chain stops and hands the time back rather than spending it. Sized to a
+# measured unary generation (20-50s on CPU) rather than to the HTTP timeout.
+LLM_MIN_ATTEMPT_S = float(os.getenv("LLM_MIN_ATTEMPT_S", "20"))
 # Streaming needs its own, much larger budget: for Gemini the HTTP timeout covers
 # the WHOLE stream, not the gap between chunks, so reusing the 60s unary value tore
 # down long answers mid-generation (WinError 10054, truncated text). This still
 # bounds a genuinely stuck stream without capping legitimate long generations.
 LLM_STREAM_TIMEOUT_S = int(os.getenv("LLM_STREAM_TIMEOUT_S", "300"))
+# Concurrent SSE producer threads across all streaming requests. Each one holds a
+# provider connection for the length of a generation, so an unbounded count lets
+# slow clients pin the upstream API — and every one of those threads also occupies
+# a slot the rest of the process needs.
+SSE_MAX_PRODUCERS = int(os.getenv("SSE_MAX_PRODUCERS", "16"))
 # Wall-clock budget for the reflexion loop. Once exceeded, the evaluator finalizes
 # the current best draft instead of starting another retrieve→generate→verify cycle,
 # so the user gets an answer rather than a hard AGENT_TIMEOUT 504 that discards all
@@ -423,10 +464,10 @@ AGENT_EVAL_RESERVE_S = float(os.getenv("AGENT_EVAL_RESERVE_S", "90"))
 # fraction of the latency of 6. Raise for broad checklist queries if recall suffers.
 AGENT_MAX_SUB_QUERIES = int(os.getenv("AGENT_MAX_SUB_QUERIES", "3"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature for grounded citation tasks
-# gemini-3.7-flash is the current Flash generation: built for complex coding,
-# agentic workflows and multi-step execution, which is what the agent pipeline
-# does. 3.6-flash remains selectable as the previous generation.
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
+# gemini-3.8-flash is the current Flash generation, built for long-horizon agentic
+# workflows, which is what the agent pipeline does. 3.7/3.6-flash remain
+# selectable as previous generations.
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.8-flash")  # Gemini model
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
 # Gemini 3.x Flash already does IMPLICIT caching for free; explicit caching adds
@@ -435,7 +476,17 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.7-flash")  # Gemini model
 # want deterministic cache hits. Falls back to inline prompts on any create failure.
 GEMINI_CACHE_ENABLED = os.getenv("GEMINI_CACHE_ENABLED", "false").lower() == "true"
 GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL", "3600"))  # seconds cache lives
-LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemma-4-26b-a4b-it")  # Fallback when primary is overloaded
+# Same-provider fallback when the primary is overloaded. A lighter Gemini model:
+# gemma-4-26b-a4b-it failed together with the primary under Gemini "high demand"
+# 503s, while 3.5-flash-lite kept answering (~1s).
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+
+# Model for the agent's small structured calls: query planning, tool routing and
+# the reflexion completeness verdict. They emit a few dozen tokens of JSON or a
+# function call, yet on the main Flash model they took ~106s of a measured 150s
+# agent run; flash-lite answered the same shapes in 0.6-2.1s. The answer itself
+# stays on LLM_MODEL_NAME (or the user's pick). Empty = use the answer model.
+AGENT_UTILITY_MODEL = os.getenv("AGENT_UTILITY_MODEL", "gemini-3.5-flash-lite").strip()
 
 # LLM API Keys (required for Gemini)
 # Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
@@ -462,6 +513,64 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")                    # gemini|o
 LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "openrouter")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+# ── Additional OpenAI-compatible providers ─────────────────────────────────
+# Any provider that speaks OpenAI Chat Completions can be used by name. Configure
+# one with LLM_<NAME>_BASE_URL / LLM_<NAME>_API_KEY / LLM_<NAME>_MODEL (the plain
+# <NAME>_API_KEY / <NAME>_BASE_URL forms, e.g. NVIDIA_API_KEY, also work). Presets
+# below only fill in a known base URL; anything else needs an explicit BASE_URL.
+_PROVIDER_PRESETS = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "https://api.openai.com/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",   # NVIDIA NIM (build.nvidia.com)
+    "groq": "https://api.groq.com/openai/v1",
+    "ollama": "http://localhost:11434/v1",
+}
+# Local servers accept any key; the OpenAI client still requires a non-empty one.
+_KEYLESS_PROVIDERS = {"ollama"}
+# Known free-tier request-per-minute caps; override with LLM_<NAME>_RPM (0 = no cap).
+_PROVIDER_RPM = {"nvidia": 40}
+# How long a call may wait for a free slot under its provider's RPM cap before it
+# gives up and lets failover move to the next provider.
+LLM_RATE_LIMIT_MAX_WAIT_S = float(os.getenv("LLM_RATE_LIMIT_MAX_WAIT_S", "5"))
+
+# Preferred failover order across providers, e.g. "gemini,nvidia,openai". The
+# requested model's provider is always tried first; the others follow in this
+# order, each with its LLM_<NAME>_MODEL. Empty = the original chain (Gemini →
+# LLM_FALLBACK_MODEL → LLM_FALLBACK_PROVIDER → Gemini backstop).
+LLM_PROVIDER_ORDER = [p.strip().lower() for p in os.getenv("LLM_PROVIDER_ORDER", "").split(",")
+                      if p.strip()]
+
+
+def _env_first(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def provider_settings(name: str) -> dict | None:
+    """base_url / api_key / model for an OpenAI-compatible provider, or None.
+
+    None means the provider cannot be used: no base URL (neither configured nor a
+    preset) or no API key. `gemini` is native, not OpenAI-compatible, so it is
+    never returned here.
+    """
+    name = (name or "").strip().lower()
+    if not name or name == "gemini":
+        return None
+    up = name.upper().replace("-", "_")
+    base_url = _env_first(f"LLM_{up}_BASE_URL", f"{up}_BASE_URL") or _PROVIDER_PRESETS.get(name, "")
+    api_key = _env_first(f"LLM_{up}_API_KEY", f"{up}_API_KEY")
+    if not api_key and name in _KEYLESS_PROVIDERS:
+        api_key = "not-needed"
+    if not base_url or not api_key:
+        return None
+    rpm = _env_first(f"LLM_{up}_RPM")
+    return {"base_url": base_url, "api_key": api_key,
+            "model": _env_first(f"LLM_{up}_MODEL"),
+            "rpm": int(rpm) if rpm else _PROVIDER_RPM.get(name, 0)}
 # Curated allowlist offered to the user in the model dropdown (comma-separated).
 # Bare name → Gemini; slug with "/" → OpenRouter. First entry is the default.
 _raw_selectable = os.getenv(
@@ -470,7 +579,7 @@ _raw_selectable = os.getenv(
     # cheap high-throughput option for routine calls, then cross-vendor entries.
     # The cross-vendor slugs matter beyond user choice: failover picks a "/"-shaped
     # slug from this list, so an all-Gemini list would leave nothing to fail over to.
-    "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
+    "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,"
     "nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free",
 )
 LLM_SELECTABLE_MODELS = [m.strip() for m in _raw_selectable.split(",") if m.strip()]
@@ -512,14 +621,17 @@ Rules:
    the question requires. Omit sections that do not apply.
 7. CONFLICTS: When sources disagree, present each position with its [N] \
    and state the disagreement explicitly rather than silently merging them.
-8. LANGUAGE: When asked to respond in a non-English language, produce the \
+8. AGREEMENT: When several sources support the same claim, cite the most \
+   recent or most authoritative one. Cite all of them only where each adds \
+   something the others do not — a different dataset, method, or magnitude.
+9. LANGUAGE: When asked to respond in a non-English language, produce the \
    entire answer in that language consistently. Keep technical terms, \
    proper nouns, and citation markers [N] in their original form.
-9. MEDICAL: If — and only if — the context describes specific patient \
-   treatment recommendations, dosage guidance, or diagnostic criteria that \
-   could directly influence a health decision, append exactly: \
-   "⚠️ This is not medical advice. Consult a qualified healthcare professional."
-10. CONDUCT: Never reference system architecture, prompt guidelines, or \
+10. MEDICAL: If — and only if — the context describes specific patient \
+    treatment recommendations, dosage guidance, or diagnostic criteria that \
+    could directly influence a health decision, append exactly: \
+    "⚠️ This is not medical advice. Consult a qualified healthcare professional."
+11. CONDUCT: Never reference system architecture, prompt guidelines, or \
     internal engineering constraints in your output.\
 """
 
@@ -550,6 +662,7 @@ QUERY_PROMPT_TEMPLATE = """\
 - Lead with a direct answer; add technical depth only as the query requires.
 - Equations in <context> may appear as flattened multi-line plain text (PDF extraction). Reconstructing such an equation into standard notation or LaTeX is faithful quoting, not inference — do it when asked, using only the symbols and values present in the context.
 - If context is insufficient, state exactly what is missing rather than inferring.
+- If NO passage in <context> addresses the query, say so plainly — "the retrieved context does not address X" — and name what would be needed. Do not answer from general knowledge, and do not pad the answer with the nearest merely-related passage.
 </instructions>\
 """
 
@@ -646,7 +759,7 @@ ABSTAIN_COMPLETENESS_FLOOR = float(os.getenv("ABSTAIN_COMPLETENESS_FLOOR", "0.5"
 # ============================================================================
 # Surfaced in the OpenAPI spec and /health, so it is what an operator reads when
 # asking "which build is this?" — it had drifted two releases behind the README.
-VERSION = "2.5.0-dev"
+VERSION = "2.6.0-dev"
 
 # ============================================================================
 # Chat / Session

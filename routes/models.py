@@ -42,12 +42,10 @@ def _catalog() -> dict:
     return cat
 
 
-def _is_openrouter(model: str) -> bool:
-    return "/" in model
-
-
 def model_supports_tools(model: str) -> bool:
-    if not _is_openrouter(model):
+    # Only OpenRouter has a catalog to check; other providers are not over-blocked.
+    import llm_client
+    if llm_client.resolve_provider(model) != "openrouter":
         return True
     entry = _catalog().get(model)
     if not entry:
@@ -57,11 +55,11 @@ def model_supports_tools(model: str) -> bool:
 
 def list_models() -> list[dict]:
     out = []
+    import llm_client
     for mid in config.LLM_SELECTABLE_MODELS:
-        if _is_openrouter(mid):
-            out.append({"id": mid, "provider": "openrouter", "tools": model_supports_tools(mid)})
-        else:
-            out.append({"id": mid, "provider": "gemini", "tools": True})
+        # 'nvidia:meta/llama-...' style entries name their provider explicitly.
+        out.append({"id": mid, "provider": llm_client.resolve_provider(mid),
+                    "tools": model_supports_tools(mid)})
     return out
 
 

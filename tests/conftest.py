@@ -31,3 +31,26 @@ for _stale in glob.glob(os.path.join(_tmp_bm25, "bm25_*")):
         os.remove(_stale)
     except OSError:
         pass
+
+
+import sys  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_provider_order(monkeypatch):
+    """A developer's .env may set LLM_PROVIDER_ORDER; tests assume the built-in chain."""
+    import config
+    monkeypatch.setattr(config, "LLM_PROVIDER_ORDER", [])
+
+
+@pytest.fixture(autouse=True)
+def _reset_llm_circuits():
+    """The LLM breaker counts consecutive failures process-wide; a count left by
+    one test would open a circuit in another. Only touch it if already imported."""
+    yield
+    llm_client = sys.modules.get("llm_client")
+    if llm_client is not None:
+        llm_client._circuit_breaker.clear()
+        llm_client._circuit_failures.clear()

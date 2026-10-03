@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Optional, Literal
+from typing import Any, TypedDict, List, Optional, Literal
 
 
 class ReflexionFeedback(TypedDict):
@@ -9,6 +9,10 @@ class ReflexionFeedback(TypedDict):
 
 
 class AgentState(TypedDict):
+    # Optional callable the answer generator hands each token to as it arrives,
+    # so /agent/stream can emit real tokens instead of re-chunking a finished
+    # answer. Absent (or None) for every non-streaming caller.
+    token_sink: Optional[Any]
     original_query: str
     detected_language: str
     query_plan: List[str]

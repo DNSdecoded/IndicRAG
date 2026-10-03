@@ -472,8 +472,9 @@ def test_retrieval_cache_actually_stores_and_hits():
     retrieval_cache.invalidate()
 
 
-def test_retrieval_cache_not_used_for_explicit_collection_or_filter():
-    """Scoped/filtered lookups must stay uncached (they key off caller state)."""
+def test_retrieval_cache_not_used_for_explicit_collection():
+    """A caller-supplied collection stays uncached: the entry would key off
+    caller state that a post-ingest invalidation cannot reason about."""
     import config
     import rag
     from cache import retrieval_cache
@@ -485,10 +486,65 @@ def test_retrieval_cache_not_used_for_explicit_collection_or_filter():
          patch.object(config, "USE_HYBRID_SEARCH", False), \
          patch.object(config, "USE_RERANKER", False), \
          patch.object(config, "USE_COLBERT_RERANK", False):
-        rag.retrieve_context("q", top_k=3, filter_dict={"year": {"$gte": "2020"}})
         rag.retrieve_context("q", top_k=3, collection=object())
 
     assert retrieval_cache.stats["size"] == 0
+    retrieval_cache.invalidate()
+
+
+def test_filtered_query_is_cached_and_keyed_by_its_filter():
+    """C4: a filtered repeat must hit the cache, and must not collide with the
+    same question asked unfiltered — the key already hashes the filter."""
+    import config
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    searches = []
+
+    def fake_search(**kw):
+        searches.append(kw)
+        return _fake_search_results(3, 0)
+
+    with patch("vector_store.search", side_effect=fake_search), \
+         patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch("embeddings.embed_query", return_value=[0.0]), \
+         patch.object(config, "USE_HYBRID_SEARCH", False), \
+         patch.object(config, "USE_RERANKER", False), \
+         patch.object(config, "USE_COLBERT_RERANK", False):
+        rag.retrieve_context("q", top_k=3, filter_dict={"year": {"$gte": "2020"}})
+        rag.retrieve_context("q", top_k=3, filter_dict={"year": {"$gte": "2020"}})
+        assert len(searches) == 1, "filtered repeat must be served from the cache"
+
+        rag.retrieve_context("q", top_k=3)
+        assert len(searches) == 2, "unfiltered query must not read the filtered entry"
+
+    assert retrieval_cache.stats["size"] == 2
+    retrieval_cache.invalidate()
+
+
+def test_paper_scoped_query_is_cached():
+    """C4: paper-scoped retrieval is the exhaustive path — the expensive one —
+    and used to bypass the cache entirely by returning early."""
+    import rag
+    from cache import retrieval_cache
+
+    retrieval_cache.invalidate()
+    calls = []
+
+    def fake_scoped(chroma_filter_dict, collection):
+        calls.append(chroma_filter_dict)
+        return {"chunks": ["c"], "metadatas": [{"title": "P"}], "distances": [0.1],
+                "formatted_context": "ctx", "chunks_used": 1}
+
+    with patch("vector_store.get_or_create_collection", return_value=object()), \
+         patch.object(rag, "_retrieve_scoped", side_effect=fake_scoped):
+        first = rag.retrieve_context("q", top_k=3, filter_dict={"paper_id": "p1"})
+        second = rag.retrieve_context("q", top_k=3, filter_dict={"paper_id": "p1"})
+
+    assert len(calls) == 1, "scoped repeat must be served from the cache"
+    assert second["chunks"] == first["chunks"]
+    assert second["chunks"] is not first["chunks"], "cache must hand out copies"
     retrieval_cache.invalidate()
 
 
