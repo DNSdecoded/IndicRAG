@@ -451,6 +451,15 @@ async def reindex_document(
 
     _post_ingest_refresh()
 
+    if not num_chunks:
+        # ingest_pdf returns 0 for unreadable PDFs and dedup skips alike; the old
+        # chunks are already deleted, so this is a failure, not a success.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Re-index produced 0 chunks (unreadable PDF or skipped as a "
+                   "duplicate of another paper). See server log.",
+        )
+
     return IngestResponse(
         status="success",
         chunks_ingested=num_chunks,

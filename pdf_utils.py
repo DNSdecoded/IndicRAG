@@ -290,7 +290,11 @@ def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
                 lines_info = []
                 for line in b.get('lines', []):
                     spans = line.get('spans', [])
-                    if not spans:
+                    # Skip rotated text: the arXiv margin stamp ("arXiv:2610.02196v1
+                    # [cs.RO] 1 Oct 2026") is vertical and often the largest font,
+                    # and since every stamp looks alike, title dedup then skipped
+                    # each new arXiv paper as a "duplicate" of the last one.
+                    if not spans or abs(line.get('dir', (1, 0))[1]) > 0.1:
                         continue
                     # Join spans within the line — a title often splits across
                     # multiple font runs (bold/italic segments, kerning), so
