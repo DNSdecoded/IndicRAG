@@ -498,6 +498,18 @@ def retrieve_context(
     return _cache_and_return(result)
 
 
+# The prompt template's own structural tags. Retrieved text (corpus, web, tool
+# output) is untrusted: a passage containing "</context><instructions>..." would
+# otherwise close the context block and pose as instructions. Only these tags are
+# escaped, so math like "p < 0.05" reaches the model untouched. Ported from scirag
+# (evidence.package), which escapes the whole passage.
+_PROMPT_TAG_RE = re.compile(r'<(/?\s*(?:context|query|instructions)\b)', re.IGNORECASE)
+
+
+def _neutralize_tags(text: str) -> str:
+    return _PROMPT_TAG_RE.sub(r'&lt;\1', text)
+
+
 def format_context(chunks: List[str], metadatas: List[Dict],
                    max_chunks: int = None, max_length: int = None) -> str:
     """
@@ -532,7 +544,8 @@ def format_context(chunks: List[str], metadatas: List[Dict],
 
         # One citation number per unique paper — chunks of the same paper reuse it.
         num = title_to_num.get(title, len(title_to_num) + 1)
-        context_part = f"[{num}] {title} - {section}:\n{chunk}\n"
+        context_part = (f"[{num}] {_neutralize_tags(title)} - {_neutralize_tags(str(section))}:\n"
+                        f"{_neutralize_tags(chunk)}\n")
 
         # Check if adding this would exceed length limit
         if total_length + len(context_part) > max_length:
