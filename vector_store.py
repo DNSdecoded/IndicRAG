@@ -384,7 +384,52 @@ def add_documents(
                              "First ids: %s", len(orphans), orphans[:5], exc_info=True)
         raise
 
+    # Fold the new chunks into a live BM25 index here, the one function every
+    # chunk write goes through — the mirror of delete_by_paper_id doing the
+    # removal. Without it every ingest dropped the whole lexical index and the
+    # next query rebuilt it from Chroma under the build lock. No index built yet
+    # → nothing to do; the first query builds it from the collection.
+    import bm25_search
+    coll_name = getattr(collection, "name", None)
+    try:
+        if bm25_search.add_to_index(list(ids), list(texts), coll_name) and config.BM25_PERSIST:
+            threading.Thread(target=bm25_search.save_index, args=(coll_name,), daemon=True).start()
+    except Exception:
+        # Chroma is the source BM25 is derived from; a stale lexical index is
+        # repaired by a rebuild, so drop it rather than fail a committed write.
+        logger.warning("BM25 incremental add failed; dropping the index for a rebuild",
+                       exc_info=True)
+        bm25_search.invalidate()
+
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
+
+
+def delete_stale_chunks(paper_id: str, keep_ids: List[str],
+                        collection: chromadb.Collection = None) -> int:
+    """Drop a paper's chunks whose ids are not in `keep_ids`. Returns how many.
+
+    The second half of replacing a paper: the new version is upserted first and
+    only then are the old ids it no longer has removed, so there is never a moment
+    when the paper is absent. Unlike delete_by_paper_id this leaves the ingest-log
+    row alone — the caller's record_ingest overwrites it with the new version.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    keep = set(keep_ids)
+    current = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[],
+                           timeout=config.CHROMA_WRITE_TIMEOUT_S)['ids']
+    stale = [i for i in current if i not in keep]
+    if not stale:
+        return 0
+    _chroma_call(collection.delete, ids=stale, timeout=config.CHROMA_WRITE_TIMEOUT_S)
+    import bm25_search
+    try:
+        bm25_search.remove_from_index(stale, getattr(collection, "name", None))
+    except Exception:
+        logger.warning("BM25 removal of stale chunks failed; dropping the index for a "
+                       "rebuild", exc_info=True)
+        bm25_search.invalidate()
+    return len(stale)
 
 
 def search(

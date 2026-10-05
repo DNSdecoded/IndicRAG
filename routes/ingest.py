@@ -431,34 +431,27 @@ async def reindex_document(
 ):
     """
     Re-embed a single already-ingested paper in place (e.g. after changing chunk
-    parameters). Deletes the paper's existing chunks first so re-embedding runs
-    even when the source file is unchanged, then re-ingests from papers/.
+    parameters). `force` re-embeds even when the source file is unchanged; the
+    new chunks are written before the old ones are pruned, so a failed re-index
+    leaves the previous version in place instead of deleting the paper.
     """
     start_time = time.time()
     import ingest as ingest_module
-    import vector_store
 
     safe_pdf_path = _resolve_papers_path(f"{body.paper_id}.pdf")
-
-    # Delete first so ingest_pdf's unchanged-file-hash check doesn't skip it.
-    try:
-        await run_in_threadpool(vector_store.delete_by_paper_id, body.paper_id)
-    except vector_store.DeleteIncomplete as e:
-        # Re-ingest below overwrites the log row and refreshes BM25, which is
-        # exactly the cleanup that failed — so proceed rather than abort.
-        logger.warning("Reindex continuing past incomplete delete: %s", e)
 
     num_chunks, title = await run_in_threadpool(
         ingest_module.ingest_pdf,
         pdf_path=str(safe_pdf_path),
         paper_id=body.paper_id,
+        force=True,
     )
 
     _post_ingest_refresh()
 
     if not num_chunks:
-        # ingest_pdf returns 0 for unreadable PDFs and dedup skips alike; the old
-        # chunks are already deleted, so this is a failure, not a success.
+        # ingest_pdf returns 0 for unreadable PDFs; the previous chunks are still
+        # indexed (nothing was deleted), but the re-index itself did not happen.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Re-index produced 0 chunks (unreadable PDF or skipped as a "

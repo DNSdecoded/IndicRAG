@@ -41,6 +41,7 @@ def _build_paper_chunks(
     collection,
     seen_hashes: Optional[set] = None,
     figures: Optional[List[dict]] = None,
+    force: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Run dedup checks and build chunk/metadata/id lists for one paper.
 
@@ -52,18 +53,23 @@ def _build_paper_chunks(
 
     seen_hashes: optional set of content hashes already prepared in this batch,
     so two identical papers in one bulk run don't both get ingested.
+
+    force: rebuild even when the file hash is unchanged (re-embed after a chunking
+    change). Replaces the old delete-then-ingest, which left the paper absent from
+    every store if the ingest then failed.
     """
     sections = list(sections)
 
-    # Unchanged paper → skip. Changed paper → delete old chunks after embedding.
+    # Unchanged paper → skip. Changed paper → stale old chunks dropped after the write.
     existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
     needs_deletion = False
     if existing and existing.get('ids'):
         existing_metadata = existing['metadatas'][0]
-        if 'file_hash' in metadata and existing_metadata.get('file_hash') == metadata['file_hash']:
+        if (not force and 'file_hash' in metadata
+                and existing_metadata.get('file_hash') == metadata['file_hash']):
             logger.info(f'Paper {paper_id} already indexed and unchanged, skipping')
             return None
-        logger.info(f'Paper {paper_id} has changed or hash missing. Will delete old chunks after embedding.')
+        logger.info(f'Paper {paper_id} changed, hash missing, or forced. Will replace its chunks.')
         needs_deletion = True
 
     content_hash = metadata.get('content_hash')
@@ -230,6 +236,21 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> bool:
         return False
 
 
+def _drop_stale(prepared: Dict[str, Any], collection) -> None:
+    """Remove a replaced paper's old chunk ids that its new version lacks.
+
+    Runs after the new chunks are written. A failure leaves extra old chunks next
+    to the new ones — retrievable, and reported by check_db as not-in-log — which
+    is recoverable; the paper is never missing.
+    """
+    try:
+        vector_store.delete_stale_chunks(prepared['paper_id'], prepared['ids'], collection)
+    except Exception:
+        logger.error("Stale chunks of %s could not be removed after re-ingest; old and "
+                     "new chunks now coexist. Run check_db.py to list them.",
+                     prepared['paper_id'], exc_info=True)
+
+
 def ingest_paper(
     paper_id: str,
     title: str,
@@ -238,6 +259,7 @@ def ingest_paper(
     collection=None,
     figures: Optional[List[dict]] = None,
     source_path: Optional[str] = None,
+    force: bool = False,
 ) -> int:
     """
     Ingest a single paper into the vector store.
@@ -255,19 +277,17 @@ def ingest_paper(
     if collection is None:
         collection = vector_store.get_or_create_collection()
 
-    prepared = _build_paper_chunks(paper_id, title, sections, metadata or {}, collection, figures=figures)
+    prepared = _build_paper_chunks(paper_id, title, sections, metadata or {}, collection,
+                                   figures=figures, force=force)
     if prepared is None:
         return 0
 
     logger.info(f"Embedding {len(prepared['chunks'])} chunks from '{title}'...")
     chunk_embeddings = embeddings.embed_passages(prepared['chunks'])
 
-    if prepared['needs_deletion']:
-        try:
-            vector_store.delete_by_paper_id(paper_id, collection)
-        except Exception as del_err:
-            logger.error(f"Failed to delete old chunks for paper {paper_id}: {del_err}")
-
+    # Write first, then drop what the new version no longer has. Deleting first
+    # (the old order) removed the paper from Chroma, BM25 and the ingest log, so a
+    # failed upsert left it gone everywhere with no log row to replay it from.
     vector_store.add_documents(
         texts=prepared['chunks'],
         embeddings=chunk_embeddings,
@@ -275,6 +295,8 @@ def ingest_paper(
         ids=prepared['ids'],
         collection=collection
     )
+    if prepared['needs_deletion']:
+        _drop_stale(prepared, collection)
 
     # Record what was indexed so the indexes can be rebuilt without re-parsing
     # the PDF. Written AFTER the indexes, so the log never claims chunks that
@@ -326,7 +348,8 @@ def ingest_pdf(
     pdf_path: str,
     paper_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
-    collection=None
+    collection=None,
+    force: bool = False,
 ) -> Tuple[int, str]:
     """
     Ingest a single PDF file into the vector store.
@@ -389,6 +412,7 @@ def ingest_pdf(
         collection=collection,
         figures=figures,
         source_path=str(pdf_path),
+        force=force,
     )
     
     logger.info(f"Ingested {num_chunks} chunks from '{result['title']}'")
@@ -582,17 +606,7 @@ def ingest_directory(
             progress_cb(total, total, f"Embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
         logger.info(f"Batch-embedding {len(all_chunks)} chunks from {len(prepared_papers)} papers...")
 
-        # Embed BEFORE deleting old chunks: if embedding fails, a changed paper
-        # keeps its existing chunks rather than being left empty. Matches the
-        # embed → delete → add ordering in ingest_paper().
         all_embeddings = embeddings.embed_passages(all_chunks)
-
-        for p in prepared_papers:
-            if p['needs_deletion']:
-                try:
-                    vector_store.delete_by_paper_id(p['paper_id'], collection)
-                except Exception as del_err:
-                    logger.error(f"Failed to delete old chunks for {p['paper_id']}: {del_err}")
 
         # ponytail: one array of shape (n_chunks, 1024) in memory — fine at corpus
         # scale; embed_passages already mini-batches internally. Chunk the add if
@@ -605,6 +619,11 @@ def ingest_directory(
             collection=collection,
         )
         stats["total_chunks"] = len(all_chunks)
+        # Same write-then-prune order as ingest_paper(): changed papers lose their
+        # stale ids only once the new chunks are committed.
+        for p in prepared_papers:
+            if p['needs_deletion']:
+                _drop_stale(p, collection)
 
         # Same log write as the single-paper path, after the indexes are written.
         # One transaction for the batch: per-paper commits meant one fsync each
