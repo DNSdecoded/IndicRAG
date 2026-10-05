@@ -24,13 +24,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     """
     try:
         with fitz.open(pdf_path) as doc:
-            text = ""
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                text += page.get_text()
-            
-            return text
+            return "".join(page.get_text() for page in doc)
     
     except Exception as e:
         logger.error(f"Error extracting text from {pdf_path}: {e}")
@@ -284,7 +278,12 @@ def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
             if len(doc) == 0:
                 return None
             page = doc[0]
-            blocks = page.get_text('dict').get('blocks', [])
+            # Default 'dict' flags include TEXT_PRESERVE_IMAGES, which copies every
+            # image's raw bytes into the result: 135 ms vs 24 ms per first page on the
+            # corpus. Image blocks carry no 'lines', so the title is unchanged.
+            blocks = page.get_text(
+                'dict', flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES
+            ).get('blocks', [])
             candidates = []
             for b in blocks:
                 lines_info = []
