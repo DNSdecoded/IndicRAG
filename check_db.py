@@ -30,7 +30,7 @@ def _chroma_ids_by_paper(collection) -> dict[str, set]:
     """paper_id -> set of chunk ids currently in the collection."""
     import vector_store
 
-    got = vector_store._chroma_call(collection.get, include=['metadatas'])
+    got = vector_store.get_chunks(collection, include=['metadatas'])
     by_paper: dict[str, set] = {}
     for cid, meta in zip(got.get('ids', []), got.get('metadatas', [])):
         pid = (meta or {}).get('paper_id', '')

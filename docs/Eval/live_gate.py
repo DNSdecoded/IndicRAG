@@ -53,7 +53,7 @@ def _index_env(index_dir: Path) -> dict:
 
 def _py(code_or_args: list, env: dict, check: bool = True) -> subprocess.CompletedProcess:
     print("  $ python " + " ".join(code_or_args[:3]) + (" ..." if len(code_or_args) > 3 else ""), flush=True)
-    return subprocess.run([sys.executable, *code_or_args], env=env, cwd=ROOT, check=check)
+    return subprocess.run([sys.executable, *code_or_args], env=env, cwd=ROOT, check=check)  # NOSONAR S8705: argv list, no shell; repo scripts + operator paths
 
 
 def index_key() -> str:
@@ -72,10 +72,10 @@ from pathlib import Path
 import ingest, vector_store
 stats = ingest.ingest_directory(sys.argv[1])
 col = vector_store.get_or_create_collection()
-got = col.get(include=["metadatas"])
+got = vector_store.get_chunks(col, include=["metadatas"], timeout=None)
 ids = sorted({m.get("paper_id") for m in got["metadatas"]})
 print(json.dumps({"stats": {k: v for k, v in stats.items() if isinstance(v, (int, float))},
-                  "chunks": col.count(), "paper_ids": ids}))
+                  "chunks": vector_store.count(col, timeout=None), "paper_ids": ids}))
 """
 
 
@@ -109,7 +109,7 @@ def run_suite(index_dir: Path, out: Path, planted: bool) -> int:
     if planted:
         args += ["--plant", "embedder_down"]
     _py(args, _index_env(index_dir))
-    results = json.loads(out.read_text("utf-8"))["results"]
+    results = json.loads(out.read_text("utf-8"))["results"]  # NOSONAR S8707: operator-supplied CLI path in a developer eval tool
     return sum(1 for r in results if r.get("degraded"))
 
 
@@ -137,7 +137,7 @@ def main() -> int:
     index_dir = INDEX_ROOT / index_key()
     ensure_index(index_dir)
     work = Path(args.work)
-    work.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)  # NOSONAR S8707: operator-supplied CLI path in a developer eval tool
 
     if args.write_baseline:
         if run_suite(index_dir, work / "clean.json", planted=False):

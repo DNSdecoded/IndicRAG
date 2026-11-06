@@ -159,10 +159,10 @@ def test_open_access_search_year_filter():
 
 
 def test_tool_dispatch_has_new_tools():
-    from agent.tool_executor import TOOL_DISPATCH
+    from agent.tool_registry import REGISTRY
 
-    assert "arxiv_search" in TOOL_DISPATCH
-    assert "open_access_search" in TOOL_DISPATCH
+    assert "arxiv_search" in REGISTRY
+    assert "open_access_search" in REGISTRY
 
 
 def test_ttl_cache_hit_and_miss():
@@ -816,14 +816,14 @@ def test_arxiv_search_declares_arxiv_id_and_dispatch_forwards_it():
     """F2: the executor has always supported an ID lookup, but the schema never
     declared it, so the model could not ask for one."""
     from agent.tool_declarations import FUNCTION_DECLARATIONS
-    from agent.tool_executor import TOOL_DISPATCH
+    from agent import tool_registry
 
     decl = next(d for d in FUNCTION_DECLARATIONS if d["name"] == "arxiv_search")
     assert "arxiv_id" in decl["parameters"]["properties"]
     assert "query" not in (decl["parameters"].get("required") or []), "an ID lookup needs no query"
 
     with patch("agent.tool_executor.execute_arxiv_search") as ex:
-        TOOL_DISPATCH["arxiv_search"]({"arxiv_id": "2301.07041"})
+        tool_registry.run("arxiv_search", {"arxiv_id": "2301.07041"})
     assert ex.call_args[0][4] == "2301.07041"
 
 
@@ -1013,13 +1013,16 @@ def test_tool_executor_tags_and_interleaves():
         return {"passages": [{"text": f"a{i}", "title": f"Arxiv {i}", "source": "arxiv"}
                              for i in range(10)]}
 
+    import dataclasses
     import agent.nodes.tool_executor_node as node
-    with patch.object(node, "TOOL_DISPATCH",
-                      {"indicrag_retrieval": fake_corpus, "arxiv_search": fake_arxiv}):
+    from agent import tool_registry as reg
+    fakes = {"indicrag_retrieval": fake_corpus, "arxiv_search": fake_arxiv}
+    with patch.dict(reg.REGISTRY, {n: dataclasses.replace(reg.REGISTRY[n], run=f, cacheable=False)
+                                   for n, f in fakes.items()}):
         state = {
             "tool_calls_requested": [
-                {"name": "arxiv_search", "args": {}},
-                {"name": "indicrag_retrieval", "args": {}},
+                {"name": "arxiv_search", "args": {"query": "q"}},
+                {"name": "indicrag_retrieval", "args": {"query": "q"}},
             ],
             "retrieved_contexts": [],
             "tool_calls_log": [],

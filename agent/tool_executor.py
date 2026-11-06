@@ -692,26 +692,4 @@ def execute_open_access_search(
                           "title": "No results", "section": "none"}]}
 
 
-TOOL_DISPATCH = {
-    "indicrag_retrieval": lambda args: execute_indicrag(
-        args["query"], args.get("expand_query", False),
-        args.get("year_from"), args.get("year_to"), args.get("tags"),
-        args.get("top_k")
-    ),
-    "web_search": lambda args: execute_web_search(
-        args["query"], args.get("num_results", 5)
-    ),
-    "calculate": lambda args: execute_calculate(args["expression"]),
-    "execute_python": lambda args: execute_python(args["code"]),
-    "arxiv_search": lambda args: execute_arxiv_search(
-        args.get("query", ""),
-        args.get("max_results", 5),
-        args.get("sort_by", "relevance"),
-        args.get("year_from"),
-        args.get("arxiv_id"),
-    ),
-    "open_access_search": lambda args: execute_open_access_search(
-        args["query"], args.get("max_results", 5),
-        args.get("year_range", ""), args.get("open_access_only", True)
-    ),
-}
+# Dispatch, validation, timeouts and trust labels live in agent/tool_registry.py.

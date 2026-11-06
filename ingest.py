@@ -61,7 +61,8 @@ def _build_paper_chunks(
     sections = list(sections)
 
     # Unchanged paper → skip. Changed paper → stale old chunks dropped after the write.
-    existing = collection.get(where={'paper_id': paper_id}, limit=1, include=['metadatas'])
+    existing = vector_store.get_chunks(collection, where={'paper_id': paper_id}, limit=1,
+                                       include=['metadatas'], timeout=None)
     needs_deletion = False
     if existing and existing.get('ids'):
         existing_metadata = existing['metadatas'][0]
@@ -79,7 +80,8 @@ def _build_paper_chunks(
         if seen_hashes is not None and content_hash in seen_hashes:
             logger.info(f"Paper '{title[:80]}' duplicates another paper in this batch (content hash), skipping")
             return None
-        existing_c = collection.get(where={'content_hash': content_hash}, limit=1, include=['metadatas'])
+        existing_c = vector_store.get_chunks(collection, where={'content_hash': content_hash}, limit=1,
+                                             include=['metadatas'], timeout=None)
         if existing_c and existing_c.get('ids'):
             dup_pid = existing_c['metadatas'][0].get('paper_id')
             if dup_pid and dup_pid != paper_id:
@@ -220,7 +222,7 @@ def _record_ingest(prepared: Dict[str, Any], source_path: str = None) -> bool:
             embed_model=config.EMBEDDING_MODEL_NAME,
             chunker_version=vector_store.CHUNKER_VERSION,
             created_at=datetime.now(timezone.utc).isoformat(),
-            embed_backend=vector_store._embed_backend(),
+            embed_backend=vector_store.embed_backend(),
         )
         return True
     except Exception:

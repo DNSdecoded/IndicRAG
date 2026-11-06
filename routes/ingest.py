@@ -551,7 +551,7 @@ def _run_batch_url_ingest(job_id: str, urls_to_ingest: List[dict]):
     _update_job(job_id, status="running")
     progress_cb = _make_progress_cb(job_id)
     collection = vector_store.get_or_create_collection()
-    got = vector_store._chroma_call(collection.get, include=["metadatas"])
+    got = vector_store.get_chunks(collection, include=["metadatas"])
     existing_paper_ids = {
         (m or {}).get("paper_id", "") for m in got.get("metadatas", [])
     } - {""}

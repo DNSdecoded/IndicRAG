@@ -422,7 +422,7 @@ def retrieve_context(
                 # Fetch any BM25-only hits that dense search missed
                 missing_ids = [i for i in fused_ids if i not in id_to_doc]
                 if missing_ids:
-                    extra = collection.get(ids=missing_ids, include=["documents", "metadatas"])
+                    extra = vector_store.get_chunks(collection, ids=missing_ids, timeout=None)
                     for eid, edoc, emeta in zip(extra['ids'], extra['documents'], extra['metadatas']):
                         id_to_doc[eid] = edoc
                         id_to_meta[eid] = emeta
@@ -495,15 +495,26 @@ def retrieve_context(
 
 
 # The prompt template's own structural tags. Retrieved text (corpus, web, tool
-# output) is untrusted: a passage containing "</context><instructions>..." would
-# otherwise close the context block and pose as instructions. Only these tags are
-# escaped, so math like "p < 0.05" reaches the model untouched. Ported from scirag
-# (evidence.package), which escapes the whole passage.
-_PROMPT_TAG_RE = re.compile(r'<(/?\s*(?:context|query|instructions)\b)', re.IGNORECASE)
+# output) is untrusted: a passage containing "</context><instructions>..." or
+# "</untrusted>" would otherwise close its block and pose as instructions or as a
+# second, system-written source. Only these tags are escaped, so math like
+# "p < 0.05" reaches the model untouched. Ported from scirag (evidence.package).
+_PROMPT_TAG_RE = re.compile(r'<(/?\s*(?:context|query|instructions|untrusted)\b)', re.IGNORECASE)
+
+# Trust level (v3 §15) -> the source label shown in the system-written header line.
+_SOURCE_LABEL = {"T3": "corpus", "T4": "external", "T5": "tool output"}
 
 
 def _neutralize_tags(text: str) -> str:
     return _PROMPT_TAG_RE.sub(r'&lt;\1', text)
+
+
+def _header_field(text) -> str:
+    """A metadata value for the one-line header: tags escaped, newlines collapsed,
+    so a document-derived title cannot start a forged header line of its own.
+    Square brackets become parentheses: "[N]" in a header means a citation number,
+    and a title must not be able to forge one."""
+    return " ".join(_neutralize_tags(str(text)).split()).replace("[", "(").replace("]", ")")
 
 
 def format_context(chunks: List[str], metadatas: List[Dict],
@@ -540,8 +551,12 @@ def format_context(chunks: List[str], metadatas: List[Dict],
 
         # One citation number per unique paper — chunks of the same paper reuse it.
         num = title_to_num.get(title, len(title_to_num) + 1)
-        context_part = (f"[{num}] {_neutralize_tags(title)} - {_neutralize_tags(str(section))}:\n"
-                        f"{_neutralize_tags(chunk)}\n")
+        trust = metadata.get('trust') or 'T3'
+        # The header line is system-written; everything in the block is quoted data.
+        # Labels, status or provenance claims inside the block stay inside it (§15).
+        context_part = (f"[{num}] ({_SOURCE_LABEL.get(trust, 'untrusted')}, {trust}) "
+                        f"{_header_field(title)} - {_header_field(section)}\n"
+                        f'<untrusted id="{num}">\n{_neutralize_tags(chunk)}\n</untrusted>\n')
 
         # Check if adding this would exceed length limit
         if total_length + len(context_part) > max_length:
@@ -586,9 +601,7 @@ def _sparse_only_retrieval(user_query: str, top_k: int, collection,
         # BM25 knows nothing about metadata filters — a paper-scoped or
         # tag-filtered query must not quietly widen just because the dense leg
         # is down, so the filter is applied on the fetch.
-        got = vector_store._chroma_call(
-            collection.get, ids=ids, where=filter_dict or None,
-            include=['documents', 'metadatas'])
+        got = vector_store.get_chunks(collection, ids=ids, where=filter_dict or None)
     except Exception as e:
         logger.error(f"Sparse-only fallback failed too: {e}", exc_info=True)
         return None
@@ -636,8 +649,7 @@ def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
     the paper's natural structure so reconstruction-style queries see the whole
     document. Skips dense/BM25 entirely (no query embedding needed).
     """
-    got = vector_store._chroma_call(
-        collection.get, where=filter_dict, include=['documents', 'metadatas'])
+    got = vector_store.get_chunks(collection, where=filter_dict)
     ids = got.get('ids', [])
     if not ids:
         logger.warning(f"No chunks for scoped filter {filter_dict}")

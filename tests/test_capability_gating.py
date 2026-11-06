@@ -44,7 +44,7 @@ def test_utility_model_routes_even_when_user_picked_another(monkeypatch):
 def test_selector_uses_the_models_tool_calls(monkeypatch, no_utility_model):
     """The model's ToolCalls become the node's requests, and the request carries the
     schemas. Neither was covered before LLM-1: only the fallback path was tested."""
-    from agent.tool_declarations import TOOLS
+    from agent.tool_registry import openai_tools
     from providers.base import LLMResponse, ToolCall
 
     sent = {}
@@ -59,4 +59,4 @@ def test_selector_uses_the_models_tool_calls(monkeypatch, no_utility_model):
     names = [c["name"] for c in out["tool_calls_requested"]]
     assert "web_search" in names
     assert {"name": "web_search", "args": {"query": "latest 6G news"}} in out["tool_calls_requested"]
-    assert sent["request"].tools == TOOLS and sent["request"].thinking == "agent"
+    assert sent["request"].tools == openai_tools() and sent["request"].thinking == "agent"

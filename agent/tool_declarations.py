@@ -179,4 +179,3 @@ FUNCTION_DECLARATIONS = [
     ),
 ]
 
-TOOLS = [{"type": "function", "function": d} for d in FUNCTION_DECLARATIONS]

@@ -13,7 +13,9 @@ def answer_generator_node(state: AgentState) -> dict:
     contexts = state.get("retrieved_contexts", [])
 
     chunks = [c.get("text", "") for c in contexts]
-    metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+    # trust travels with each passage (agent/tool_registry.py) so the prompt can label it.
+    metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body"),
+              "trust": c.get("trust", "T3")}
              for c in contexts]
 
     # Wider caps than standard RAG: the agent pooled passages from multiple tools,

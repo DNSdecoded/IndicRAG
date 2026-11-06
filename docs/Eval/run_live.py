@@ -85,7 +85,8 @@ def _corpus_mismatch(judgments_path: Path, collection) -> set:
     judged = set(judgments.get("corpus") or [])
     if not judged:
         return set()
-    got = collection.get(include=["metadatas"])
+    import vector_store
+    got = vector_store.get_chunks(collection, include=["metadatas"], timeout=None)
     live = {m.get("paper_id") for m in got.get("metadatas", []) if m.get("paper_id")}
     return judged - live
 
@@ -258,7 +259,7 @@ def main() -> int:
     import vector_store
 
     collection = vector_store.get_or_create_collection()
-    count = collection.count()
+    count = vector_store.count(collection, timeout=None)
     if count == 0:
         # Scoring an empty corpus reports 0.0 across the board and reads as a
         # catastrophic regression, when the real problem is that nothing is indexed.

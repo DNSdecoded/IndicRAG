@@ -50,8 +50,7 @@ def backfill_log_from_collection(collection_name: str) -> int:
     import vector_store
 
     collection = vector_store.get_or_create_collection(collection_name)
-    got = vector_store._chroma_call(collection.get, include=["documents", "metadatas"],
-                                    timeout=config.CHROMA_WRITE_TIMEOUT_S)
+    got = vector_store.get_chunks(collection, timeout=config.CHROMA_WRITE_TIMEOUT_S)
     ids, docs, metas = got.get("ids", []), got.get("documents", []), got.get("metadatas", [])
     if not ids:
         logger.error("Collection '%s' is empty — nothing to backfill.", collection_name)
@@ -106,7 +105,7 @@ def _drift_report(events: list) -> list:
     if len(backends) > 1:
         problems.append(f"corpus was embedded by MIXED backends: {sorted(backends)} — "
                         "int8 and fp32 output for the same model are not comparable")
-    current_backend = vector_store._embed_backend()
+    current_backend = vector_store.embed_backend()
     if backends and current_backend not in ("unloaded", "unknown") and current_backend not in backends:
         problems.append(f"configured embedding backend {current_backend!r} differs from the "
                         f"indexed one(s) {sorted(backends)} — a replay will re-embed")

@@ -528,6 +528,51 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     
     return stats
 
+def _timeout_kw(timeout: float) -> dict:
+    # _chroma_call's own default is passed implicitly, as every caller did before
+    # this seam: the call shape (and anything that wraps _chroma_call) stays the same.
+    return {} if timeout == 5.0 else {"timeout": timeout}
+
+
+def count(collection: chromadb.Collection = None, *, timeout: Optional[float] = 5.0) -> int:
+    """Number of chunks in the collection. timeout=None: a direct call (see get_chunks)."""
+    if collection is None:
+        collection = get_or_create_collection()
+    if timeout is None:
+        return collection.count()
+    return _chroma_call(collection.count, **_timeout_kw(timeout))
+
+
+def get_chunks(collection: chromadb.Collection = None, *, ids: List[str] = None,
+               where: Dict[str, Any] = None, include=("documents", "metadatas"),
+               limit: int = None, timeout: Optional[float] = 5.0) -> Dict[str, Any]:
+    """Read chunks by id and/or metadata filter: the store's one read primitive
+    besides search(). Returns {"ids", "documents"?, "metadatas"?} as Chroma does.
+
+    timeout=None makes a direct call with no timeout and no circuit accounting, for
+    whole-corpus reads (BM25 rebuild, replay) and ingest-time lookups that called
+    the collection directly before this seam existed; online lookups keep the
+    bounded, breaker-guarded call.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    kwargs = {"include": list(include)}
+    if ids is not None:
+        kwargs["ids"] = ids
+    if where is not None:
+        kwargs["where"] = where
+    if limit is not None:
+        kwargs["limit"] = limit
+    if timeout is None:
+        return collection.get(**kwargs)
+    return _chroma_call(collection.get, **kwargs, **_timeout_kw(timeout))
+
+
+def embed_backend() -> str:
+    """Public name for the weights that produced the vectors (see _embed_backend)."""
+    return _embed_backend()
+
+
 def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, int]:
     """Chunk count per paper_id, for ingestion health / re-ingest tooling."""
     if collection is None:
