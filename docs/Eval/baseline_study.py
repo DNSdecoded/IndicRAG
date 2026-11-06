@@ -16,6 +16,7 @@ Only aggregate numbers are written for query_log; no query text leaves the DB.
 import argparse
 import contextlib
 import json
+import math
 import os
 import re
 import shutil
@@ -58,7 +59,7 @@ def query_log_share(db_path: Path) -> dict:
             src = Path(str(db_path) + suffix)
             if src.exists():
                 shutil.copy2(src, tmp / (db_path.name + suffix))
-        con = sqlite3.connect(tmp / db_path.name)
+        con = sqlite3.connect(tmp / db_path.name)  # NOSONAR S8706: temp COPY of an operator-chosen db file
         cols = {r[1] for r in con.execute("PRAGMA table_info(query_log)")}
         col = "question" if "question" in cols else "query"
         qs = [r[0] for r in con.execute(f"SELECT {col} FROM query_log") if r[0]]
@@ -151,10 +152,10 @@ def summarize(rows: list) -> dict:
     import random
     rng = random.Random(stats.SEED)
     for _ in range(stats.RESAMPLES):
-        sample = rng.choices(rows, k=len(rows))
+        sample = rng.choices(rows, k=len(rows))  # NOSONAR S2245: seeded bootstrap, not security
         a = _auc([r["bm25_margin"] for r in sample if r["rerank_gain"] <= 0],
                  [r["bm25_margin"] for r in sample if r["rerank_gain"] > 0])
-        if a == a:   # skip NaN resamples with an empty class
+        if not math.isnan(a):   # a resample with an empty class has no AUC
             rng_aucs.append(a)
     rng_aucs.sort()
     gain_ci = stats.bootstrap_ci([r["rerank_gain"] for r in rows])
@@ -190,7 +191,7 @@ def main() -> int:
     rows = run_study(live_gate.SUITE)
     result["summary"] = summarize(rows)
     result["per_query"] = rows
-    Path(args.out).write_text(json.dumps(result, indent=1), encoding="utf-8")
+    Path(args.out).write_text(json.dumps(result, indent=1), encoding="utf-8")  # NOSONAR S2083,S8707: operator-supplied CLI path in a developer eval tool
     print(json.dumps(result["summary"], indent=1))
     return 0
 

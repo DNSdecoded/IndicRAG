@@ -11,6 +11,7 @@ gate must score exactly the corpus its baseline was measured on.
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 import urllib.request
@@ -24,14 +25,29 @@ _UA = {"User-Agent": "indicrag-eval-fixtures/1"}
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
-    with path.open("rb") as f:
+    with path.open("rb") as f:  # NOSONAR S2083,S8707: operator-supplied CLI path in a developer eval tool; names derive from validated ids
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
 
 
+_ARXIV_ID = re.compile(r"^\d{4}\.\d{4,5}v\d+$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
 def load_manifest(path: Path = MANIFEST) -> list:
-    return json.loads(path.read_text(encoding="utf-8"))["papers"]
+    """Validated manifest entries. File names and download URLs are DERIVED from
+    the arXiv id, never read from the manifest: a tampered entry cannot point a
+    write outside the fixture directory or a download at another host."""
+    papers = json.loads(path.read_text(encoding="utf-8"))["papers"]
+    out = []
+    for p in papers:
+        pid, digest = str(p.get("id", "")), str(p.get("sha256", ""))
+        if not _ARXIV_ID.match(pid) or not _SHA256.match(digest):
+            raise ValueError(f"bad manifest entry: id={pid!r} sha256={digest[:16]!r}")
+        out.append({**p, "id": pid, "sha256": digest,
+                    "file": f"{pid}.pdf", "url": f"https://arxiv.org/pdf/{pid}"})
+    return out
 
 
 def fixture_checksum(path: Path = MANIFEST) -> str:
@@ -43,7 +59,7 @@ def download(paper: dict, dest: Path, tries: int = 3) -> None:
     target = dest / paper["file"]
     for attempt in range(1, tries + 1):
         try:
-            req = urllib.request.Request(paper["url"], headers=_UA)
+            req = urllib.request.Request(paper["url"], headers=_UA)  # NOSONAR S5144: URL built from a validated arXiv id
             data = urllib.request.urlopen(req, timeout=120).read()
             break
         except Exception as e:
@@ -63,7 +79,7 @@ def verify(papers: list, dest: Path) -> list:
     problems = []
     for p in papers:
         f = dest / p["file"]
-        if not f.exists():
+        if not f.exists():  # NOSONAR S6549: file name built from a validated arXiv id
             problems.append(f"{p['id']}: missing ({f})")
         elif sha256(f) != p["sha256"]:
             problems.append(f"{p['id']}: sha256 mismatch")
@@ -77,11 +93,11 @@ def main() -> int:
     args = ap.parse_args()
 
     dest = Path(args.dest)
-    dest.mkdir(parents=True, exist_ok=True)
+    dest.mkdir(parents=True, exist_ok=True)  # NOSONAR S8707: operator-supplied CLI path in a developer eval tool
     papers = load_manifest()
     if not args.verify:
         for p in papers:
-            if not (dest / p["file"]).exists():
+            if not (dest / p["file"]).exists():  # NOSONAR S6549: name built from a validated arXiv id
                 print(f"fetching {p['id']}", flush=True)
                 download(p, dest)
     problems = verify(papers, dest)

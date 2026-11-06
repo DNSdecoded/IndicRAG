@@ -30,7 +30,7 @@ def bootstrap_ci(values: list, resamples: int = RESAMPLES, alpha: float = 0.05,
         raise ValueError("bootstrap_ci needs at least one value")
     rng = random.Random(seed)
     n = len(values)
-    means = sorted(fmean(rng.choices(values, k=n)) for _ in range(resamples))
+    means = sorted(fmean(rng.choices(values, k=n)) for _ in range(resamples))  # NOSONAR S2245: seeded bootstrap
     return {
         "mean": fmean(values),
         "lo": _percentile(means, alpha / 2),

@@ -75,8 +75,8 @@ def main() -> int:
     ap.add_argument("--json", default=None, help="write per-query results here")
     args = ap.parse_args()
 
-    golden = json.loads(Path(args.golden).read_text(encoding="utf-8"))
-    answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))
+    golden = json.loads(Path(args.golden).read_text(encoding="utf-8"))  # NOSONAR S8707: operator-supplied CLI path in a developer eval tool
+    answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))  # NOSONAR S8707: operator-supplied CLI path in a developer eval tool
     if not answers["results"] or not any(r.get("answer_claims") for r in answers["results"]):
         print("ERROR: no answers in the results file; run run_live.py --with-answers", file=sys.stderr)
         return 2
@@ -86,7 +86,7 @@ def main() -> int:
             print(f"  {p['id']} missing: {', '.join(p['missing'])}")
     print(f"key facts {res['passed']}/{res['total']}")
     if args.json:
-        Path(args.json).write_text(json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8")
+        Path(args.json).write_text(json.dumps(res, indent=2, ensure_ascii=False), encoding="utf-8")  # NOSONAR S2083,S8707: operator-supplied CLI path in a developer eval tool
     return 0
 
 
