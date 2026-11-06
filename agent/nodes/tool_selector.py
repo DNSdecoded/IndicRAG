@@ -1,6 +1,5 @@
 import logging
 
-from google.genai import types
 
 import rag
 import config
@@ -142,31 +141,24 @@ def tool_selector_node(state: AgentState) -> dict:
         f"{temporal_note}{domain_note}{feedback_note}"
     )
 
-    gen_cfg = types.GenerateContentConfig(
+    request = llm_client.user_text(
+        user_content,
         temperature=0,
-        system_instruction=_SYSTEM,
-        tools=[TOOLS],
-        tool_config=types.ToolConfig(
-            function_calling_config=types.FunctionCallingConfig(mode="AUTO")
-        ),
+        system=_SYSTEM,
+        tools=TOOLS,
         # Rule-based tool routing — thinking off by default (config knob).
-        thinking_config=llm_client.thinking_config_for("agent"),
+        thinking="agent",
     )
 
     gate_provider, gate_model = _gate_model(state)
     try:
         resp = rag.generate_with_failover(
             model=gate_model,
-            contents=user_content,
-            gen_config=gen_cfg,
+            request=request,
             provider=gate_provider,
         )
 
-        tool_calls = []
-        for part in resp.candidates[0].content.parts:
-            fc = getattr(part, "function_call", None)
-            if fc:
-                tool_calls.append({"name": fc.name, "args": dict(fc.args)})
+        tool_calls = [{"name": c.name, "args": dict(c.args)} for c in resp.tool_calls]
 
         if not tool_calls:
             last_action = history[-1]["action"] if history else None

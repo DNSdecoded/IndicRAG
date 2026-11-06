@@ -1,8 +1,9 @@
-"""OpenRouter backend: OpenAI-compatible Chat Completions → Gemini-shaped shim.
+"""OpenAI-compatible Chat Completions backend (OpenRouter, NVIDIA NIM, OpenAI, Ollama, vLLM...).
 
-Translates a google-genai GenerateContentConfig call into an OpenAI request and
-wraps the reply in ShimResponse so agent nodes read it unchanged. SAFETY_SETTINGS
-has no OpenRouter equivalent and is silently dropped — a stated behavior gap.
+LLMRequest is already in this API's shape, so translation is thin: the system
+prompt becomes the first message, chat turns and image parts pass through, and
+the reply is normalized to LLMResponse. SAFETY_SETTINGS has no equivalent here
+and is not sent (B9).
 """
 
 import collections
@@ -13,70 +14,33 @@ import time
 from typing import Iterator
 
 import config
-from providers.base import LLMBackend, ShimResponse, TRUNCATION_NOTE
+from providers.base import LLMBackend, LLMRequest, LLMResponse, ToolCall, TRUNCATION_NOTE
 
 logger = logging.getLogger(__name__)
 
-
-def _flatten_contents(contents) -> str:
-    """Extract prompt text from google-genai Content/Part objects (or plain
-    strings). `str(contents)` would emit a Python repr, not the real text, so
-    walk the structure and join the actual `.text` fields."""
-    if isinstance(contents, str):
-        return contents
-    parts: list[str] = []
-    for item in contents if isinstance(contents, (list, tuple)) else [contents]:
-        if hasattr(item, "parts") and item.parts is not None:
-            for part in item.parts:
-                text = getattr(part, "text", None)
-                if text:
-                    parts.append(text)
-        elif getattr(item, "text", None):
-            parts.append(item.text)
-        elif isinstance(item, str):
-            parts.append(item)
-    return "\n".join(parts) if parts else str(contents)
+_ROLES = ("user", "assistant")
+# OpenAI finish reasons, normalized to LLMResponse's vocabulary.
+_FINISH = {"stop": "stop", "length": "length", "tool_calls": "tool_calls",
+           "function_call": "tool_calls", "content_filter": "content_filter"}
 
 
-def _to_messages(contents, gen_config) -> list[dict]:
-    """contents (str | Content/Part objects) + system_instruction → OpenAI messages."""
+def _to_messages(request: LLMRequest) -> list[dict]:
     messages = []
-    sys_inst = getattr(gen_config, "system_instruction", None)
-    if sys_inst:
-        messages.append({"role": "system", "content": str(sys_inst)})
-    messages.append({"role": "user", "content": _flatten_contents(contents)})
+    if request.system:
+        messages.append({"role": "system", "content": request.system})
+    for m in request.messages:
+        if m.get("role") not in _ROLES:
+            raise ValueError(f"unsupported message role {m.get('role')!r}; use LLMRequest.system for system text")
+        messages.append({"role": m["role"], "content": m["content"]})
     return messages
 
 
-def _as_plain(params):
-    """FunctionDeclaration.parameters may be a dict (as authored) or a Schema
-    object. Return a plain JSON-Schema dict either way."""
-    if params is None:
+def _usage(resp) -> dict | None:
+    u = getattr(resp, "usage", None)
+    if u is None:
         return None
-    if isinstance(params, dict):
-        return params
-    if hasattr(params, "model_dump"):
-        return params.model_dump(exclude_none=True)
-    return dict(params)
-
-
-def _to_tools(gen_config):
-    """types.Tool(function_declarations) → OpenAI tools[]. Params pass through."""
-    tools = getattr(gen_config, "tools", None)
-    if not tools:
-        return None
-    out = []
-    for tool in tools:
-        for fd in getattr(tool, "function_declarations", []) or []:
-            out.append({
-                "type": "function",
-                "function": {
-                    "name": fd.name,
-                    "description": getattr(fd, "description", "") or "",
-                    "parameters": _as_plain(getattr(fd, "parameters", None)) or {"type": "object", "properties": {}},
-                },
-            })
-    return out or None
+    return {"prompt": getattr(u, "prompt_tokens", 0) or 0,
+            "completion": getattr(u, "completion_tokens", 0) or 0}
 
 
 class LocalRateLimitError(RuntimeError):
@@ -161,57 +125,53 @@ class OpenRouterBackend(LLMBackend):
                     )
         return self._client
 
-    def _params(self, model, contents, gen_config, stream: bool) -> dict:
-        params = {
-            "model": model,
-            "messages": _to_messages(contents, gen_config),
-            "stream": stream,
-        }
+    def _params(self, model: str, request: LLMRequest, stream: bool) -> dict:
+        params = {"model": model, "messages": _to_messages(request), "stream": stream}
         if stream:
             # Per-request override: the streamed request stays open for the whole
             # generation, so the client's unary timeout would cut long answers off
             # mid-stream. Client default still applies to non-streaming calls.
             params["timeout"] = config.LLM_STREAM_TIMEOUT_S
-        temp = getattr(gen_config, "temperature", None)
-        if temp is not None:
-            params["temperature"] = temp
-        max_tok = getattr(gen_config, "max_output_tokens", None)
-        if max_tok is not None:
-            params[self._token_param] = max_tok
-        tools = _to_tools(gen_config)
-        if tools:
-            params["tools"] = tools
-        # thinking_config → reasoning is best-effort; dropped for models that
-        # don't advertise it (capability gate handles the agent path).
+        if request.temperature is not None:
+            params["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            params[self._token_param] = request.max_tokens
+        if request.tools:
+            params["tools"] = request.tools
+            params["tool_choice"] = "auto"
+        # request.thinking has no portable Chat Completions equivalent; not sent.
         return params
 
-    def generate(self, model: str, contents, gen_config):
+    def generate(self, model: str, request: LLMRequest) -> LLMResponse:
         client = self._get_client()
         if self._limiter:
             self._limiter.acquire(self._name)
-        resp = client.chat.completions.create(**self._params(model, contents, gen_config, stream=False))
+        resp = client.chat.completions.create(**self._params(model, request, stream=False))
         # OpenRouter can answer 200 with an error body and `choices: null` (seen live
         # on an overloaded :free model); indexing it raised an opaque TypeError.
         if not getattr(resp, "choices", None):
-            raise RuntimeError(f"OpenRouter returned no choices for {model}: "
+            raise RuntimeError(f"{self._name} returned no choices for {model}: "
                                f"{getattr(resp, 'error', None)!s:.200}")
-        msg = resp.choices[0].message
-        function_calls = []
+        choice = resp.choices[0]
+        msg = choice.message
+        calls = []
         for tc in (getattr(msg, "tool_calls", None) or []):
             try:
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
-            function_calls.append((tc.function.name, args))
-        return ShimResponse(text=msg.content or "", function_calls=function_calls)
+            calls.append(ToolCall(tc.function.name, args if isinstance(args, dict) else {}))
+        raw = getattr(choice, "finish_reason", None) or "stop"
+        return LLMResponse(text=msg.content or "", tool_calls=calls,
+                           finish_reason=_FINISH.get(raw, raw), usage=_usage(resp))
 
-    def generate_stream(self, model: str, contents, gen_config) -> Iterator[str]:
+    def generate_stream(self, model: str, request: LLMRequest) -> Iterator[str]:
         client = self._get_client()
         if self._limiter:
             self._limiter.acquire(self._name)
         emitted = False
         finish = None
-        for chunk in client.chat.completions.create(**self._params(model, contents, gen_config, stream=True)):
+        for chunk in client.chat.completions.create(**self._params(model, request, stream=True)):
             if not chunk.choices:
                 continue
             finish = getattr(chunk.choices[0], "finish_reason", None) or finish
@@ -221,11 +181,11 @@ class OpenRouterBackend(LLMBackend):
                 emitted = True
                 yield text
         if not emitted:
-            raise RuntimeError("No text generated from OpenRouter stream")
-        # OpenAI's "length" is Gemini's MAX_TOKENS: a clean stream end that hides
-        # a cut-off answer. Same sentinel so both providers behave alike.
+            raise RuntimeError(f"No text generated from {self._name} stream")
+        # "length" is Gemini's MAX_TOKENS: a clean stream end that hides a cut-off
+        # answer. Same sentinel so both providers behave alike.
         if finish == "length":
-            logger.warning("OpenRouter stream hit max_tokens for %s — answer truncated", model)
+            logger.warning("%s stream hit max_tokens for %s — answer truncated", self._name, model)
             yield TRUNCATION_NOTE
 
     def is_transient(self, exc: Exception) -> bool:

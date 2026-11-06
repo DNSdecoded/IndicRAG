@@ -1,3 +1,4 @@
+from providers.base import user_text
 from unittest.mock import patch, MagicMock
 from concurrent.futures import ThreadPoolExecutor
 import itertools
@@ -272,10 +273,11 @@ def test_answer_generator_prepends_history():
             "conversation_history": history,
         }
         result = answer_generator_node(state)
-        contents = mock_gen.call_args[0][1]
-        history_texts = [p.text for c in contents[:-1] for p in c.parts]
+        messages = mock_gen.call_args[0][1].messages
+        history_texts = [m["content"] for m in messages[:-1]]
         assert any("BERT" in t for t in history_texts)
-        assert contents[-1].role == "user"
+        assert messages[-1]["role"] == "user"
+        assert [m["role"] for m in messages[:-1]] == ["user", "assistant"]   # roles survive (no flattening)
         assert result["draft_answer"] == "answer"
 
 
@@ -343,9 +345,9 @@ def test_answer_generator_no_history_unchanged():
             "conversation_history": [],
         }
         answer_generator_node(state)
-        contents = mock_gen.call_args[0][1]
-        assert len(contents) == 1
-        assert contents[0].role == "user"
+        messages = mock_gen.call_args[0][1].messages
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
 
 
 def test_answer_generator_history_capped_at_six_messages():
@@ -366,10 +368,10 @@ def test_answer_generator_history_capped_at_six_messages():
             "conversation_history": history,
         }
         answer_generator_node(state)
-        contents = mock_gen.call_args[0][1]
-        history_contents = contents[:-1]
+        messages = mock_gen.call_args[0][1].messages
+        history_contents = messages[:-1]
         assert len(history_contents) == 6
-        all_hist_text = " ".join(p.text for c in history_contents for p in c.parts)
+        all_hist_text = " ".join(m["content"] for m in history_contents)
         assert "msg0" not in all_hist_text
         assert "msg9" in all_hist_text
 
@@ -816,9 +818,9 @@ def test_arxiv_search_declares_arxiv_id_and_dispatch_forwards_it():
     from agent.tool_declarations import FUNCTION_DECLARATIONS
     from agent.tool_executor import TOOL_DISPATCH
 
-    decl = next(d for d in FUNCTION_DECLARATIONS if d.name == "arxiv_search")
-    assert "arxiv_id" in decl.parameters.properties
-    assert "query" not in (decl.parameters.required or []), "an ID lookup needs no query"
+    decl = next(d for d in FUNCTION_DECLARATIONS if d["name"] == "arxiv_search")
+    assert "arxiv_id" in decl["parameters"]["properties"]
+    assert "query" not in (decl["parameters"].get("required") or []), "an ID lookup needs no query"
 
     with patch("agent.tool_executor.execute_arxiv_search") as ex:
         TOOL_DISPATCH["arxiv_search"]({"arxiv_id": "2301.07041"})
@@ -837,8 +839,8 @@ def test_arxiv_search_without_query_or_id_errors_without_calling_arxiv():
 def test_indicrag_top_k_declared():
     from agent.tool_declarations import FUNCTION_DECLARATIONS
 
-    decl = next(d for d in FUNCTION_DECLARATIONS if d.name == "indicrag_retrieval")
-    assert "top_k" in decl.parameters.properties
+    decl = next(d for d in FUNCTION_DECLARATIONS if d["name"] == "indicrag_retrieval")
+    assert "top_k" in decl["parameters"]["properties"]
 
 
 def test_indicrag_blank_tags_no_filter():
@@ -969,8 +971,8 @@ def test_evaluator_sees_full_long_answer():
 
     captured = {}
 
-    def capture(model, contents, gen_config=None, **kw):
-        captured["prompt"] = contents
+    def capture(model, request, **kw):
+        captured["prompt"] = request.messages[-1]["content"]
         return _mk_eval_resp(0.9, "accept")
 
     with patch("verify.check_claims", return_value=[]), \
@@ -1109,7 +1111,7 @@ def test_stream_failover_only_before_the_first_token(monkeypatch):
 
     class BreaksMidStream:
         name = "gemini"
-        def generate_stream(self, model, contents, gen_config):
+        def generate_stream(self, model, request):
             yield "half an answer"
             raise Exception("503 UNAVAILABLE")
         def is_permanent(self, e): return False
@@ -1132,7 +1134,7 @@ def test_stream_failover_only_before_the_first_token(monkeypatch):
     got = []
     try:
         with pytest.raises(Exception):
-            for piece in llm_client.generate_stream_with_failover("gemini-3.5-flash", "q", object()):
+            for piece in llm_client.generate_stream_with_failover("gemini-3.5-flash", user_text("q")):
                 got.append(piece)
         assert got == ["half an answer"]
     finally:
@@ -1168,6 +1170,6 @@ def test_stream_failover_does_switch_before_any_token(monkeypatch):
 
     try:
         assert list(llm_client.generate_stream_with_failover(
-            "gemini-3.5-flash", "q", object())) == ["from the fallback"]
+            "gemini-3.5-flash", user_text("q"))) == ["from the fallback"]
     finally:
         llm_client._circuit_breaker.clear()

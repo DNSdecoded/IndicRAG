@@ -1,11 +1,13 @@
-"""Backend interface + a Gemini-shaped response shim.
+"""Provider-neutral LLM request/response and the backend interface (v3 LLM-1).
 
-Agent nodes read responses as `resp.candidates[0].content.parts[*].function_call`
-and `resp.text`. Non-Gemini backends wrap their output in ShimResponse so those
-call sites never change.
+The internal format is OpenAI Chat Completions: `messages` are chat turns and
+`tools` are function schemas. Each backend translates at its own edge; nothing
+above `providers/` sees a vendor type (B8: google.genai stays in providers/gemini.py).
 """
 
+import base64
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Iterator
 
 # Appended to a stream that stopped because it ran out of output tokens. Backends
@@ -16,45 +18,74 @@ TRUNCATION_NOTE = (
     "Ask a narrower question or raise `LLM_MAX_TOKENS`.]*"
 )
 
-
-class _FunctionCall:
-    def __init__(self, name: str, args: dict):
-        self.name = name
-        self.args = args
+THINKING_SCOPES = ("standard", "agent", "off")
 
 
-class _Part:
-    def __init__(self, text: str = "", function_call: _FunctionCall | None = None):
-        self.text = text
-        self.function_call = function_call
+@dataclass
+class LLMRequest:
+    """One generation request, in OpenAI chat shape.
 
-
-class _Content:
-    def __init__(self, parts: list[_Part]):
-        self.parts = parts
-
-
-class _Candidate:
-    def __init__(self, content: _Content):
-        self.content = content
-        self.finish_reason = "STOP"
-
-
-class ShimResponse:
-    """Gemini-shaped response wrapping a non-Gemini backend's output.
-
-    Exposes `.text` and `.candidates[0].content.parts[*].function_call` so
-    tool_selector / query_planner / reflexion_evaluator / safe_extract_text
-    read it identically to a real google-genai response.
+    messages: user/assistant turns; `content` is a str or a list of parts
+        {"type": "text", "text": ...} / {"type": "image_url", "image_url": {"url": data URL}}.
+    tools: OpenAI function tools: [{"type": "function", "function": {name, description, parameters}}].
+    thinking: "standard" | "agent" | "off" | None (None = send nothing, model default).
+        Only backends with a thinking control read it.
+    safety: send the Gemini safety settings (no OpenAI-compatible equivalent, B9).
     """
 
-    def __init__(self, text: str, function_calls: list[tuple[str, dict]]):
-        self.text = text
-        if function_calls:
-            parts = [_Part(function_call=_FunctionCall(n, a)) for n, a in function_calls]
-        else:
-            parts = [_Part(text=text)]
-        self.candidates = [_Candidate(_Content(parts))]
+    messages: list
+    system: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    tools: list | None = None
+    thinking: str | None = None
+    safety: bool = False
+
+    def __post_init__(self):
+        if self.thinking is not None and self.thinking not in THINKING_SCOPES:
+            raise ValueError(f"thinking must be one of {THINKING_SCOPES} or None, got {self.thinking!r}")
+        if not self.messages:
+            raise ValueError("LLMRequest needs at least one message")
+
+
+def user_text(text: str, **kw) -> LLMRequest:
+    """A single-turn text request: the common case."""
+    return LLMRequest(messages=[{"role": "user", "content": text}], **kw)
+
+
+def image_part(data: bytes, mime_type: str = "image/png") -> dict:
+    return {"type": "image_url",
+            "image_url": {"url": f"data:{mime_type};base64,{base64.b64encode(data).decode()}"}}
+
+
+def decode_data_url(url: str) -> tuple[bytes, str]:
+    """data:<mime>;base64,<payload> -> (bytes, mime). Only data URLs are accepted:
+    a backend must never fetch a URL a prompt handed it."""
+    if not url.startswith("data:") or ";base64," not in url:
+        raise ValueError("only base64 data URLs are supported for images")
+    head, payload = url[5:].split(";base64,", 1)
+    return base64.b64decode(payload), head or "application/octet-stream"
+
+
+@dataclass
+class ToolCall:
+    name: str
+    args: dict
+
+
+@dataclass
+class LLMResponse:
+    """What every backend returns.
+
+    finish_reason: "stop" | "length" | "tool_calls" | "content_filter", or the
+        provider's raw value when it maps to none of these.
+    usage: {"prompt": int, "completion": int} when the provider reports it.
+    """
+
+    text: str = ""
+    tool_calls: list = field(default_factory=list)
+    finish_reason: str = "stop"
+    usage: dict | None = None
 
 
 class LLMBackend(ABC):
@@ -65,10 +96,10 @@ class LLMBackend(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    def generate(self, model: str, contents, gen_config): ...
+    def generate(self, model: str, request: LLMRequest) -> LLMResponse: ...
 
     @abstractmethod
-    def generate_stream(self, model: str, contents, gen_config) -> Iterator[str]: ...
+    def generate_stream(self, model: str, request: LLMRequest) -> Iterator[str]: ...
 
     @abstractmethod
     def is_transient(self, exc: Exception) -> bool: ...

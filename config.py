@@ -85,7 +85,29 @@ def ensure_directories():
 # ============================================================================
 # bge-m3: dense + sparse + ColBERT, strong on Indic scripts
 # NOTE: switching from e5-base (768d) requires re-ingesting all documents
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+# ============================================================================
+# Model roles (v3, B6): MODEL_ROLE_<ROLE>=[provider:]model for each job a model does.
+# The legacy per-model keys below still work for all of 3.x, with a warning.
+# ============================================================================
+MODEL_ROLE_NAMES = ("answer", "utility", "embedding", "reranker", "nli", "translation", "vision")
+DEPRECATED_SETTINGS: list = []   # legacy keys actually in use, for /health and startup logs
+
+
+def _model_role(role: str, legacy_env: str | None, default: str) -> str:
+    """MODEL_ROLE_<ROLE>, else the legacy env var (presence, not truthiness: an
+    explicitly empty AGENT_UTILITY_MODEL means "follow the answer model"), else default."""
+    value = os.getenv(f"MODEL_ROLE_{role.upper()}", "").strip()
+    if value:
+        return value
+    if legacy_env and legacy_env in os.environ:
+        DEPRECATED_SETTINGS.append(legacy_env)
+        logging.getLogger(__name__).warning(
+            "%s is deprecated; set MODEL_ROLE_%s instead (still honoured in 3.x)", legacy_env, role.upper())
+        return os.environ[legacy_env].strip()
+    return default
+
+
+EMBEDDING_MODEL_NAME = _model_role("embedding", "EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 # int8 ONNX for the embedding model on CPU. Works, but OFF by default — measured,
 # the trade is worse than it is for the cross-encoders:
 #
@@ -148,7 +170,7 @@ SECTION_CHUNK_SIZES = {
 # Reranking
 # ============================================================================
 USE_RERANKER = os.getenv("USE_RERANKER", "true").lower() == "true"
-RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+RERANK_MODEL_NAME = _model_role("reranker", None, "BAAI/bge-reranker-v2-m3")
 # Candidate pool handed to the cross-encoder, as a multiple of top_k. The
 # reranker can only reorder what it is given: fetching exactly top_k per leg cut
 # relevant chunks at BM25 rank 11 / dense rank 39 before it ever scored them
@@ -290,10 +312,7 @@ FAITHFULNESS_ENFORCE = os.getenv("FAITHFULNESS_ENFORCE", "warn")  # warn | strip
 # claims are scored against Indic chunks by a model that understands them; the
 # old English-only nli-deberta-v3-base collapsed to noise on Hindi/Tamil/Bengali
 # — the languages that are this project's differentiator.
-NLI_MODEL_NAME = os.getenv(
-    "NLI_MODEL_NAME",
-    "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
-)
+NLI_MODEL_NAME = _model_role("nli", "NLI_MODEL_NAME", "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7")
 # Entailment class index in the model's output logits — models disagree:
 #   mDeBERTa-xnli (default):     0=entailment, 1=neutral, 2=contradiction
 #   cross-encoder/nli-deberta-v3-base: 0=contradiction, 1=entailment, 2=neutral
@@ -370,8 +389,8 @@ INDIC_LANGUAGES = ["hi", "mr", "ta", "te", "bn", "gu", "kn", "ml", "pa", "or"]
 # ============================================================================
 # Translation Models (Strategy B)
 # ============================================================================
-TRANSLATION_MODEL_EN_TO_INDIC = "facebook/nllb-200-distilled-600M"
-TRANSLATION_MODEL_INDIC_TO_EN = "facebook/nllb-200-distilled-600M"
+TRANSLATION_MODEL_EN_TO_INDIC = TRANSLATION_MODEL_INDIC_TO_EN = _model_role(
+    "translation", None, "facebook/nllb-200-distilled-600M")
 
 # ============================================================================
 # LLM Configuration
@@ -476,7 +495,7 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # low temperature 
 # gemini-3.8-flash is the current Flash generation, built for long-horizon agentic
 # workflows, which is what the agent pipeline does. 3.7/3.6-flash remain
 # selectable as previous generations.
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemini-3.8-flash")  # Gemini model
+LLM_MODEL_NAME = _model_role("answer", "LLM_MODEL_NAME", "gemini-3.8-flash")
 
 # Explicit Gemini context caching of the (stable) system-instruction prefix.
 # Gemini 3.x Flash already does IMPLICIT caching for free; explicit caching adds
@@ -495,7 +514,12 @@ LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.5-flash-lite")
 # function call, yet on the main Flash model they took ~106s of a measured 150s
 # agent run; flash-lite answered the same shapes in 0.6-2.1s. The answer itself
 # stays on LLM_MODEL_NAME (or the user's pick). Empty = use the answer model.
-AGENT_UTILITY_MODEL = os.getenv("AGENT_UTILITY_MODEL", "gemini-3.5-flash-lite").strip()
+AGENT_UTILITY_MODEL = _model_role("utility", "AGENT_UTILITY_MODEL", "gemini-3.5-flash-lite")
+# Figure/table captions; defaults to the answer model, as before roles existed.
+VISION_MODEL = _model_role("vision", None, LLM_MODEL_NAME)
+MODEL_ROLES = {"answer": LLM_MODEL_NAME, "utility": AGENT_UTILITY_MODEL or LLM_MODEL_NAME,
+               "embedding": EMBEDDING_MODEL_NAME, "reranker": RERANK_MODEL_NAME, "nli": NLI_MODEL_NAME,
+               "translation": TRANSLATION_MODEL_EN_TO_INDIC, "vision": VISION_MODEL}
 
 # LLM API Keys (required for Gemini)
 # Supports multiple comma-separated keys for load balancing: LLM_API_KEYS=key1,key2,key3
@@ -778,14 +802,8 @@ CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "20"))
 SESSION_MAX_AGE_HOURS = int(os.getenv("SESSION_MAX_AGE_HOURS", "24"))
 
 # ============================================================================
-# Safety Settings (shared across rag.py and agent nodes)
+# Safety threshold (Gemini only; providers/gemini.py builds the settings from it.
+# The OpenAI-compatible path has no equivalent and sends none, B9.)
 # ============================================================================
-from google.genai import types as _genai_types  # noqa: E402 — lazy-ish, underscore keeps it private
 _dev_mode = os.getenv("DEV_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-_safety_threshold = "BLOCK_NONE" if _dev_mode else "BLOCK_MEDIUM_AND_ABOVE"
-SAFETY_SETTINGS = [
-    _genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold=_safety_threshold),
-    _genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold=_safety_threshold),
-    _genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold=_safety_threshold),
-    _genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold=_safety_threshold),
-]
+SAFETY_THRESHOLD = "BLOCK_NONE" if _dev_mode else "BLOCK_MEDIUM_AND_ABOVE"

@@ -12,7 +12,6 @@ import lang_utils
 import translation
 import llm_client
 import metrics
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -191,19 +190,16 @@ def _hyde_embedding(user_query: str):
     Falls back to embedding the raw query on any LLM failure.
     """
     try:
-        hyde_config = types.GenerateContentConfig(
-            temperature=config.LLM_TEMPERATURE,
-            max_output_tokens=256,
-            safety_settings=config.SAFETY_SETTINGS,
-            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
-            thinking_config=llm_client.thinking_config_for("standard"),
-        )
-        response = llm_client.generate_with_failover(
-            config.LLM_MODEL_NAME,
+        request = llm_client.user_text(
             f"Write a short, plausible-sounding answer to this question, "
             f"even if you are not sure it is correct:\n\n{user_query}",
-            hyde_config,
+            temperature=config.LLM_TEMPERATURE,
+            max_tokens=256,
+            safety=True,
+            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
+            thinking="standard",
         )
+        response = llm_client.generate_with_failover(config.LLM_MODEL_NAME, request)
         hypothetical = safe_extract_text(response)
         if hypothetical:
             return embeddings.embed_query(hypothetical)
@@ -772,51 +768,29 @@ def llm_generate(prompt: str, max_tokens: int = None,
         logger.debug("[LLM cache hit]")
         return cached
 
-    generate_config = types.GenerateContentConfig(
+    request = llm_client.user_text(
+        prompt,
+        system=system_instruction or config.SYSTEM_PROMPT,
         temperature=config.LLM_TEMPERATURE,
-        max_output_tokens=max_tokens,
-        safety_settings=config.SAFETY_SETTINGS,
-        system_instruction=system_instruction or config.SYSTEM_PROMPT,
+        max_tokens=max_tokens,
+        safety=True,
         # Minimise thinking so the token budget goes to the answer, not thoughts.
-        # Sending nothing here would mean the model's own default (MEDIUM on
+        # Sending nothing would mean the model's own default (MEDIUM on
         # gemini-3.6-flash), whose thoughts come out of max_output_tokens.
-        thinking_config=llm_client.thinking_config_for("standard"),
+        thinking="standard",
     )
 
     try:
-        response = llm_client.generate_with_failover(target_model, prompt, generate_config, provider=provider)
-
-        # Check if response has text
+        response = llm_client.generate_with_failover(target_model, request, provider=provider)
         if response.text:
             llm_cache.put(cache_key, response.text)
             return response.text
-
-        # Handle blocked or empty responses
-        if response.candidates:
-            candidate = response.candidates[0]
-
-            # Try to get partial text if available
-            if candidate.content and candidate.content.parts:
-                parts_text = [
-                    part.text
-                    for part in candidate.content.parts
-                    if hasattr(part, 'text') and part.text
-                ]
-                if parts_text:
-                    result_text = ''.join(parts_text)
-                    llm_cache.put(cache_key, result_text)
-                    return result_text
-
-            finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
-            raise Exception(
-                f"Response blocked or incomplete. Finish reason: {finish_reason}. "
-                f"This may be due to safety filters or token limits."
-            )
-
-        raise Exception("No response generated from Gemini API")
-
+        raise Exception(
+            f"Response blocked or incomplete. Finish reason: {response.finish_reason}. "
+            f"This may be due to safety filters or token limits."
+        )
     except Exception as e:
-        logger.error(f"Error calling Gemini API: {e}")
+        logger.error(f"Error calling the LLM: {e}")
         raise
 
 
@@ -935,19 +909,8 @@ generate_with_failover = llm_client.generate_with_failover
 
 
 def safe_extract_text(response) -> str:
-    """Safely extract text from a google-genai response, handling empty/blocked responses."""
-    try:
-        if response.text:
-            return response.text
-    except (ValueError, AttributeError):
-        pass
-    if response.candidates:
-        candidate = response.candidates[0]
-        if candidate.content and candidate.content.parts:
-            parts = [p.text for p in candidate.content.parts if hasattr(p, "text") and p.text]
-            if parts:
-                return "".join(parts)
-    return ""
+    """Text of an LLMResponse, '' when blocked or empty."""
+    return getattr(response, "text", "") or ""
 
 
 def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> dict:

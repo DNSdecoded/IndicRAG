@@ -139,26 +139,25 @@ def extract_regions(
 
 def _caption_one(region: Dict[str, Any]) -> str:
     """VLM-describe a single region. Returns '' on failure (best-effort)."""
-    from google.genai import types
     import llm_client
     import rag
 
-    gen_config = types.GenerateContentConfig(
-        system_instruction=(
+    request = llm_client.LLMRequest(
+        messages=[{"role": "user", "content": [
+            llm_client.image_part(region["png"], "image/png"),
+            {"type": "text", "text": _caption_prompt(region["kind"], region["caption"])},
+        ]}],
+        system=(
             "You are a scientific figure and table analyst: describe what the image "
             "concretely shows, factually and without preamble."
         ),
         temperature=0.0,
-        max_output_tokens=512,
-        safety_settings=config.SAFETY_SETTINGS,
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        max_tokens=512,
+        safety=True,
+        thinking="off",
     )
-    contents = [
-        types.Part.from_bytes(data=region["png"], mime_type="image/png"),
-        _caption_prompt(region["kind"], region["caption"]),
-    ]
     try:
-        resp = llm_client.generate_with_failover(config.LLM_MODEL_NAME, contents, gen_config)
+        resp = llm_client.generate_with_failover(config.VISION_MODEL, request)
         return rag.safe_extract_text(resp).strip()
     except Exception as e:
         logger.warning("VLM caption failed (page %s): %s", region.get("page"), e)

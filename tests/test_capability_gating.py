@@ -39,3 +39,24 @@ def test_utility_model_routes_even_when_user_picked_another(monkeypatch):
     monkeypatch.setattr(ts.llm_client._config, "AGENT_UTILITY_MODEL", "gemini-3.5-flash-lite")
     state = {"requested_model": "anthropic/claude-haiku", "requested_provider": None}
     assert ts._gate_model(state) == ("gemini", "gemini-3.5-flash-lite")
+
+
+def test_selector_uses_the_models_tool_calls(monkeypatch, no_utility_model):
+    """The model's ToolCalls become the node's requests, and the request carries the
+    schemas. Neither was covered before LLM-1: only the fallback path was tested."""
+    from agent.tool_declarations import TOOLS
+    from providers.base import LLMResponse, ToolCall
+
+    sent = {}
+
+    def fake(model, request, provider=None, **kw):
+        sent["request"] = request
+        return LLMResponse(tool_calls=[ToolCall("web_search", {"query": "latest 6G news"})],
+                           finish_reason="tool_calls")
+
+    monkeypatch.setattr(ts.rag, "generate_with_failover", fake)
+    out = ts.tool_selector_node({"original_query": "latest 6G news"})
+    names = [c["name"] for c in out["tool_calls_requested"]]
+    assert "web_search" in names
+    assert {"name": "web_search", "args": {"query": "latest 6G news"}} in out["tool_calls_requested"]
+    assert sent["request"].tools == TOOLS and sent["request"].thinking == "agent"
