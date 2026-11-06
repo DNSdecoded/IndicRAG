@@ -4,6 +4,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
+import contextvars
 from agent.state import AgentState
 from agent import tool_registry
 from cache import tool_cache, make_key
@@ -120,7 +121,7 @@ def tool_executor_node(state: AgentState) -> dict:
     else:
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
             futures = {
-                pool.submit(_run_tool, call["name"], call.get("args", {})): call
+                pool.submit(contextvars.copy_context().run, _run_tool, call["name"], call.get("args", {})): call
                 for call in tool_calls
             }
             for future in as_completed(futures):

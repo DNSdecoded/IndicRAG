@@ -500,6 +500,12 @@ TOOL_TIMEOUTS = {"indicrag_retrieval": 90.0, "web_search": 30.0, "calculate": 5.
 for _item in filter(None, os.getenv("TOOL_TIMEOUTS", "").split(",")):
     _name, _, _secs = _item.partition("=")
     TOOL_TIMEOUTS[_name.strip()] = float(_secs)
+# Research traces (tracing.py, OBS-1): one per answer, with stage spans, chunk ids,
+# the model that served it and a reproducibility stamp. Question and answer text are
+# NOT stored unless TRACE_STORE_TEXT=true (a hash and length are, for correlation).
+TRACE_ENABLED = os.getenv("TRACE_ENABLED", "true").lower() == "true"
+TRACE_STORE_TEXT = os.getenv("TRACE_STORE_TEXT", "false").lower() == "true"
+TRACE_RETENTION_DAYS = int(os.getenv("TRACE_RETENTION_DAYS", "30"))
 # Tools withdrawn from the agent: not offered to the model and refused at dispatch.
 # The rollback switch for a misbehaving tool, e.g. AGENT_DISABLED_TOOLS=execute_python.
 AGENT_DISABLED_TOOLS = {t.strip() for t in os.getenv("AGENT_DISABLED_TOOLS", "").split(",") if t.strip()}

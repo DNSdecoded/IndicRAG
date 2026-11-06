@@ -13,6 +13,7 @@ import time
 
 import config as _config
 import metrics
+import tracing
 from providers.base import LLMBackend, LLMRequest, LLMResponse, ToolCall, image_part, user_text  # noqa: F401 (re-exported)
 from providers.gemini import GeminiBackend
 from providers.openrouter import OpenRouterBackend
@@ -251,6 +252,7 @@ def generate_with_failover(model: str, request: LLMRequest, provider: str | None
     provider = resolve_provider(model, provider)
     last_exc: Exception | None = None
     any_attempted = False
+    attempt = 0
 
     for prov, mdl in _attempts(model, provider):
         if deadline is not None:
@@ -270,11 +272,13 @@ def generate_with_failover(model: str, request: LLMRequest, provider: str | None
             continue
         backend = get_backend(prov)
         any_attempted = True
+        attempt += 1
         try:
             with metrics.stage("llm_generate"):
                 result = backend.generate(mdl, request)
             _circuit_clear(key)
             _record_usage(prov, mdl, result)
+            tracing.note_llm(prov, mdl, getattr(result, "usage", None), attempt=attempt)
             return result
         except Exception as exc:
             last_exc = exc
@@ -327,6 +331,7 @@ def generate_stream_with_failover(model: str, request: LLMRequest,
                 emitted = True
                 yield chunk
             _circuit_clear(key)
+            tracing.note_llm(prov, mdl, stream=True)
             return
         except Exception as exc:
             if emitted:
@@ -379,6 +384,7 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
                 chars += len(chunk)
                 yield chunk
             _circuit_clear(key)
+            tracing.note_llm(prov, mdl, stream=True)
             return
         except Exception as exc:
             last_exc = exc

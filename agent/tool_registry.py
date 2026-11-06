@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import config
+import contextvars
 from agent import tool_executor as ex
 from agent.tool_declarations import FUNCTION_DECLARATIONS
 
@@ -152,7 +153,7 @@ def run(name: str, args) -> dict:
     except ValueError as e:
         logger.warning("[ToolRegistry] %s rejected arguments: %s", name, e)
         return _error(f"invalid arguments for {name}: {e}")
-    future = _POOL.submit(tool.run, clean)
+    future = _POOL.submit(contextvars.copy_context().run, tool.run, clean)   # keep the trace
     try:
         result = future.result(timeout=tool.timeout_s)
     except FutureTimeout:

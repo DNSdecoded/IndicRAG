@@ -7,6 +7,7 @@ import logging
 import re
 import config
 import embeddings
+import tracing
 import vector_store
 import lang_utils
 import translation
@@ -281,6 +282,15 @@ def _apply_tags_post_filter(results: Dict[str, list], tags: list) -> Dict[str, l
     return filtered
 
 
+def _trace_retrieval(res: Dict, cache_hit: bool) -> None:
+    """Record what the answer was given: each used chunk as (paper_id, chunk_index),
+    which identifies it stably across re-ranking, plus the degraded flag."""
+    used = res.get("chunks_used") or 0
+    chunks = [[m.get("paper_id"), m.get("chunk_index")] for m in (res.get("metadatas") or [])[:used]]
+    tracing.note(retrieval={"chunks": chunks, "chunks_used": used, "cache_hit": cache_hit,
+                            "candidates": len(res.get("metadatas") or []), "degraded": res.get("degraded")})
+
+
 def retrieve_context(
     user_query: str,
     top_k: int = None,
@@ -330,6 +340,7 @@ def retrieve_context(
     cacheable = collection is None
 
     def _cache_and_return(res: Dict) -> Dict:
+        _trace_retrieval(res, cache_hit=False)
         if cacheable:
             # Store a copy, not the object being returned — otherwise the very
             # first caller still holds a handle on the cached lists.
@@ -343,6 +354,7 @@ def retrieve_context(
             # Hand out a copy: the cached entry is shared by every subsequent
             # hit, so a caller that trims/sorts the returned lists in place
             # would corrupt the cache for everyone else.
+            _trace_retrieval(cached, cache_hit=True)
             return _copy_retrieval_result(cached)
 
     if collection is None:

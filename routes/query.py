@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 import config
 import persistence
 import rag
+import tracing
 from agent.nodes.finalizer import citation_coverage
 from deps import (STATIC_DIR, limiter, verify_api_key, current_owner, admit_query,
                   _jobs, _jobs_lock, _update_job)
@@ -228,6 +229,8 @@ async def query_question(
         if top_k is not None:
             top_k = max(1, min(top_k, 20))  # Clamp to [1, 20]
 
+        query_id = str(uuid.uuid4())
+        trace = tracing.start("query", query_id, body.question, owner)
         result = await run_in_threadpool(
             rag.answer_question,
             user_query=body.question,
@@ -254,7 +257,8 @@ async def query_question(
             for cite in result['citations']
         ]
 
-        query_id = str(uuid.uuid4())
+        await run_in_threadpool(tracing.finish, trace, result['answer'],
+                                mode=f"standard_{body.strategy}", language=result['language'])
         try:
             await run_in_threadpool(persistence.log_query,
                 query_id=query_id, question=body.question, answer=result['answer'],
@@ -305,17 +309,22 @@ async def query_stream(
     body: QueryRequest,
     authenticated: bool = Depends(verify_api_key),
     _slot: None = Depends(admit_query),
+    owner: Optional[str] = Depends(current_owner),
 ):
     """Stream a RAG answer as Server-Sent Events."""
     top_k = body.top_k
     if top_k is not None:
         top_k = max(1, min(top_k, 20))
 
+    query_id = str(uuid.uuid4())
+    # sse_stream finishes it with the final answer; the no-docs branch finishes here.
+    trace = tracing.start("query_stream", query_id, body.question, owner)
     prepared = await run_in_threadpool(rag.prepare_query_for_stream, body.question, body.strategy, top_k,
                                        combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
-    query_id = str(uuid.uuid4())
 
     if prepared["chunks_used"] == 0:
+        await run_in_threadpool(tracing.finish, trace, prepared["no_docs_msg"], language=prepared["detected_lang"])
+
         async def _no_docs():
             yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'query_id': query_id})}\n\n"

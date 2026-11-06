@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import rag
+import tracing
 from deps import (
     limiter, verify_api_key, current_owner, owns_session, session_turn_lock,
     admit_query, _get_or_create_session, _append_session_messages,
@@ -102,6 +103,8 @@ async def chat(
 
         full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
+        query_id = str(uuid.uuid4())
+        trace = tracing.start("chat", query_id, body.message, owner)
         try:
             result = await run_in_threadpool(
                 rag.answer_with_history,
@@ -120,6 +123,7 @@ async def chat(
 
         await run_in_threadpool(_append_session_messages, session_id, body.message, result["answer"], owner,
                                  result.get("citations"))
+        await run_in_threadpool(tracing.finish, trace, result["answer"], language=result["language"])
 
     processing_time = time.time() - start_time
     logger.info(
@@ -128,7 +132,7 @@ async def chat(
     )
 
     return ChatResponse(
-        query_id=str(uuid.uuid4()),
+        query_id=query_id,
         session_id=session_id,
         turn_index=turn_index + 1,
         answer=result["answer"],
@@ -170,11 +174,13 @@ async def chat_stream(
                                 detail=f"Session '{body.session_id}' not found.")
         full_messages = list(messages) + [{"role": "user", "content": body.message}]
 
+        query_id = str(uuid.uuid4())
+        trace = tracing.start("chat_stream", query_id, body.message, owner)
         prepared = await run_in_threadpool(rag.prepare_chat_for_stream, full_messages, body.strategy, top_k,
                                            combine_filters(build_paper_filter(body.paper_ids), build_tags_filter(body.tags)))
-        query_id = str(uuid.uuid4())
 
         if prepared["chunks_used"] == 0:
+            await run_in_threadpool(tracing.finish, trace, prepared["no_docs_msg"], language=prepared["detected_lang"])
             async def _no_docs():
                 yield f"data: {json.dumps({'type': 'chunk', 'text': prepared['no_docs_msg']})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'citations': [], 'language': prepared['detected_lang'], 'session_id': session_id, 'query_id': query_id})}\n\n"
