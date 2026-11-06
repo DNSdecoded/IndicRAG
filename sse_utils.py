@@ -13,6 +13,8 @@ import lang_utils
 import llm_client
 import rag
 import translation
+import contextvars
+import tracing
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,8 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
         yield "data: [DONE]\n\n"
         return
 
-    threading.Thread(target=_run, daemon=True).start()
+    # copy_context: the producer records into the request's trace (tracing.py).
+    threading.Thread(target=contextvars.copy_context().run, args=(_run,), daemon=True).start()
 
     # ponytail: buffer when translation needed, stream otherwise
     needs_translation = strategy == "B" and language != "en" and lang_utils.is_indic_language(language)
@@ -199,6 +202,8 @@ async def sse_stream(prompt: str, metadatas: list, language: str, strategy: str 
 
         # `degraded` rides on the done event so a streaming client learns the answer
         # came from a reduced pipeline — it has no other way to find out.
+        await run_in_threadpool(tracing.finish, tracing.current(), compacted, language=language,
+                                degraded=degraded, citations=len(citations))
         yield f"data: {json.dumps({'type': 'done', 'answer': compacted, 'citations': citations, 'language': language, 'query_id': query_id, 'degraded': degraded})}\n\n"
         yield "data: [DONE]\n\n"
     finally:

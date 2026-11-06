@@ -384,7 +384,52 @@ def add_documents(
                              "First ids: %s", len(orphans), orphans[:5], exc_info=True)
         raise
 
+    # Fold the new chunks into a live BM25 index here, the one function every
+    # chunk write goes through — the mirror of delete_by_paper_id doing the
+    # removal. Without it every ingest dropped the whole lexical index and the
+    # next query rebuilt it from Chroma under the build lock. No index built yet
+    # → nothing to do; the first query builds it from the collection.
+    import bm25_search
+    coll_name = getattr(collection, "name", None)
+    try:
+        if bm25_search.add_to_index(list(ids), list(texts), coll_name) and config.BM25_PERSIST:
+            threading.Thread(target=bm25_search.save_index, args=(coll_name,), daemon=True).start()
+    except Exception:
+        # Chroma is the source BM25 is derived from; a stale lexical index is
+        # repaired by a rebuild, so drop it rather than fail a committed write.
+        logger.warning("BM25 incremental add failed; dropping the index for a rebuild",
+                       exc_info=True)
+        bm25_search.invalidate()
+
     logger.info(f"Added {len(texts)} documents. Total in collection: {collection.count()}")
+
+
+def delete_stale_chunks(paper_id: str, keep_ids: List[str],
+                        collection: chromadb.Collection = None) -> int:
+    """Drop a paper's chunks whose ids are not in `keep_ids`. Returns how many.
+
+    The second half of replacing a paper: the new version is upserted first and
+    only then are the old ids it no longer has removed, so there is never a moment
+    when the paper is absent. Unlike delete_by_paper_id this leaves the ingest-log
+    row alone — the caller's record_ingest overwrites it with the new version.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    keep = set(keep_ids)
+    current = _chroma_call(collection.get, where={'paper_id': paper_id}, include=[],
+                           timeout=config.CHROMA_WRITE_TIMEOUT_S)['ids']
+    stale = [i for i in current if i not in keep]
+    if not stale:
+        return 0
+    _chroma_call(collection.delete, ids=stale, timeout=config.CHROMA_WRITE_TIMEOUT_S)
+    import bm25_search
+    try:
+        bm25_search.remove_from_index(stale, getattr(collection, "name", None))
+    except Exception:
+        logger.warning("BM25 removal of stale chunks failed; dropping the index for a "
+                       "rebuild", exc_info=True)
+        bm25_search.invalidate()
+    return len(stale)
 
 
 def search(
@@ -482,6 +527,55 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
         stats['sample_metadata'] = sample['metadatas'][0]
     
     return stats
+
+# "No timeout argument given": use _chroma_call's own default, passed implicitly as
+# every caller did before this seam, so the call shape (and anything wrapping
+# _chroma_call) stays the same. A sentinel, not a float compared with ==.
+DEFAULT_TIMEOUT: Any = object()
+
+
+def _timeout_kw(timeout) -> dict:
+    return {} if timeout is DEFAULT_TIMEOUT else {"timeout": timeout}
+
+
+def count(collection: chromadb.Collection = None, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> int:
+    """Number of chunks in the collection. timeout=None: a direct call (see get_chunks)."""
+    if collection is None:
+        collection = get_or_create_collection()
+    if timeout is None:
+        return collection.count()
+    return _chroma_call(collection.count, **_timeout_kw(timeout))
+
+
+def get_chunks(collection: chromadb.Collection = None, *, ids: List[str] = None,
+               where: Dict[str, Any] = None, include=("documents", "metadatas"),
+               limit: int = None, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+    """Read chunks by id and/or metadata filter: the store's one read primitive
+    besides search(). Returns {"ids", "documents"?, "metadatas"?} as Chroma does.
+
+    timeout=None makes a direct call with no timeout and no circuit accounting, for
+    whole-corpus reads (BM25 rebuild, replay) and ingest-time lookups that called
+    the collection directly before this seam existed; online lookups keep the
+    bounded, breaker-guarded call.
+    """
+    if collection is None:
+        collection = get_or_create_collection()
+    kwargs = {"include": list(include)}
+    if ids is not None:
+        kwargs["ids"] = ids
+    if where is not None:
+        kwargs["where"] = where
+    if limit is not None:
+        kwargs["limit"] = limit
+    if timeout is None:
+        return collection.get(**kwargs)
+    return _chroma_call(collection.get, **kwargs, **_timeout_kw(timeout))
+
+
+def embed_backend() -> str:
+    """Public name for the weights that produced the vectors (see _embed_backend)."""
+    return _embed_backend()
+
 
 def get_paper_chunk_counts(collection: chromadb.Collection = None) -> Dict[str, int]:
     """Chunk count per paper_id, for ingestion health / re-ingest tooling."""

@@ -132,13 +132,18 @@ def stage(name: str):
     would make an outage look like reduced latency.
     """
     start = time.perf_counter()
+    ok = True
     try:
         yield
     except BaseException:
+        ok = False
         stage_errors.labels(stage=name).inc()
         raise
     finally:
-        stage_seconds.labels(stage=name).observe(time.perf_counter() - start)
+        elapsed = time.perf_counter() - start
+        stage_seconds.labels(stage=name).observe(elapsed)
+        import tracing   # lazy: tracing is optional per request and imports config only
+        tracing.record_span(name, elapsed, ok=ok)
 
 
 def record_cache(cache_name: str, hit: bool) -> None:

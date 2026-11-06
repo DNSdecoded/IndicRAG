@@ -1,8 +1,9 @@
 """Gemini backend: client pool, round-robin, per-key failover, thinking gate.
 
-Extracted verbatim from the original llm_client.py so behavior is unchanged.
-generate() returns the raw google-genai response (already the native shape the
-agent nodes read) — no shim needed for this backend.
+The only module (with providers/gemini_cache.py) that speaks google.genai. It
+translates an LLMRequest into Contents + GenerateContentConfig at its edge and
+normalizes the raw reply to LLMResponse, so nothing above providers/ sees a
+genai type (v3 LLM-1, B8).
 """
 
 import itertools
@@ -13,9 +14,83 @@ from typing import Iterator
 import config
 from google import genai
 from google.genai import types as genai_types
-from providers.base import LLMBackend, TRUNCATION_NOTE
+from providers.base import LLMBackend, LLMRequest, LLMResponse, ToolCall, TRUNCATION_NOTE, decode_data_url
 
 logger = logging.getLogger(__name__)
+
+_SAFETY_CATEGORIES = ("HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
+                      "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT")
+# Gemini finish reasons that mean "blocked", normalized to content_filter.
+_BLOCKED = ("SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY")
+
+
+def _safety_settings() -> list:
+    return [genai_types.SafetySetting(category=c, threshold=config.SAFETY_THRESHOLD)
+            for c in _SAFETY_CATEGORIES]
+
+
+def _parts(content) -> list:
+    if isinstance(content, str):
+        return [genai_types.Part(text=content)]
+    parts = []
+    for p in content:
+        kind = p.get("type")
+        if kind == "text":
+            parts.append(genai_types.Part(text=p["text"]))
+        elif kind == "image_url":
+            data, mime = decode_data_url(p["image_url"]["url"])
+            parts.append(genai_types.Part.from_bytes(data=data, mime_type=mime))
+        else:
+            raise ValueError(f"unsupported content part type {kind!r}")
+    return parts
+
+
+def _contents(request: LLMRequest) -> list:
+    out = []
+    for m in request.messages:
+        role = {"user": "user", "assistant": "model"}.get(m.get("role"))
+        if role is None:
+            raise ValueError(f"unsupported message role {m.get('role')!r}; use LLMRequest.system for system text")
+        out.append(genai_types.Content(role=role, parts=_parts(m["content"])))
+    return out
+
+
+def _finish(raw_reason, has_calls: bool) -> str:
+    if has_calls:
+        return "tool_calls"
+    name = getattr(raw_reason, "name", None) or str(raw_reason or "STOP")
+    name = name.rsplit(".", 1)[-1].upper()
+    if name == "STOP":
+        return "stop"
+    if name == "MAX_TOKENS":
+        return "length"
+    if name in _BLOCKED:
+        return "content_filter"
+    return name.lower()
+
+
+def _to_response(raw) -> LLMResponse:
+    """Raw google-genai response -> LLMResponse (text, calls, finish, usage)."""
+    usage_meta = getattr(raw, "usage_metadata", None)
+    usage = None
+    if usage_meta is not None:
+        usage = {"prompt": getattr(usage_meta, "prompt_token_count", 0) or 0,
+                 "completion": getattr(usage_meta, "candidates_token_count", 0) or 0}
+    cands = getattr(raw, "candidates", None) or []
+    if not cands:
+        # The prompt itself was blocked (prompt_feedback.block_reason) or nothing came back.
+        blocked = getattr(getattr(raw, "prompt_feedback", None), "block_reason", None)
+        return LLMResponse(text="", finish_reason="content_filter" if blocked else "stop", usage=usage)
+    cand = cands[0]
+    texts, calls = [], []
+    for part in (getattr(getattr(cand, "content", None), "parts", None) or []):
+        fc = getattr(part, "function_call", None)
+        if fc:
+            calls.append(ToolCall(fc.name, dict(fc.args or {})))
+        elif getattr(part, "text", None) and not getattr(part, "thought", False):
+            texts.append(part.text)
+    return LLMResponse(text="".join(texts), tool_calls=calls,
+                       finish_reason=_finish(getattr(cand, "finish_reason", None), bool(calls)), usage=usage)
 
 
 class GeminiBackend(LLMBackend):
@@ -118,6 +193,54 @@ class GeminiBackend(LLMBackend):
         if enum is None or not name:
             return None
         return getattr(enum, name.upper(), None)
+
+    def _thinking_config(self, scope: str | None):
+        """ThinkingConfig for a request's thinking scope, or None to send nothing.
+
+        "off" is an explicit zero budget. "standard"/"agent" prefer the Gemini 3.x
+        thinking_level knob and fall back to the legacy thinking_budget when the
+        configured level is empty or the SDK has no ThinkingLevel enum. None means
+        "omit the field": the model's own default (MEDIUM on gemini-3.6-flash), a real
+        choice, not a neutral one.
+        """
+        if scope is None:
+            return None
+        if scope == "off":
+            return genai_types.ThinkingConfig(thinking_budget=0)
+        level_name = config.AGENT_THINKING_LEVEL if scope == "agent" else config.LLM_THINKING_LEVEL
+        if level_name:
+            level = self._thinking_level(level_name)
+            if level is not None:
+                return genai_types.ThinkingConfig(thinking_level=level)
+            logger.warning("Unknown thinking level %r for scope %s — falling back to thinking_budget",
+                           level_name, scope)
+        budget = config.AGENT_THINKING_BUDGET if scope == "agent" else 0
+        return genai_types.ThinkingConfig(thinking_budget=budget)
+
+    def to_genai(self, request: LLMRequest):
+        """LLMRequest -> (contents, GenerateContentConfig)."""
+        kwargs = {}
+        if request.system:
+            kwargs["system_instruction"] = request.system
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            kwargs["max_output_tokens"] = request.max_tokens
+        if request.safety:
+            kwargs["safety_settings"] = _safety_settings()
+        thinking = self._thinking_config(request.thinking)
+        if thinking is not None:
+            kwargs["thinking_config"] = thinking
+        if request.tools:
+            kwargs["tools"] = [genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
+                    name=t["function"]["name"],
+                    description=t["function"].get("description", ""),
+                    parameters=t["function"].get("parameters"),
+                ) for t in request.tools])]
+            kwargs["tool_config"] = genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(mode="AUTO"))
+        return _contents(request), genai_types.GenerateContentConfig(**kwargs)
 
     @classmethod
     def _level_for_budget(cls, budget):
@@ -223,7 +346,7 @@ class GeminiBackend(LLMBackend):
             sys_inst = getattr(gen_config, "system_instruction", None)
             if not sys_inst:
                 return gen_config
-            import gemini_cache
+            from providers import gemini_cache
             name = gemini_cache.get_or_create(client, model, sys_inst,
                                               getattr(gen_config, "tools", None))
             if not name:
@@ -299,15 +422,16 @@ class GeminiBackend(LLMBackend):
         return None
 
     # ── single-client calls (dispatch/failover lives in llm_client) ─────
-    def generate(self, model: str, contents, gen_config, client=None):
+    def generate(self, model: str, request: LLMRequest, client=None) -> LLMResponse:
         client = client or self.pool[self.next_client_idx()]
+        contents, gen_config = self.to_genai(request)
         call_config = self._prep_config(client, model, gen_config)
         # Bounded: each retry climbs the ladder, and past the top thinking is
         # dropped, after which no rejection classifies and the error propagates.
         for _ in range(len(self._LEVEL_LADDER) + 2):
             try:
-                return client.models.generate_content(
-                    model=model, contents=contents, config=call_config)
+                return _to_response(client.models.generate_content(
+                    model=model, contents=contents, config=call_config))
             except Exception as exc:
                 retry_config = self._next_config(model, call_config, exc)
                 if retry_config is None:
@@ -315,8 +439,9 @@ class GeminiBackend(LLMBackend):
                 call_config = retry_config
         raise RuntimeError("Gemini thinking-config retries did not converge")
 
-    def generate_stream(self, model: str, contents, gen_config, client=None) -> Iterator[str]:
+    def generate_stream(self, model: str, request: LLMRequest, client=None) -> Iterator[str]:
         client = client or self.stream_pool[self.next_client_idx()]
+        contents, gen_config = self.to_genai(request)
         call_config = self._prep_config(client, model, gen_config)
         emitted = False
 

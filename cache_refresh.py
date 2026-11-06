@@ -3,37 +3,20 @@ and the watch runner so newly indexed papers are searchable everywhere.
 """
 
 import logging
-import threading
 
 logger = logging.getLogger(__name__)
 
 
-def _post_ingest_refresh(new_ids=None, new_texts=None):
-    """Refresh the BM25 index and invalidate retrieval/tool caches after an ingest.
+def _post_ingest_refresh():
+    """Invalidate retrieval/tool/LLM caches after an ingest or delete.
 
-    Pass the newly indexed chunks to fold them in incrementally. Without them this
-    falls back to dropping the whole index, which makes the FIRST query after any
-    ingest — including every scheduled watch digest — pay a full rebuild from
-    ChromaDB while holding the build lock, with every concurrent query queued
-    behind it. That is a recurring p99 cliff that grows with corpus size.
+    The BM25 index is NOT touched here: vector_store.add_documents folds new
+    chunks into it and delete_by_paper_id / delete_stale_chunks remove old ones,
+    since every chunk write and delete routes through those functions. Dropping
+    the index here (as this function used to, because no caller handed it the
+    new chunk ids) made the first query after every ingest — including every
+    scheduled watch digest — rebuild it from ChromaDB under the build lock.
     """
-    try:
-        import bm25_search
-        ids, texts = list(new_ids or []), list(new_texts or [])
-        # Misaligned lists mean the caller lost track of which text belongs to
-        # which chunk; rebuild from the collection instead of indexing garbage.
-        if ids and len(ids) == len(texts) and bm25_search.add_to_index(ids, texts):
-            logger.debug("BM25 index updated incrementally (+%d chunks)", len(ids))
-            # Re-persist off-thread: the in-memory index just moved ahead of the
-            # saved copy, and a stale file only costs a rebuild on next start.
-            threading.Thread(target=bm25_search.save_index, daemon=True).start()
-        else:
-            # Nothing handed over, or no index built yet: drop it and warm a new one
-            # off-thread so the next request doesn't eat the rebuild.
-            bm25_search.invalidate()
-            threading.Thread(target=bm25_search.get_or_build_index, daemon=True).start()
-    except Exception:
-        logger.warning("Failed to refresh BM25 index after ingestion", exc_info=True)
     try:
         from cache import llm_cache, retrieval_cache, tool_cache
         retrieval_cache.invalidate()

@@ -4,13 +4,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
+import contextvars
 from agent.state import AgentState
-from agent.tool_executor import TOOL_DISPATCH
+from agent import tool_registry
 from cache import tool_cache, make_key
 
 logger = logging.getLogger(__name__)
 
-_CACHEABLE_TOOLS = {"indicrag_retrieval", "arxiv_search", "open_access_search", "web_search"}
 # AGENT_MAX_SUB_QUERIES corpus calls + up to 2 external tool calls (arxiv/web/etc.).
 # Ties to the same knob so a per-checklist-item sub-query isn't truncated. Retrieval
 # reranking is CPU-bound, so concurrent calls thrash — the knob is the real latency lever.
@@ -19,12 +19,12 @@ _MAX_PARALLEL_TOOLS = config.AGENT_MAX_SUB_QUERIES + 2
 
 def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
     start = time.monotonic()
-    fn = TOOL_DISPATCH.get(name)
-    if fn is None:
+    tool = tool_registry.REGISTRY.get(name)
+    if tool is None:
         logger.warning(f"[ToolExecutor] Unknown tool: {name}")
         return name, args, {"passages": [], "error": f"Unknown tool: {name}"}, 0.0
 
-    cache_key = make_key(name, args) if name in _CACHEABLE_TOOLS else None
+    cache_key = make_key(name, args) if tool.cacheable else None
     result = tool_cache.get(cache_key) if cache_key else None
 
     if result is not None:
@@ -32,7 +32,7 @@ def _run_tool(name: str, args: dict) -> tuple[str, dict, dict, float]:
         logger.info(f"[ToolExecutor] {name} cache hit ({latency_ms:.0f}ms)")
     else:
         try:
-            result = fn(args)
+            result = tool_registry.run(name, args)
         except Exception as e:
             logger.error(f"[ToolExecutor] {name} failed: {e}", exc_info=True)
             result = {"passages": [], "error": str(e)}
@@ -121,7 +121,7 @@ def tool_executor_node(state: AgentState) -> dict:
     else:
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
             futures = {
-                pool.submit(_run_tool, call["name"], call.get("args", {})): call
+                pool.submit(contextvars.copy_context().run, _run_tool, call["name"], call.get("args", {})): call
                 for call in tool_calls
             }
             for future in as_completed(futures):

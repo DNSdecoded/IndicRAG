@@ -13,7 +13,8 @@ import time
 
 import config as _config
 import metrics
-from providers.base import LLMBackend
+import tracing
+from providers.base import LLMBackend, LLMRequest, LLMResponse, ToolCall, image_part, user_text  # noqa: F401 (re-exported)
 from providers.gemini import GeminiBackend
 from providers.openrouter import OpenRouterBackend
 
@@ -60,14 +61,12 @@ def _circuit_clear(key: tuple[str, str]) -> None:
         _circuit_failures.pop(key, None)
 
 
-def _record_usage(provider: str, model: str, response) -> None:
-    """Export token counts when the provider reports them (Gemini does)."""
-    usage = getattr(response, "usage_metadata", None)
-    if usage is None:
+def _record_usage(provider: str, model: str, response: LLMResponse) -> None:
+    """Export token counts when the provider reports them (both backends now can)."""
+    usage = getattr(response, "usage", None)
+    if not usage:
         return
-    metrics.record_tokens(provider, model,
-                          prompt=getattr(usage, "prompt_token_count", 0) or 0,
-                          completion=getattr(usage, "candidates_token_count", 0) or 0)
+    metrics.record_tokens(provider, model, prompt=usage.get("prompt", 0), completion=usage.get("completion", 0))
 
 # ponytail: legacy back-compat shim. Pool state now lives in GeminiBackend;
 # these module globals are unused by the dispatcher and exist only so
@@ -225,8 +224,14 @@ class DeadlineExceeded(RuntimeError):
     """No remaining budget for another failover attempt."""
 
 
-def generate_with_failover(model: str, contents, gen_config, provider: str | None = None,
-                           *, deadline: float | None = None):
+def _check_request(request) -> None:
+    # A caller still passing (contents, gen_config) must fail loudly, not reach a backend.
+    if not isinstance(request, LLMRequest):
+        raise TypeError(f"expected an LLMRequest, got {type(request).__name__}")
+
+
+def generate_with_failover(model: str, request: LLMRequest, provider: str | None = None,
+                           *, deadline: float | None = None) -> LLMResponse:
     """Try requested (provider, model), then same-provider then cross-provider
     fallback. Per-(provider,model) circuit breaker skips recently-dead paths.
 
@@ -243,9 +248,11 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
     what we start is the part that changes behaviour; true cancellation needs a
     request-scoped abort the SDKs do not currently expose.
     """
+    _check_request(request)
     provider = resolve_provider(model, provider)
     last_exc: Exception | None = None
     any_attempted = False
+    attempt = 0
 
     for prov, mdl in _attempts(model, provider):
         if deadline is not None:
@@ -265,11 +272,13 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
             continue
         backend = get_backend(prov)
         any_attempted = True
+        attempt += 1
         try:
             with metrics.stage("llm_generate"):
-                result = backend.generate(mdl, contents, gen_config)
+                result = backend.generate(mdl, request)
             _circuit_clear(key)
             _record_usage(prov, mdl, result)
+            tracing.note_llm(prov, mdl, getattr(result, "usage", None), attempt=attempt)
             return result
         except Exception as exc:
             last_exc = exc
@@ -284,7 +293,7 @@ def generate_with_failover(model: str, contents, gen_config, provider: str | Non
     raise last_exc  # type: ignore[misc]
 
 
-def generate_stream_with_failover(model: str, contents, gen_config,
+def generate_stream_with_failover(model: str, request: LLMRequest,
                                   provider: str | None = None, *,
                                   deadline: float | None = None):
     """Stream text chunks, failing over between paths ONLY before the first chunk.
@@ -297,6 +306,7 @@ def generate_stream_with_failover(model: str, contents, gen_config,
     Same deadline semantics as generate_with_failover: an attempt that cannot
     start in time is not started.
     """
+    _check_request(request)
     provider = resolve_provider(model, provider)
     last_exc: Exception | None = None
     any_attempted = False
@@ -315,12 +325,13 @@ def generate_stream_with_failover(model: str, contents, gen_config,
         emitted = False
         started = time.monotonic()
         try:
-            for chunk in backend.generate_stream(mdl, contents, gen_config):
+            for chunk in backend.generate_stream(mdl, request):
                 if not emitted:
                     metrics.stage_seconds.labels(stage="llm_ttft").observe(time.monotonic() - started)
                 emitted = True
                 yield chunk
             _circuit_clear(key)
+            tracing.note_llm(prov, mdl, stream=True)
             return
         except Exception as exc:
             if emitted:
@@ -341,53 +352,6 @@ def generate_stream_with_failover(model: str, contents, gen_config,
     raise last_exc  # type: ignore[misc]
 
 
-def thinking_config_for(scope: str = "standard"):
-    """ThinkingConfig for a call scope ("standard" or "agent"), or None to send nothing.
-
-    Prefers the Gemini 3.x thinking_level knob and falls back to the legacy
-    thinking_budget when the configured level is empty or the installed SDK has no
-    ThinkingLevel enum. Returning None means "omit the field", which lets the model
-    apply its own default — MEDIUM on gemini-3.6-flash, so it is a real choice, not
-    a neutral one.
-    """
-    from google.genai import types
-
-    level_name = (_config.AGENT_THINKING_LEVEL if scope == "agent"
-                  else _config.LLM_THINKING_LEVEL)
-    if level_name:
-        level = get_backend("gemini")._thinking_level(level_name)
-        if level is not None:
-            return types.ThinkingConfig(thinking_level=level)
-        logger.warning(
-            "Unknown thinking level %r for scope %s — falling back to thinking_budget",
-            level_name, scope,
-        )
-    budget = _config.AGENT_THINKING_BUDGET if scope == "agent" else 0
-    return types.ThinkingConfig(thinking_budget=budget)
-
-
-def _build_gemini_stream_config(model, max_tokens, system_instruction):
-    from google.genai import types
-    kwargs = dict(
-        temperature=_config.LLM_TEMPERATURE,
-        max_output_tokens=max_tokens,
-        safety_settings=_config.SAFETY_SETTINGS,
-        system_instruction=system_instruction or _config.SYSTEM_PROMPT,
-    )
-    if get_backend("gemini").supports_thinking(model):
-        kwargs["thinking_config"] = thinking_config_for("standard")
-    return types.GenerateContentConfig(**kwargs)
-
-
-def _build_openrouter_stream_config(max_tokens, system_instruction):
-    from google.genai import types
-    return types.GenerateContentConfig(
-        temperature=_config.LLM_TEMPERATURE,
-        max_output_tokens=max_tokens,
-        system_instruction=system_instruction or _config.SYSTEM_PROMPT,
-    )
-
-
 def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction: str = None,
                         model: str = None, provider: str | None = None):
     """Stream chunks with same-provider then cross-provider failover. Failover only
@@ -397,6 +361,10 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
     model = model or _config.LLM_MODEL_NAME
     provider = resolve_provider(model, provider)
 
+    # Safety and thinking only change anything on Gemini; other backends ignore them.
+    request = user_text(prompt, system=system_instruction or _config.SYSTEM_PROMPT,
+                        temperature=_config.LLM_TEMPERATURE, max_tokens=max_tokens,
+                        thinking="standard", safety=True)
     last_exc: Exception | None = None
     any_attempted = False
     for prov, mdl in _attempts(model, provider):
@@ -404,22 +372,19 @@ def llm_generate_stream(prompt: str, max_tokens: int = None, system_instruction:
         if _circuit_blocked(key):
             continue
         backend = get_backend(prov)
-        if prov == "gemini":
-            gen_config = _build_gemini_stream_config(mdl, max_tokens, system_instruction)
-        else:
-            gen_config = _build_openrouter_stream_config(max_tokens, system_instruction)
         any_attempted = True
         emitted = False
         chars = 0
         started = time.monotonic()
         try:
-            for chunk in backend.generate_stream(mdl, prompt, gen_config):
+            for chunk in backend.generate_stream(mdl, request):
                 if not emitted:
                     metrics.stage_seconds.labels(stage="llm_ttft").observe(time.monotonic() - started)
                 emitted = True
                 chars += len(chunk)
                 yield chunk
             _circuit_clear(key)
+            tracing.note_llm(prov, mdl, stream=True)
             return
         except Exception as exc:
             last_exc = exc

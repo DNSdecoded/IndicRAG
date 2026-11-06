@@ -164,10 +164,23 @@ def _m0003_metadata_cache(conn) -> None:
     )
 
 
+def _m0004_traces(conn) -> None:
+    """Per-answer research traces (v3 OBS-1): stage spans, the chunks used, the
+    model that actually served the answer after failover, and a reproducibility
+    stamp. Additive: v2.6 can still read a migrated database (§23)."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS traces ("
+        "trace_id TEXT PRIMARY KEY, kind TEXT, owner TEXT, created_at TEXT, data TEXT)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_owner ON traces(owner)")
+
+
 _MIGRATIONS = [
     ("0001_owner_and_lease_columns", _m0001_owner_and_lease_columns),
     ("0002_paper_index", _m0002_paper_index),
     ("0003_metadata_cache", _m0003_metadata_cache),
+    ("0004_traces", _m0004_traces),
 ]
 
 
@@ -831,6 +844,35 @@ def delete_watch(watch_id: str) -> None:
 # (deps._jobs) which prunes completed entries after 24h. A watch-owned "living
 # review" needs to survive indefinitely and be regenerated in place.
 # ---------------------------------------------------------------------------
+def save_trace(trace_id: str, kind: str, owner: str | None, created_at: str, data: dict) -> None:
+    with _db_lock:
+        _conn.execute(
+            "INSERT INTO traces (trace_id, kind, owner, created_at, data) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(trace_id) DO UPDATE SET kind=excluded.kind, owner=excluded.owner, "
+            "created_at=excluded.created_at, data=excluded.data",
+            (trace_id, kind, owner, created_at, json.dumps(data, ensure_ascii=False)),
+        )
+        _maybe_commit()
+
+
+def get_trace(trace_id: str, owner: str | None = None) -> dict | None:
+    """A trace, or None. With `owner`, only that owner's (same scoping as reports)."""
+    with _db_lock:
+        row = _conn.execute("SELECT kind, owner, created_at, data FROM traces WHERE trace_id = ?",
+                            (trace_id,)).fetchone()
+    if row is None or (owner is not None and row[1] != owner):
+        return None
+    return {"trace_id": trace_id, "kind": row[0], "owner": row[1], "created_at": row[2], **json.loads(row[3])}
+
+
+def prune_traces(older_than_iso: str) -> int:
+    """Remove traces created before `older_than_iso` (TRACE_RETENTION_DAYS)."""
+    with _db_lock:
+        n = _conn.execute("DELETE FROM traces WHERE created_at < ?", (older_than_iso,)).rowcount
+        _maybe_commit()
+    return n
+
+
 def save_report(report_id: str, watch_id: str, topic: str, language: str,
                 markdown: str, citation_count: int, created_at: str,
                 owner: str | None = None) -> None:

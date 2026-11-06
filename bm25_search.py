@@ -371,8 +371,8 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
     (and the lifespan warm-up pays it on every deploy).
     """
     global _indices
+    import vector_store   # lazy: vector_store imports this module
     if collection is None:
-        import vector_store
         collection = vector_store.get_or_create_collection()
     coll_name = getattr(collection, "name", "default")
 
@@ -383,21 +383,21 @@ def get_or_build_index(collection=None) -> Optional[BM25Index]:
         if coll_name in _indices:
             return _indices[coll_name]
 
-        count = collection.count()
+        count = vector_store.count(collection, timeout=None)
         if count == 0:
             return None
 
         if config.BM25_PERSIST:
             # ids only — no text payload, so this stays far cheaper than the
             # rebuild it is deciding whether to skip.
-            live_ids = collection.get(include=[]).get("ids", [])
+            live_ids = vector_store.get_chunks(collection, include=[], timeout=None).get("ids", [])
             cached = _load_cached(coll_name, live_ids)
             if cached is not None:
                 _indices[coll_name] = cached
                 return cached
 
         logger.info(f"Building BM25 index for '{coll_name}' from {count} documents...")
-        all_docs = collection.get(include=["documents"])
+        all_docs = vector_store.get_chunks(collection, include=["documents"], timeout=None)
         idx = BM25Index()
         idx.build(all_docs["ids"], all_docs["documents"])
         _indices[coll_name] = idx

@@ -2,6 +2,8 @@
 import logging
 import re
 import threading
+import unicodedata
+from decimal import Decimal
 import numpy as np
 import torch
 from typing import List
@@ -42,6 +44,20 @@ def _load():
 
 
 _CITE_ONLY_RE = re.compile(r'^(\[(?:\d+|NOT FOUND[^\]]*)\]\s*)+$')
+# \d matches any Unicode digit, so Devanagari/Tamil/... numerals are caught too.
+_NUMBER_RE = re.compile(r'(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?')
+
+
+def numbers(text: str) -> set[str]:
+    """Numbers in `text`, normalised so equal values compare equal:
+    Indic digits → ASCII, thousands commas dropped, trailing zeros dropped
+    ("28.120" == "28.12", "1,200" == "1200", "२८" == "28")."""
+    out = set()
+    for raw in _NUMBER_RE.findall(text):
+        ascii_num = "".join(str(unicodedata.digit(ch)) if ch.isdigit() else ch
+                            for ch in raw.replace(",", ""))
+        out.add(format(Decimal(ascii_num).normalize(), "f"))
+    return out
 
 
 def _paper_chunk_map(chunks: List[str], metadatas):
@@ -121,6 +137,19 @@ def check_claims(answer: str, chunks: List[str], metadatas=None) -> List[dict]:
         clean_sent = re.sub(r'\[(?:\d+|NOT FOUND[^\]]*)\]', '', sent).strip()
         if not clean_sent:
             continue
+        if config.VERIFY_NUMERIC_GATE:
+            # Against every chunk of the cited papers, not the NLI-capped subset:
+            # the number may sit in a lower-ranked chunk of the right paper.
+            cited_text_numbers = set().union(
+                *(numbers(text) for n in cited_nums for _, text in num_to_chunks.get(n, [])))
+            missing = numbers(clean_sent) - cited_text_numbers
+            if missing:
+                results.append({
+                    "claim": sent, "support": 0.0, "grounded": False,
+                    "supporting_chunk": "", "supporting_chunk_index": cited_chunks[0][0],
+                    "reason": f"numbers not found in cited sources: {', '.join(sorted(missing))}",
+                })
+                continue
         # cited_chunks holds (original_index, chunk_text) pairs from
         # _paper_chunk_map. The NLI model takes plain strings as the premise —
         # passing the tuple raises "Unsupported input type: tuple" and takes the

@@ -1,4 +1,5 @@
 import llm_client
+from providers.base import user_text
 
 
 def test_resolve_provider_by_model_shape():
@@ -19,7 +20,7 @@ def test_generate_with_failover_routes_to_gemini(monkeypatch):
 
     class FakeGemini:
         name = "gemini"
-        def generate(self, model, contents, gen_config, client=None):
+        def generate(self, model, request, client=None):
             calls["model"] = model
             return "GEMINI_RESP"
         def is_permanent(self, e): return False
@@ -27,7 +28,7 @@ def test_generate_with_failover_routes_to_gemini(monkeypatch):
 
     monkeypatch.setattr(llm_client, "_backends", {"gemini": FakeGemini()})
     monkeypatch.setattr(llm_client, "get_backend", lambda p: llm_client._backends[p])
-    out = llm_client.generate_with_failover("gemini-3.5-flash", "q", object())
+    out = llm_client.generate_with_failover("gemini-3.5-flash", user_text("q"))
     assert out == "GEMINI_RESP"
     assert calls["model"] == "gemini-3.5-flash"
 
@@ -41,7 +42,7 @@ def test_cross_provider_failover(monkeypatch):
 
     class OkOpenRouter:
         name = "openrouter"
-        def generate(self, model, contents, gen_config): return "OR_RESP"
+        def generate(self, model, request): return "OR_RESP"
         def is_permanent(self, e): return False
         def is_transient(self, e): return True
 
@@ -51,7 +52,7 @@ def test_cross_provider_failover(monkeypatch):
     monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
     monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")  # skip same-provider fallback
     llm_client._circuit_breaker.clear()
-    out = llm_client.generate_with_failover("gemini-3.5-flash", "q", object())
+    out = llm_client.generate_with_failover("gemini-3.5-flash", user_text("q"))
     assert out == "OR_RESP"
 
 
@@ -107,7 +108,7 @@ def test_deadline_already_passed_starts_no_attempt(monkeypatch):
     _fake_backends(monkeypatch, NeverCalled())
 
     with pytest.raises(llm_client.DeadlineExceeded):
-        llm_client.generate_with_failover("gemini-3.5-flash", "q", object(),
+        llm_client.generate_with_failover("gemini-3.5-flash", user_text("q"),
                                           deadline=time.monotonic() - 1)
 
 
@@ -140,7 +141,7 @@ def test_deadline_stops_the_chain_and_reraises_the_real_error(monkeypatch):
     monkeypatch.setattr(llm_client.time, "monotonic", lambda: next(ticks, 15.0))
 
     with pytest.raises(Exception) as excinfo:
-        llm_client.generate_with_failover("gemini-3.5-flash", "q", object(), deadline=25.0)
+        llm_client.generate_with_failover("gemini-3.5-flash", user_text("q"), deadline=25.0)
     assert "503 UNAVAILABLE" in str(excinfo.value)
 
 
@@ -161,7 +162,7 @@ def test_no_deadline_keeps_the_old_behaviour(monkeypatch):
     monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_PROVIDER", "openrouter")
     monkeypatch.setattr(llm_client._config, "LLM_FALLBACK_MODEL", "")
 
-    assert llm_client.generate_with_failover("gemini-3.5-flash", "q", object()) == "OR_RESP"
+    assert llm_client.generate_with_failover("gemini-3.5-flash", user_text("q")) == "OR_RESP"
 
 
 # ── circuit threshold ───────────────────────────────────────────────────────
@@ -173,7 +174,7 @@ def test_one_blip_does_not_open_the_circuit_but_three_in_a_row_do(monkeypatch):
 
     class Flaky:
         name = "gemini"
-        def generate(self, model, contents, gen_config):
+        def generate(self, model, request):
             calls.append(model)
             raise Exception("503 UNAVAILABLE")
         def is_permanent(self, e): return False
@@ -181,7 +182,7 @@ def test_one_blip_does_not_open_the_circuit_but_three_in_a_row_do(monkeypatch):
 
     class Ok:
         name = "openrouter"
-        def generate(self, model, contents, gen_config): return "OR_RESP"
+        def generate(self, model, request): return "OR_RESP"
         def is_permanent(self, e): return False
         def is_transient(self, e): return True
 
@@ -192,7 +193,7 @@ def test_one_blip_does_not_open_the_circuit_but_three_in_a_row_do(monkeypatch):
 
     for attempt in range(1, llm_client._CIRCUIT_TRIP_AFTER + 1):
         assert not llm_client._circuit_blocked(key), f"open after {attempt - 1} failure(s)"
-        assert llm_client.generate_with_failover("gemini-3.5-flash", "q", object()) == "OR_RESP"
+        assert llm_client.generate_with_failover("gemini-3.5-flash", user_text("q")) == "OR_RESP"
     assert llm_client._circuit_blocked(key)
     assert len(calls) == llm_client._CIRCUIT_TRIP_AFTER
 
@@ -277,10 +278,9 @@ def test_prefixed_primary_never_sends_its_model_to_gemini(monkeypatch):
 
 def test_openai_uses_max_completion_tokens():
     from providers.openrouter import OpenRouterBackend
-    from google.genai import types
-    cfg = types.GenerateContentConfig(max_output_tokens=50)
-    assert "max_completion_tokens" in OpenRouterBackend("openai", "u", "k")._params("m", "hi", cfg, False)
-    assert "max_tokens" in OpenRouterBackend("nvidia", "u", "k")._params("m", "hi", cfg, False)
+    req = user_text("hi", max_tokens=50)
+    assert "max_completion_tokens" in OpenRouterBackend("openai", "u", "k")._params("m", req, False)
+    assert "max_tokens" in OpenRouterBackend("nvidia", "u", "k")._params("m", req, False)
 
 
 def test_rpm_limiter_caps_requests_then_raises(monkeypatch):

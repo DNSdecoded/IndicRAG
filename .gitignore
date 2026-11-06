@@ -107,3 +107,11 @@ backups/
 
 # Local RAG test queries
 docs/RAG_TEST_QUERIES.md
+
+# Local v3 planning docs
+docs/superpowers/plans/2026-10-03-indicrag-v3-master-plan.md
+docs/superpowers/plans/2026-11-06-v3-paper-feasibility-review.md
+
+# Eval fixture PDFs: fetched by docs/Eval/fixtures/fetch.py, pinned in manifest.json
+docs/Eval/fixtures/pdfs/
+docs/Eval/.fixture_index/

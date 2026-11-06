@@ -38,6 +38,10 @@ jobs:
         # external boundary, and everything on our side of it is real.
         run: pytest -q -m "integration and not network" tests/integration
 
+      - name: Eval harness self-tests
+        # testpaths is tests/, so docs/Eval's own tests never ran in CI before.
+        run: pytest -q docs/Eval
+
       - name: Eval gate
         # --grounding-judge jaccard (the default) is CI-safe: it scores the
         # already-committed answers_and_citations.json, no LLM/API key needed.
@@ -45,3 +49,47 @@ jobs:
         # on a real regression without being toothless.
         working-directory: docs/Eval
         run: python evaluate.py --ci --threshold 0.85
+
+  live-gate:
+    # P0-EVL-1: score the LIVE pipeline on a checksum-pinned fixture corpus, so the
+    # gate can never again grade a corpus that is not indexed. The snapshot "Eval
+    # gate" above stays until this job has two green weeks (rollback rule).
+    runs-on: ubuntu-latest
+    # Cold rebuild of the 41-paper index on a 2-core runner; warm runs reuse the cache.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        # Same unpinned install as the test job; a hash-locked requirements file is a
+        # separate change. --only-binary is not possible: langdetect ships no wheel.
+        run: |
+          python -m pip install --upgrade pip  # NOSONAR S8541,S8544: accepted, see comment above
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt  # NOSONAR S8541,S8544: accepted, see comment above
+      - name: Cache models (BGE-M3, reranker, ONNX exports)
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ hashFiles('config.py', 'onnx_ce.py') }}
+          restore-keys: models-
+      - name: Cache fixture PDFs
+        uses: actions/cache@v4
+        with:
+          path: docs/Eval/fixtures/pdfs
+          key: fixtures-${{ hashFiles('docs/Eval/fixtures/manifest.json') }}
+      - name: Cache fixture index
+        # live_gate.py also names the index dir by fixture checksum + embed model +
+        # CHUNKER_VERSION; keying on the chunking code catches a change made without a bump.
+        uses: actions/cache@v4
+        with:
+          path: docs/Eval/.fixture_index
+          key: fixture-index-${{ hashFiles('docs/Eval/fixtures/manifest.json', 'pdf_utils.py', 'ingest.py', 'vector_store.py', 'embeddings.py', 'bm25_search.py') }}
+      - name: Fetch and verify fixtures
+        run: python docs/Eval/fixtures/fetch.py
+      - name: Live retrieval gate (paired bootstrap vs docs/Eval/baselines/fixture_v1.json)
+        run: python docs/Eval/live_gate.py

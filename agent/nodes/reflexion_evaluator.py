@@ -1,7 +1,6 @@
 import logging
 import time
 
-from google.genai import types
 
 import rag
 import config
@@ -167,12 +166,12 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
         )
         resp = rag.generate_with_failover(
             model=_model,
-            contents=_completeness_prompt,
-            gen_config=types.GenerateContentConfig(
+            request=llm_client.user_text(
+                _completeness_prompt,
                 temperature=0,
-                max_output_tokens=1024,
+                max_tokens=1024,
                 # JSON completeness verdict — thinking off by default (config knob).
-                thinking_config=llm_client.thinking_config_for("agent"),
+                thinking="agent",
             ),
             provider=_provider,
             # The reserve check above proved there is room to evaluate; this stops
@@ -186,10 +185,10 @@ def reflexion_evaluator_node(state: AgentState) -> dict:
 
         def _gemini_retry(p, s):
             r = rag.generate_with_failover(
-                model=config.LLM_MODEL_NAME, contents=p,
-                gen_config=types.GenerateContentConfig(
-                    temperature=0, max_output_tokens=1024, system_instruction=s,
-                    thinking_config=llm_client.thinking_config_for("agent"),
+                model=config.LLM_MODEL_NAME, request=llm_client.user_text(
+                    p,
+                    temperature=0, max_tokens=1024, system=s,
+                    thinking="agent",
                 ),
                 provider="gemini",
                 deadline=eval_deadline,

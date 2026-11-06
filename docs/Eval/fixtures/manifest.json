@@ -1,0 +1,375 @@
+{
+  "_about": "IndicRAG eval fixture corpus (master plan §16.1). CC BY 4.0 arXiv papers, pinned by exact version and sha256. PDFs are downloaded by fetch.py, never committed; paper_id at ingest = the file stem (the arXiv id). v2 (2026-11-06): 27 CC BY/CC0 near-neighbour distractors added; at 14 papers the suite saturated and a dense-only regression passed the gate.",
+  "version": 2,
+  "papers": [
+    {
+      "id": "2608.23469v1",
+      "title": "Machine Learning Assisted Inverse Design of Pixelated mmWave Patch Antennas",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2608.23469v1",
+      "sha256": "8773e8c20f42fd5020c70d789362b922f957e746c1552c95fc3d9927cc0bf62f",
+      "bytes": 844852,
+      "file": "2608.23469v1.pdf"
+    },
+    {
+      "id": "2603.03802v1",
+      "title": "Unsupervised Surrogate-Assisted Synthesis of Free-Form Planar Antenna Topologies for IoT Applications",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2603.03802v1",
+      "sha256": "c006f19d74aa3fd0bb05a5dde58936f7edc97fb1da465b83699c7df8a751abc7",
+      "bytes": 1784924,
+      "file": "2603.03802v1.pdf"
+    },
+    {
+      "id": "2603.03810v1",
+      "title": "A Bi-Stage Framework for Automatic Development of Pixel-Based Planar Antenna Structures",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2603.03810v1",
+      "sha256": "b721150bf5212274377e26fb0dd7882b0c04f1b0d0ce7368f42b0dba806d67c4",
+      "bytes": 531495,
+      "file": "2603.03810v1.pdf"
+    },
+    {
+      "id": "2011.12131v1",
+      "title": "A Reusable Framework Based on Reinforcement Learning to Design Antennas for Curved Surfaces",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2011.12131v1",
+      "sha256": "dff8c786103c951c9a9e7f6cb63538119771c62ae46737a0b15f5e02ccd2b108",
+      "bytes": 472511,
+      "file": "2011.12131v1.pdf"
+    },
+    {
+      "id": "2010.05842v2",
+      "title": "Remote Electrical Tilt Optimization via Safe Reinforcement Learning",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2010.05842v2",
+      "sha256": "735c061cdb2f64ddb463811a810db1989c449e60343bf0364ce9a21931e5983b",
+      "bytes": 5183737,
+      "file": "2010.05842v2.pdf"
+    },
+    {
+      "id": "2105.08508v2",
+      "title": "A deep learning approach for inverse design of the metasurface for dual-polarized waves",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2105.08508v2",
+      "sha256": "6f430f06408995b1e4fe99f8196f93e8243fbb57b7dd970a67f7d903c8ac7c98",
+      "bytes": 1647939,
+      "file": "2105.08508v2.pdf"
+    },
+    {
+      "id": "2405.17616v1",
+      "title": "Design of a Rectangular Linear Microstrip Patch Antenna Array for 5G Communication",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2405.17616v1",
+      "sha256": "861cc650054be583d342129d1178485bdf14f05eb40fe753d5ba1a0fed344bdc",
+      "bytes": 306301,
+      "file": "2405.17616v1.pdf"
+    },
+    {
+      "id": "2410.02474v2",
+      "title": "Automating the Design of Multi-band Microstrip Antennas via Uniform Cross-Entropy Optimization",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2410.02474v2",
+      "sha256": "48c9412acd472c1554ed478c1eaa0e0cf40b65aae77c1e3ebe92a05f1b97938a",
+      "bytes": 854523,
+      "file": "2410.02474v2.pdf"
+    },
+    {
+      "id": "2407.09944v2",
+      "title": "High Performance 5G FR-2 Millimeter-Wave Antenna Array for Point-to-Point and Point-to-Multipoint Operation: Design and OTA Measurements Using a Compact Antenna Test Range",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2407.09944v2",
+      "sha256": "5936c634ed9e2c080b0e38f0c36af190e08ded8b3c9ef343c8ac25983163d891",
+      "bytes": 1817151,
+      "file": "2407.09944v2.pdf"
+    },
+    {
+      "id": "2503.00420v1",
+      "title": "A physics-informed Bayesian optimization method for rapid development of electrical machines",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2503.00420v1",
+      "sha256": "c28ea539b4bc0e169b194de9701eaaf61c9f290ba34966c91066cdf01d77c0fd",
+      "bytes": 1455283,
+      "file": "2503.00420v1.pdf"
+    },
+    {
+      "id": "2511.15125v1",
+      "title": "Efficient RF Passive Components Modeling with Bayesian Online Learning and Uncertainty Aware Sampling",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2511.15125v1",
+      "sha256": "4beb8c01e7b37c3282c6b235f9850a4bea90056af8aa7466300018040fd3475b",
+      "bytes": 2945561,
+      "file": "2511.15125v1.pdf"
+    },
+    {
+      "id": "2202.04041v2",
+      "title": "Physics-informed neural networks for solving parametric magnetostatic problems",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2202.04041v2",
+      "sha256": "0433ba00e3a827c116ba0729db2f395925a47d0c927462ee9ff459221b50696f",
+      "bytes": 8894886,
+      "file": "2202.04041v2.pdf"
+    },
+    {
+      "id": "2601.18638v1",
+      "title": "Physics-Informed Uncertainty Enables Reliable AI-driven Design",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2601.18638v1",
+      "sha256": "a29baf76a0b9ae11d4edf4230832f8d7ba3315cfdf6bd7b559dcb8ddd9ab7a14",
+      "bytes": 2715171,
+      "file": "2601.18638v1.pdf"
+    },
+    {
+      "id": "2407.15877v1",
+      "title": "Gaussian Process Model with Tensorial Inputs and Its Application to the Design of 3D Printed Antennas",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2407.15877v1",
+      "sha256": "deb6b211d2cdd1e92e4999f00139cbb514e5b531bb8ddd2b912a96bfdd64ce2c",
+      "bytes": 2490769,
+      "file": "2407.15877v1.pdf"
+    },
+    {
+      "id": "2101.10866v1",
+      "title": "Deep neural network-based automatic metasurface design with a wide frequency range",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2101.10866v1",
+      "sha256": "508bad48a5febada19cf58b7664ea3e7666b0626bead5990092335d3fd00a7a0",
+      "bytes": 4717790,
+      "file": "2101.10866v1.pdf"
+    },
+    {
+      "id": "2205.06011v2",
+      "title": "Mobility-Aware Resource Allocation for mmWave IAB Networks: A Multi-Agent Reinforcement Learning Approach",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2205.06011v2",
+      "sha256": "c7d7f0a74f634cb7c14db0f35c96fcc10dd8f03a1287e6b004b11f65f71ea8c5",
+      "bytes": 3575159,
+      "file": "2205.06011v2.pdf"
+    },
+    {
+      "id": "2209.03438v1",
+      "title": "SmOOD: Smoothness-based Out-of-Distribution Detection Approach for Surrogate Neural Networks in Aircraft Design",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2209.03438v1",
+      "sha256": "9b517ea4d0ed45e26378901478a881231f5d6ec901f70d89dcce1be6fc87273d",
+      "bytes": 989745,
+      "file": "2209.03438v1.pdf"
+    },
+    {
+      "id": "2301.02747v3",
+      "title": "Sample-efficient Surrogate Model for Frequency Response of Linear PDEs using Self-Attentive Complex Polynomials",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2301.02747v3",
+      "sha256": "17c291cb9eddd468f2740b9263d192dee030ed616134f8b6e129f60c0ca8a816",
+      "bytes": 3232158,
+      "file": "2301.02747v3.pdf"
+    },
+    {
+      "id": "2302.01199v1",
+      "title": "Multi-agent Reinforcement Learning with Graph Q-Networks for Antenna Tuning",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2302.01199v1",
+      "sha256": "45747312502d444cd5dbbf01bd54291d6819e184e51eab9a76cebfe72601d2c4",
+      "bytes": 948419,
+      "file": "2302.01199v1.pdf"
+    },
+    {
+      "id": "2302.12899v2",
+      "title": "Multi-Agent Reinforcement Learning with Common Policy for Antenna Tilt Optimization",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2302.12899v2",
+      "sha256": "034bf9a90680c236aa3c89fb8aa3971bb74b7c6e01db4169457ebe75be06b368",
+      "bytes": 1386260,
+      "file": "2302.12899v2.pdf"
+    },
+    {
+      "id": "2402.06575v1",
+      "title": "Modeling Microstrip Antenna",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2402.06575v1",
+      "sha256": "f74790581495c6ed088fb47bb4ab3bc29311b456bba4415a3323aaf27cf471e9",
+      "bytes": 1045327,
+      "file": "2402.06575v1.pdf"
+    },
+    {
+      "id": "2404.14984v1",
+      "title": "Surface profile recovery from electromagnetic field with physics--informed neural networks",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2404.14984v1",
+      "sha256": "28d709d50d056b6bb5467acd88b1afbd1aa842f50ad611969578c9ad9326a5dc",
+      "bytes": 1352566,
+      "file": "2404.14984v1.pdf"
+    },
+    {
+      "id": "2405.02131v2",
+      "title": "Physics-informed generative neural networks for RF propagation prediction with application to indoor body perception",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2405.02131v2",
+      "sha256": "7895319442faa15d316ba32b05ecb2374510a505892155bad2d932818e63324b",
+      "bytes": 2736801,
+      "file": "2405.02131v2.pdf"
+    },
+    {
+      "id": "2405.04056v1",
+      "title": "Bidirectional Adversarial Autoencoders for the design of Plasmonic Metasurfaces",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2405.04056v1",
+      "sha256": "385bf487206cebe8499c0817bfff376d8a4de023cb80961991e5b93c52e73fad",
+      "bytes": 1714587,
+      "file": "2405.04056v1.pdf"
+    },
+    {
+      "id": "2406.04380v1",
+      "title": "Physics-Informed Neural Networks for the Numerical Modeling of Steady-State and Transient Electromagnetic Problems with Discontinuous Media",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2406.04380v1",
+      "sha256": "d1c2eefb78fc39f4320ef847a33db3d24d015392610d8d4134cff401cb1f6e3e",
+      "bytes": 2938248,
+      "file": "2406.04380v1.pdf"
+    },
+    {
+      "id": "2406.14995v2",
+      "title": "Differentiable and Learnable Wireless Simulation with Geometric Transformers",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2406.14995v2",
+      "sha256": "6c60e162f4de8a7523626730e3c1725c8d730c56dbe445712656cd6710d22201",
+      "bytes": 2591602,
+      "file": "2406.14995v2.pdf"
+    },
+    {
+      "id": "2407.20833v1",
+      "title": "Approximating electromagnetic fields in discontinuous media using a single physics-informed neural network",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2407.20833v1",
+      "sha256": "d4aa1447dbd386de74378c5bac55457023a5904ffc84bbeaf02e661cc353d12a",
+      "bytes": 2360447,
+      "file": "2407.20833v1.pdf"
+    },
+    {
+      "id": "2408.03450v1",
+      "title": "Probabilistic Surrogate Model for Accelerating the Design of Electric Vehicle Battery Enclosures for Crash Performance",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2408.03450v1",
+      "sha256": "3b1633f26d4e330f489d7845dd580eb9db22cb9cecf986ceacba6e24c684cca0",
+      "bytes": 1858489,
+      "file": "2408.03450v1.pdf"
+    },
+    {
+      "id": "2412.17414v1",
+      "title": "Spatio-Temporal Electromagnetic Kernel Learning for Channel Prediction",
+      "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+      "url": "https://arxiv.org/pdf/2412.17414v1",
+      "sha256": "422b705d93c1e285d4b11335032161cfcaf735728441268e0c1ff348b9113dc3",
+      "bytes": 747981,
+      "file": "2412.17414v1.pdf"
+    },
+    {
+      "id": "2506.20987v1",
+      "title": "Optimal Parameter Design for Power Electronic Converters Using a Probabilistic Learning-Based Stochastic Surrogate Model",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2506.20987v1",
+      "sha256": "07976a4fc943934b5c36f95f3ed2bcccb90d060475eb65b240a031d08244de12",
+      "bytes": 1385626,
+      "file": "2506.20987v1.pdf"
+    },
+    {
+      "id": "2507.04153v1",
+      "title": "Physics-informed neural networks and neural operators for a study of EUV electromagnetic wave diffraction from a lithography mask",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2507.04153v1",
+      "sha256": "640039278cdceebd17c48ba99bf493e2a392edd242f851a79e7cb3a24ff3ec9d",
+      "bytes": 1943918,
+      "file": "2507.04153v1.pdf"
+    },
+    {
+      "id": "2508.10713v1",
+      "title": "Electromagnetic Simulations of Antennas on GPUs for Machine Learning Applications",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2508.10713v1",
+      "sha256": "6c8fbc4f1bea735ad489f6547fffa179b37b50ef5d972100fc1567134a6547eb",
+      "bytes": 1570531,
+      "file": "2508.10713v1.pdf"
+    },
+    {
+      "id": "2511.04576v3",
+      "title": "Physics-Informed Neural Networks and Neural Operators for Parametric PDEs",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2511.04576v3",
+      "sha256": "d077044279640fab006c264aa9de28bd8e8e32509c6c4b9025ac6908c36061b5",
+      "bytes": 1483439,
+      "file": "2511.04576v3.pdf"
+    },
+    {
+      "id": "2602.09037v4",
+      "title": "Inverse Design of Three-Dimensional Microwave Cavities for Optimizing Electromagnetic Helicity",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2602.09037v4",
+      "sha256": "706a50eea1901e7f93aa23148526853f8e045d5195ba1d8a1c721c3ca78572bd",
+      "bytes": 16125918,
+      "file": "2602.09037v4.pdf"
+    },
+    {
+      "id": "2602.19082v1",
+      "title": "Physics-Informed Graph Neural Network for Inverse Design of Integrated Photonic Biosensors",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2602.19082v1",
+      "sha256": "e2e6624beaf3dfb300da4e2038eb3698ec5e67980a025985d2c5d0f2efc178c3",
+      "bytes": 1762226,
+      "file": "2602.19082v1.pdf"
+    },
+    {
+      "id": "2603.15584v2",
+      "title": "Physics-Informed Neural Systems for the Simulation of EUV Electromagnetic Wave Diffraction from a Lithography Mask",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2603.15584v2",
+      "sha256": "cb27f1b834e82567ff6006907df9220c3e6ddc20844a7ad41e62863b37dbe76d",
+      "bytes": 10486662,
+      "file": "2603.15584v2.pdf"
+    },
+    {
+      "id": "2603.18026v1",
+      "title": "Physically Accurate Differentiable Inverse Rendering for Radio Frequency Digital Twin",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2603.18026v1",
+      "sha256": "d2839e82c565fbd7e64bccfcb32327cb8b0ab652e5fe9fbc176ec55259d34c6d",
+      "bytes": 14999067,
+      "file": "2603.18026v1.pdf"
+    },
+    {
+      "id": "2605.01631v1",
+      "title": "A Wideband Narrow Beam 1x6 Linear Antenna Array for Automotive Radar and 5G Millimetre-Wave Applications",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2605.01631v1",
+      "sha256": "23c3f4c5a11a5c13cb3ff36f170c55f591a12fd2889fa5fa1838f6c3f453ecce",
+      "bytes": 505059,
+      "file": "2605.01631v1.pdf"
+    },
+    {
+      "id": "2606.00977v1",
+      "title": "Electromagnetic Digital Twin-Enabled Closed-Loop Beam Management in ISAC Systems",
+      "license": "http://creativecommons.org/publicdomain/zero/1.0/",
+      "url": "https://arxiv.org/pdf/2606.00977v1",
+      "sha256": "5f9fd0656f3609605401eef667379be9cd07fbf072b88b226fb28f5cf5676503",
+      "bytes": 3989197,
+      "file": "2606.00977v1.pdf"
+    },
+    {
+      "id": "2606.13245v1",
+      "title": "REMAL: Residual Equilibrium Manifold Active Learning for Surrogate-Based Multidisciplinary Design Analysis",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2606.13245v1",
+      "sha256": "0b3e7a83fdc43f3d23a7c1f164be6db7002a9a0b85ea8f7bfc65337f81d9fe14",
+      "bytes": 1859400,
+      "file": "2606.13245v1.pdf"
+    },
+    {
+      "id": "2607.27349v1",
+      "title": "Physics-Informed Neural Networks for 2D Plane Wave Scattering in Arbitrary Dielectric Structures",
+      "license": "http://creativecommons.org/licenses/by/4.0/",
+      "url": "https://arxiv.org/pdf/2607.27349v1",
+      "sha256": "531e080cafaabe6ad03cdcbd7f9914a56d7d4bbf14d325683b7e7ef6de0d9d88",
+      "bytes": 3615592,
+      "file": "2607.27349v1.pdf"
+    }
+  ]
+}

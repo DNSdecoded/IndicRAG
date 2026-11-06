@@ -1,7 +1,7 @@
-from google.genai import types
+"""Agent tool schemas, in OpenAI function-tool form (JSON Schema parameters)."""
 
 FUNCTION_DECLARATIONS = [
-    types.FunctionDeclaration(
+    dict(
         name="indicrag_retrieval",
         description=(
             "Retrieve relevant passages from the indexed multilingual corpus using "
@@ -55,7 +55,7 @@ FUNCTION_DECLARATIONS = [
             "required": ["query"],
         },
     ),
-    types.FunctionDeclaration(
+    dict(
         name="web_search",
         description=(
             "Search the web for information not in the document corpus. "
@@ -73,7 +73,7 @@ FUNCTION_DECLARATIONS = [
             "required": ["query"],
         },
     ),
-    types.FunctionDeclaration(
+    dict(
         name="calculate",
         description=(
             "Evaluate a mathematical expression. Use ^ for exponentiation. "
@@ -90,7 +90,7 @@ FUNCTION_DECLARATIONS = [
             "required": ["expression"],
         },
     ),
-    types.FunctionDeclaration(
+    dict(
         name="execute_python",
         description=(
             "Execute Python code in a sandboxed environment for data analysis "
@@ -107,7 +107,7 @@ FUNCTION_DECLARATIONS = [
             "required": ["code"],
         },
     ),
-    types.FunctionDeclaration(
+    dict(
         name="arxiv_search",
         description=(
             "Search arXiv for scientific papers by topic, author, or ID. "
@@ -147,7 +147,7 @@ FUNCTION_DECLARATIONS = [
             "required": [],
         },
     ),
-    types.FunctionDeclaration(
+    dict(
         name="open_access_search",
         description=(
             "Search Semantic Scholar for open-access scientific papers across all disciplines. "
@@ -179,4 +179,3 @@ FUNCTION_DECLARATIONS = [
     ),
 ]
 
-TOOLS = types.Tool(function_declarations=FUNCTION_DECLARATIONS)

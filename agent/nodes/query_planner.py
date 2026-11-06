@@ -1,7 +1,6 @@
 import re
 import logging
 
-from google.genai import types
 
 import rag
 import config
@@ -102,13 +101,13 @@ def query_planner_node(state: AgentState) -> dict:
         _prompt = _DECOMPOSE_PROMPT.format(query=query, max_sq=_MAX_SUB_QUERIES)
         resp = rag.generate_with_failover(
             model=_model,
-            contents=_prompt,
-            gen_config=types.GenerateContentConfig(
+            request=llm_client.user_text(
+                _prompt,
                 temperature=0,
-                max_output_tokens=1024,
-                system_instruction=_DECOMPOSE_SYSTEM,
+                max_tokens=1024,
+                system=_DECOMPOSE_SYSTEM,
                 # Structured JSON decomposition — thinking off by default (config knob).
-                thinking_config=llm_client.thinking_config_for("agent"),
+                thinking="agent",
             ),
             provider=_provider,
         )
@@ -118,10 +117,10 @@ def query_planner_node(state: AgentState) -> dict:
 
         def _gemini_retry(p, s):
             r = rag.generate_with_failover(
-                model=config.LLM_MODEL_NAME, contents=p,
-                gen_config=types.GenerateContentConfig(
-                    temperature=0, max_output_tokens=1024, system_instruction=s,
-                    thinking_config=llm_client.thinking_config_for("agent"),
+                model=config.LLM_MODEL_NAME, request=llm_client.user_text(
+                    p,
+                    temperature=0, max_tokens=1024, system=s,
+                    thinking="agent",
                 ),
                 provider="gemini",
             )

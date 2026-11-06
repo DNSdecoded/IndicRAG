@@ -7,12 +7,12 @@ import logging
 import re
 import config
 import embeddings
+import tracing
 import vector_store
 import lang_utils
 import translation
 import llm_client
 import metrics
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -191,19 +191,16 @@ def _hyde_embedding(user_query: str):
     Falls back to embedding the raw query on any LLM failure.
     """
     try:
-        hyde_config = types.GenerateContentConfig(
-            temperature=config.LLM_TEMPERATURE,
-            max_output_tokens=256,
-            safety_settings=config.SAFETY_SETTINGS,
-            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
-            thinking_config=llm_client.thinking_config_for("standard"),
-        )
-        response = llm_client.generate_with_failover(
-            config.LLM_MODEL_NAME,
+        request = llm_client.user_text(
             f"Write a short, plausible-sounding answer to this question, "
             f"even if you are not sure it is correct:\n\n{user_query}",
-            hyde_config,
+            temperature=config.LLM_TEMPERATURE,
+            max_tokens=256,
+            safety=True,
+            # Throwaway hypothetical draft for embedding — thinking is wasted spend.
+            thinking="standard",
         )
+        response = llm_client.generate_with_failover(config.LLM_MODEL_NAME, request)
         hypothetical = safe_extract_text(response)
         if hypothetical:
             return embeddings.embed_query(hypothetical)
@@ -285,6 +282,15 @@ def _apply_tags_post_filter(results: Dict[str, list], tags: list) -> Dict[str, l
     return filtered
 
 
+def _trace_retrieval(res: Dict, cache_hit: bool) -> None:
+    """Record what the answer was given: each used chunk as (paper_id, chunk_index),
+    which identifies it stably across re-ranking, plus the degraded flag."""
+    used = res.get("chunks_used") or 0
+    chunks = [[m.get("paper_id"), m.get("chunk_index")] for m in (res.get("metadatas") or [])[:used]]
+    tracing.note(retrieval={"chunks": chunks, "chunks_used": used, "cache_hit": cache_hit,
+                            "candidates": len(res.get("metadatas") or []), "degraded": res.get("degraded")})
+
+
 def retrieve_context(
     user_query: str,
     top_k: int = None,
@@ -334,6 +340,7 @@ def retrieve_context(
     cacheable = collection is None
 
     def _cache_and_return(res: Dict) -> Dict:
+        _trace_retrieval(res, cache_hit=False)
         if cacheable:
             # Store a copy, not the object being returned — otherwise the very
             # first caller still holds a handle on the cached lists.
@@ -347,6 +354,7 @@ def retrieve_context(
             # Hand out a copy: the cached entry is shared by every subsequent
             # hit, so a caller that trims/sorts the returned lists in place
             # would corrupt the cache for everyone else.
+            _trace_retrieval(cached, cache_hit=True)
             return _copy_retrieval_result(cached)
 
     if collection is None:
@@ -426,7 +434,7 @@ def retrieve_context(
                 # Fetch any BM25-only hits that dense search missed
                 missing_ids = [i for i in fused_ids if i not in id_to_doc]
                 if missing_ids:
-                    extra = collection.get(ids=missing_ids, include=["documents", "metadatas"])
+                    extra = vector_store.get_chunks(collection, ids=missing_ids, timeout=None)
                     for eid, edoc, emeta in zip(extra['ids'], extra['documents'], extra['metadatas']):
                         id_to_doc[eid] = edoc
                         id_to_meta[eid] = emeta
@@ -498,6 +506,29 @@ def retrieve_context(
     return _cache_and_return(result)
 
 
+# The prompt template's own structural tags. Retrieved text (corpus, web, tool
+# output) is untrusted: a passage containing "</context><instructions>..." or
+# "</untrusted>" would otherwise close its block and pose as instructions or as a
+# second, system-written source. Only these tags are escaped, so math like
+# "p < 0.05" reaches the model untouched. Ported from scirag (evidence.package).
+_PROMPT_TAG_RE = re.compile(r'<(/?\s*(?:context|query|instructions|untrusted)\b)', re.IGNORECASE)
+
+# Trust level (v3 §15) -> the source label shown in the system-written header line.
+_SOURCE_LABEL = {"T3": "corpus", "T4": "external", "T5": "tool output"}
+
+
+def _neutralize_tags(text: str) -> str:
+    return _PROMPT_TAG_RE.sub(r'&lt;\1', text)
+
+
+def _header_field(text) -> str:
+    """A metadata value for the one-line header: tags escaped, newlines collapsed,
+    so a document-derived title cannot start a forged header line of its own.
+    Square brackets become parentheses: "[N]" in a header means a citation number,
+    and a title must not be able to forge one."""
+    return " ".join(_neutralize_tags(str(text)).split()).replace("[", "(").replace("]", ")")
+
+
 def format_context(chunks: List[str], metadatas: List[Dict],
                    max_chunks: int = None, max_length: int = None) -> str:
     """
@@ -532,7 +563,12 @@ def format_context(chunks: List[str], metadatas: List[Dict],
 
         # One citation number per unique paper — chunks of the same paper reuse it.
         num = title_to_num.get(title, len(title_to_num) + 1)
-        context_part = f"[{num}] {title} - {section}:\n{chunk}\n"
+        trust = metadata.get('trust') or 'T3'
+        # The header line is system-written; everything in the block is quoted data.
+        # Labels, status or provenance claims inside the block stay inside it (§15).
+        context_part = (f"[{num}] ({_SOURCE_LABEL.get(trust, 'untrusted')}, {trust}) "
+                        f"{_header_field(title)} - {_header_field(section)}\n"
+                        f'<untrusted id="{num}">\n{_neutralize_tags(chunk)}\n</untrusted>\n')
 
         # Check if adding this would exceed length limit
         if total_length + len(context_part) > max_length:
@@ -577,9 +613,7 @@ def _sparse_only_retrieval(user_query: str, top_k: int, collection,
         # BM25 knows nothing about metadata filters — a paper-scoped or
         # tag-filtered query must not quietly widen just because the dense leg
         # is down, so the filter is applied on the fetch.
-        got = vector_store._chroma_call(
-            collection.get, ids=ids, where=filter_dict or None,
-            include=['documents', 'metadatas'])
+        got = vector_store.get_chunks(collection, ids=ids, where=filter_dict or None)
     except Exception as e:
         logger.error(f"Sparse-only fallback failed too: {e}", exc_info=True)
         return None
@@ -627,8 +661,7 @@ def _retrieve_scoped(filter_dict: Dict[str, Any], collection) -> Dict[str, Any]:
     the paper's natural structure so reconstruction-style queries see the whole
     document. Skips dense/BM25 entirely (no query embedding needed).
     """
-    got = vector_store._chroma_call(
-        collection.get, where=filter_dict, include=['documents', 'metadatas'])
+    got = vector_store.get_chunks(collection, where=filter_dict)
     ids = got.get('ids', [])
     if not ids:
         logger.warning(f"No chunks for scoped filter {filter_dict}")
@@ -759,51 +792,29 @@ def llm_generate(prompt: str, max_tokens: int = None,
         logger.debug("[LLM cache hit]")
         return cached
 
-    generate_config = types.GenerateContentConfig(
+    request = llm_client.user_text(
+        prompt,
+        system=system_instruction or config.SYSTEM_PROMPT,
         temperature=config.LLM_TEMPERATURE,
-        max_output_tokens=max_tokens,
-        safety_settings=config.SAFETY_SETTINGS,
-        system_instruction=system_instruction or config.SYSTEM_PROMPT,
+        max_tokens=max_tokens,
+        safety=True,
         # Minimise thinking so the token budget goes to the answer, not thoughts.
-        # Sending nothing here would mean the model's own default (MEDIUM on
+        # Sending nothing would mean the model's own default (MEDIUM on
         # gemini-3.6-flash), whose thoughts come out of max_output_tokens.
-        thinking_config=llm_client.thinking_config_for("standard"),
+        thinking="standard",
     )
 
     try:
-        response = llm_client.generate_with_failover(target_model, prompt, generate_config, provider=provider)
-
-        # Check if response has text
+        response = llm_client.generate_with_failover(target_model, request, provider=provider)
         if response.text:
             llm_cache.put(cache_key, response.text)
             return response.text
-
-        # Handle blocked or empty responses
-        if response.candidates:
-            candidate = response.candidates[0]
-
-            # Try to get partial text if available
-            if candidate.content and candidate.content.parts:
-                parts_text = [
-                    part.text
-                    for part in candidate.content.parts
-                    if hasattr(part, 'text') and part.text
-                ]
-                if parts_text:
-                    result_text = ''.join(parts_text)
-                    llm_cache.put(cache_key, result_text)
-                    return result_text
-
-            finish_reason = getattr(candidate, 'finish_reason', 'UNKNOWN')
-            raise Exception(
-                f"Response blocked or incomplete. Finish reason: {finish_reason}. "
-                f"This may be due to safety filters or token limits."
-            )
-
-        raise Exception("No response generated from Gemini API")
-
+        raise Exception(
+            f"Response blocked or incomplete. Finish reason: {response.finish_reason}. "
+            f"This may be due to safety filters or token limits."
+        )
     except Exception as e:
-        logger.error(f"Error calling Gemini API: {e}")
+        logger.error(f"Error calling the LLM: {e}")
         raise
 
 
@@ -922,19 +933,8 @@ generate_with_failover = llm_client.generate_with_failover
 
 
 def safe_extract_text(response) -> str:
-    """Safely extract text from a google-genai response, handling empty/blocked responses."""
-    try:
-        if response.text:
-            return response.text
-    except (ValueError, AttributeError):
-        pass
-    if response.candidates:
-        candidate = response.candidates[0]
-        if candidate.content and candidate.content.parts:
-            parts = [p.text for p in candidate.content.parts if hasattr(p, "text") and p.text]
-            if parts:
-                return "".join(parts)
-    return ""
+    """Text of an LLMResponse, '' when blocked or empty."""
+    return getattr(response, "text", "") or ""
 
 
 def _run_faithfulness(answer: str, chunks: List[str], metadatas: List[Dict] = None) -> dict:

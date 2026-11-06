@@ -2,7 +2,23 @@ from types import SimpleNamespace
 
 import pytest
 
+import config
+from providers.base import user_text
 from providers.gemini import GeminiBackend
+
+
+def _ok():
+    """A raw google-genai reply carrying the text "ok"."""
+    return SimpleNamespace(candidates=[SimpleNamespace(
+        content=SimpleNamespace(parts=[SimpleNamespace(text="ok")]), finish_reason="STOP")],
+        usage_metadata=None)
+
+
+@pytest.fixture(autouse=True)
+def _no_configured_thinking_level(monkeypatch):
+    # A developer's .env may set a level; these tests choose the starting state.
+    monkeypatch.setattr(config, "LLM_THINKING_LEVEL", "")
+    monkeypatch.setattr(config, "AGENT_THINKING_LEVEL", "")
 
 
 class _FakeModels:
@@ -25,7 +41,7 @@ class _FakeModels:
 
     def generate_content(self, model, contents, config):
         self._check(config)
-        return SimpleNamespace(text="ok")
+        return _ok()
 
     def generate_content_stream(self, model, contents, config):
         self._check(config)
@@ -51,10 +67,7 @@ def _backend_with(models):
 
 @pytest.fixture
 def zero_budget_config():
-    from google.genai import types
-    return types.GenerateContentConfig(
-        max_output_tokens=16, thinking_config=types.ThinkingConfig(thinking_budget=0)
-    )
+    return user_text("q", max_tokens=16, thinking="off")   # an explicit thinking_budget=0
 
 
 def test_generate_retries_with_a_level_when_budget_rejected(zero_budget_config):
@@ -68,7 +81,7 @@ def test_generate_retries_with_a_level_when_budget_rejected(zero_budget_config):
 
     models = _FakeModels()
     b = _backend_with(models)
-    resp = b.generate("gemini-3.6-flash", "q", zero_budget_config, client=b._pool[0])
+    resp = b.generate("gemini-3.6-flash", zero_budget_config, client=b._pool[0])
     assert resp.text == "ok"
     assert models.calls == [0, None]                       # budget rejected, then not resent
     assert models.levels == [None, types.ThinkingLevel.MINIMAL]
@@ -81,22 +94,19 @@ def test_second_call_sends_the_level_without_retrying(zero_budget_config):
     models = _FakeModels()
     b = _backend_with(models)
     client = b._pool[0]
-    b.generate("gemini-3.6-flash", "q", zero_budget_config, client=client)
-    b.generate("gemini-3.6-flash", "q2", zero_budget_config, client=client)
+    b.generate("gemini-3.6-flash", zero_budget_config, client=client)
+    b.generate("gemini-3.6-flash", zero_budget_config, client=client)
     assert models.calls == [0, None, None]                 # no repeat of the failing call
     assert models.levels[-1] == types.ThinkingLevel.MINIMAL
 
 
-def test_dynamic_budget_translates_to_no_thinking_config():
+def test_dynamic_budget_translates_to_no_thinking_config(monkeypatch):
     """-1 means "model decides", which is exactly what omitting the field does."""
-    from google.genai import types
-
+    monkeypatch.setattr(config, "AGENT_THINKING_BUDGET", -1)
     models = _FakeModels()
     b = _backend_with(models)
-    cfg = types.GenerateContentConfig(
-        max_output_tokens=16, thinking_config=types.ThinkingConfig(thinking_budget=-1)
-    )
-    b.generate("gemini-3.6-flash", "q", cfg, client=b._pool[0])
+    cfg = user_text("q", max_tokens=16, thinking="agent")
+    b.generate("gemini-3.6-flash", cfg, client=b._pool[0])
     assert models.calls == [-1, None]
     assert models.levels == [None, None]
 
@@ -104,7 +114,7 @@ def test_dynamic_budget_translates_to_no_thinking_config():
 def test_stream_retries_before_any_token_emitted(zero_budget_config):
     models = _FakeModels(stream_chunks=("a", "b"))
     b = _backend_with(models)
-    out = "".join(b.generate_stream("gemini-3.6-flash", "q", zero_budget_config, client=b._pool[0]))
+    out = "".join(b.generate_stream("gemini-3.6-flash", zero_budget_config, client=b._pool[0]))
     assert out == "ab"
     assert models.calls == [0, None]
 
@@ -114,19 +124,18 @@ def test_stream_appends_truncation_note_on_max_tokens(zero_budget_config):
     models = _FakeModels(stream_chunks=("half an ans", "wer that stops"),
                          finish_reason="FinishReason.MAX_TOKENS")
     b = _backend_with(models)
-    out = "".join(b.generate_stream("gemini-3.5-flash", "q", zero_budget_config, client=b._pool[0]))
+    out = "".join(b.generate_stream("gemini-3.5-flash", zero_budget_config, client=b._pool[0]))
     assert out == "half an answer that stops" + TRUNCATION_NOTE
 
 
 def test_stream_stays_clean_when_model_finishes(zero_budget_config):
     models = _FakeModels(stream_chunks=("all ", "done"), finish_reason="FinishReason.STOP")
     b = _backend_with(models)
-    out = "".join(b.generate_stream("gemini-3.5-flash", "q", zero_budget_config, client=b._pool[0]))
+    out = "".join(b.generate_stream("gemini-3.5-flash", zero_budget_config, client=b._pool[0]))
     assert out == "all done"
 
 
 def test_other_invalid_argument_errors_still_propagate():
-    from google.genai import types
 
     class _AlwaysBad(_FakeModels):
         def generate_content(self, model, contents, config):
@@ -136,9 +145,9 @@ def test_other_invalid_argument_errors_still_propagate():
     models = _AlwaysBad()
     b = _backend_with(models)
     # No zero thinking budget → nothing to adapt, the error must surface.
-    cfg = types.GenerateContentConfig(max_output_tokens=16)
+    cfg = user_text("q", max_tokens=16)
     with pytest.raises(Exception, match="INVALID_ARGUMENT"):
-        b.generate("gemini-3.6-flash", "q", cfg, client=b._pool[0])
+        b.generate("gemini-3.6-flash", cfg, client=b._pool[0])
     assert b._zero_budget_rejected == set()
 
 
@@ -169,12 +178,9 @@ def test_supports_thinking_gates_gemma():
 # Thinking LEVEL rejection (gemini-3.7-flash refuses MINIMAL)
 # ---------------------------------------------------------------------------
 def _level_config(name="MINIMAL"):
-    from google.genai import types
-    return types.GenerateContentConfig(
-        max_output_tokens=32,
-        thinking_config=types.ThinkingConfig(
-            thinking_level=getattr(types.ThinkingLevel, name)),
-    )
+    # Read at generate() time; the autouse fixture restores it after the test.
+    config.LLM_THINKING_LEVEL = name
+    return user_text("q", max_tokens=32, thinking="standard")
 
 
 class _RejectsLevel:
@@ -193,11 +199,7 @@ class _RejectsLevel:
             raise RuntimeError(
                 "400 INVALID_ARGUMENT. Thinking level MINIMAL is not supported "
                 "for this model. Please retry with other thinking level.")
-        return types_ns(text="ok")
-
-
-def types_ns(**kw):
-    return type("R", (), kw)()
+        return _ok()
 
 
 def _fresh_backend():
@@ -209,7 +211,7 @@ def _fresh_backend():
 def test_unsupported_thinking_level_escalates_and_succeeds():
     b = _fresh_backend()
     client = _RejectsLevel()
-    out = b.generate("gemini-3.7-flash", "q", _level_config(), client=client)
+    out = b.generate("gemini-3.7-flash", _level_config(), client=client)
     assert out.text == "ok"
     # Retried one level UP, not down: a refused level means the model will not
     # think that little, so less thinking cannot succeed.
@@ -220,8 +222,8 @@ def test_the_rejection_is_remembered_so_only_one_call_pays_for_it():
     from providers.gemini import GeminiBackend
     b = _fresh_backend()
     client = _RejectsLevel()
-    b.generate("gemini-3.7-flash", "q", _level_config(), client=client)
-    b.generate("gemini-3.7-flash", "q2", _level_config(), client=client)
+    b.generate("gemini-3.7-flash", _level_config(), client=client)
+    b.generate("gemini-3.7-flash", _level_config(), client=client)
     # Second call skips MINIMAL entirely — three attempts total, not four.
     assert client.levels_seen == ["MINIMAL", "LOW", "LOW"]
     assert ("gemini-3.7-flash", "MINIMAL") in GeminiBackend._level_rejected
@@ -230,7 +232,6 @@ def test_the_rejection_is_remembered_so_only_one_call_pays_for_it():
 def test_a_budget_rejection_followed_by_a_level_rejection_keeps_climbing():
     """The two refusals chain: the budget translates to MINIMAL, and a model that
     also refuses MINIMAL must advance up the ladder rather than fail the call."""
-    from google.genai import types
     from providers.gemini import GeminiBackend
 
     class _RejectsBoth(_RejectsLevel):
@@ -245,9 +246,8 @@ def test_a_budget_rejection_followed_by_a_level_rejection_keeps_climbing():
     b = GeminiBackend()
     b._zero_budget_rejected = set()
     client = _RejectsBoth()
-    cfg = types.GenerateContentConfig(
-        max_output_tokens=16, thinking_config=types.ThinkingConfig(thinking_budget=0))
-    out = b.generate("gemini-3.7-flash", "q", cfg, client=client)
+    cfg = user_text("q", max_tokens=16, thinking="off")
+    out = b.generate("gemini-3.7-flash", cfg, client=client)
     assert out.text == "ok"
     assert client.levels_seen == ["BUDGET", "MINIMAL", "LOW"]
 
@@ -255,9 +255,9 @@ def test_a_budget_rejection_followed_by_a_level_rejection_keeps_climbing():
 def test_rejection_is_learned_per_model_not_globally():
     """3.6-flash accepts MINIMAL; 3.7 refusing it must not change 3.6's behavior."""
     b = _fresh_backend()
-    b.generate("gemini-3.7-flash", "q", _level_config(), client=_RejectsLevel())
+    b.generate("gemini-3.7-flash", _level_config(), client=_RejectsLevel())
     ok = _RejectsLevel(bad="NOTHING")
-    b.generate("gemini-3.6-flash", "q", _level_config(), client=ok)
+    b.generate("gemini-3.6-flash", _level_config(), client=ok)
     assert ok.levels_seen == ["MINIMAL"]
 
 
@@ -276,4 +276,4 @@ def test_an_unrelated_400_still_propagates():
     c = _OtherError()
     c.models = c
     with pytest.raises(RuntimeError, match="MIME"):
-        b.generate("gemini-3.7-flash", "q", _level_config(), client=c)
+        b.generate("gemini-3.7-flash", _level_config(), client=c)

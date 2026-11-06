@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field, field_validator
 import config
 import persistence
 import rag
+import contextvars
+import tracing
 from agent.state import AgentState
 from agent.nodes.finalizer import citation_coverage
 from deps import (
@@ -171,6 +173,8 @@ async def agent_query(
             requested_provider=body.provider,
         )
 
+        query_id = str(uuid.uuid4())
+        trace = tracing.start("agent", query_id, body.question, owner)
         try:
             result = await asyncio.wait_for(
                 run_in_threadpool(_get_agent_graph().invoke, initial_state),
@@ -261,7 +265,7 @@ async def agent_query(
     # Order the panel by citation number so [1],[2],... read in sequence.
     sources.sort(key=lambda s: s.number)
 
-    query_id = str(uuid.uuid4())
+    await run_in_threadpool(tracing.finish, trace, final_answer)
     try:
         await run_in_threadpool(persistence.log_query,
             query_id=query_id, question=body.question, answer=final_answer,
@@ -340,6 +344,8 @@ async def agent_stream(
     )
 
     async def _run_and_stream():
+        query_id = str(uuid.uuid4())
+        trace = tracing.start("agent_stream", query_id, body.question, owner)
         stop = threading.Event()   # read by the graph worker below
         try:
             # --- Phase 1: run the agent pipeline, reporting progress as it goes ---
@@ -402,7 +408,9 @@ async def agent_stream(
                 except Exception as exc:  # mirrors the old except-Exception path
                     _enqueue(("error", str(exc)[:200], None))
 
-            threading.Thread(target=_run_graph, daemon=True, name="agent-graph").start()
+            # copy_context: the graph records into this request's trace (tracing.py).
+            threading.Thread(target=contextvars.copy_context().run, args=(_run_graph,),
+                             daemon=True, name="agent-graph").start()
 
             result = None
             sources_sent = False
@@ -513,7 +521,7 @@ async def agent_stream(
             sources.sort(key=lambda s: s["number"])
 
             # --- Phase 5: done event with full metadata ---
-            query_id = str(uuid.uuid4())
+            await run_in_threadpool(tracing.finish, trace, final_answer)
             try:
                 await run_in_threadpool(persistence.log_query,
                     query_id=query_id, question=body.question, answer=final_answer,

@@ -223,6 +223,7 @@ def evaluate(judgments: Dict, results: Dict, k: int,
         p  = precision_at_k(retrieved, relevant, k)
         r  = recall_at_k(retrieved, relevant, k)
         rr = reciprocal_rank(retrieved, relevant)
+        r10 = recall_at_k(retrieved, relevant, 10)
         r20 = recall_at_k(retrieved, relevant, 20)
 
         # Graded relevance: use explicit grades if present, else binary (relevant=3)
@@ -248,6 +249,7 @@ def evaluate(judgments: Dict, results: Dict, k: int,
             "recall":    round(r, 3),
             "mrr":       round(rr, 3),
             "ndcg_10":   round(ndcg10, 3),
+            "recall_10": round(r10, 3),
             "recall_20": round(r20, 3),
             "grounding": grounding,
             "overall":   round(q_overall, 3)
@@ -288,6 +290,26 @@ def evaluate(judgments: Dict, results: Dict, k: int,
         "per_query":            per_query,
         "timestamp":            datetime.now().isoformat(timespec="seconds")
     }
+
+
+def regression_gate(metrics: Dict, baseline: Dict, gate_metrics: List[str]) -> List[Dict]:
+    """Bootstrap regression check per metric against a baseline run (§16.1).
+
+    Paired by query id; a metric regresses when the 95% CI upper bound of
+    (new - base) is below 0. Returns one row per metric with its CI.
+    """
+    import stats   # sibling module; imported here so plain scoring needs nothing extra
+
+    rows = []
+    for m in gate_metrics:
+        new = {q["id"]: q[m] for q in metrics["per_query"] if m in q}
+        base = {q["id"]: q[m] for q in baseline["per_query"] if m in q}
+        if not set(new) & set(base):
+            raise ValueError(f"metric {m!r}: no queries shared with the baseline")
+        regressed, ci = stats.is_regression(new, base)
+        rows.append({"metric": m, "regressed": regressed, "mean_diff": ci["mean"],
+                     "lo": ci["lo"], "hi": ci["hi"], "n": ci["n"]})
+    return rows
 
 
 # ============================================================
@@ -401,8 +423,8 @@ def main():
                         default="jaccard", help="Grounding similarity judge (default jaccard, CI-safe)")
     parser.add_argument("--baseline", default=None,
                         help="Committed metrics JSON to gate per-query regressions against")
-    parser.add_argument("--regression-eps", type=float, default=0.02,
-                        help="Max allowed per-query overall drop vs baseline before CI fails")
+    parser.add_argument("--gate-metrics", default="recall_10,ndcg_10",
+                        help="Per-query metrics the --baseline bootstrap gate checks (G-RET)")
     parser.add_argument("--model", default=None,
                         help="LLM model id the answers were generated with (allowlist id). "
                              "Labels the run so per-model regressions are visible in the report.")
@@ -471,25 +493,24 @@ def main():
     hist_path = write_history_snapshot(metrics)
     print(f"  History snapshot -> {hist_path}")
 
-    # Per-query regression gate — fail if any query drops vs committed baseline.
+    # Bootstrap regression gate vs a committed baseline (metrics JSON from --json).
     if args.baseline:
         if not Path(args.baseline).exists():
-            print(f"\n  [warn] baseline {args.baseline} not found — skipping regression gate")
-        else:
-            with open(args.baseline, encoding="utf-8") as f:
-                base_q = {q["id"]: q for q in json.load(f)["per_query"]}
-            regressed = [
-                (q["id"], base_q[q["id"]]["overall"], q["overall"])
-                for q in metrics["per_query"]
-                if q["id"] in base_q
-                and q["overall"] < base_q[q["id"]]["overall"] - args.regression_eps
-            ]
-            if regressed:
-                print(f"\n  CI FAIL: {len(regressed)} query regression(s) > {args.regression_eps}:")
-                for qid, was, now in regressed:
-                    print(f"    {qid}: {was:.3f} -> {now:.3f}")
-                raise SystemExit(1)
-            print(f"\n  CI PASS: no per-query regression vs baseline (eps={args.regression_eps})")
+            # A gate that silently skips is the v2.6 failure mode: fail instead.
+            print(f"\n  CI FAIL: baseline {args.baseline} not found")
+            raise SystemExit(1)
+        with open(args.baseline, encoding="utf-8") as f:
+            baseline = json.load(f)
+        rows = regression_gate(metrics, baseline, [m for m in args.gate_metrics.split(",") if m])
+        print("\n  Regression gate (paired bootstrap, 95% CI of new - baseline):")
+        for r in rows:
+            flag = "REGRESSED" if r["regressed"] else "ok"
+            print(f"    {r['metric']:<10} diff {r['mean_diff']:+.3f}  "
+                  f"[{r['lo']:+.3f}, {r['hi']:+.3f}]  n={r['n']}  {flag}")
+        if any(r["regressed"] for r in rows):
+            print("\n  CI FAIL: regression vs baseline")
+            raise SystemExit(1)
+        print("\n  CI PASS: no regression vs baseline")
 
     if args.ci:
         if metrics["overall"] < args.threshold:

@@ -1,6 +1,5 @@
 import logging
 
-from google.genai import types
 
 import rag
 import config
@@ -14,7 +13,9 @@ def answer_generator_node(state: AgentState) -> dict:
     contexts = state.get("retrieved_contexts", [])
 
     chunks = [c.get("text", "") for c in contexts]
-    metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body")}
+    # trust travels with each passage (agent/tool_registry.py) so the prompt can label it.
+    metas = [{"title": c.get("title", "Unknown"), "section": c.get("section", "body"),
+              "trust": c.get("trust", "T3")}
              for c in contexts]
 
     # Wider caps than standard RAG: the agent pooled passages from multiple tools,
@@ -50,21 +51,22 @@ def answer_generator_node(state: AgentState) -> dict:
         except Exception as e:
             logger.warning(f"[AnswerGenerator] contradiction check failed: {e}")
 
-    # Build structured multi-turn contents to preserve role separation and prevent injection
+    # Build structured multi-turn messages to preserve role separation and prevent injection
     history = state.get("conversation_history", [])
-    contents = []
+    messages = []
     for m in history[-6:]:  # last 3 turns
-        role = "user" if m["role"] == "user" else "model"
-        contents.append(types.Content(role=role, parts=[types.Part(text=m["content"][:500])]))
-    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+        role = "user" if m["role"] == "user" else "assistant"
+        messages.append({"role": role, "content": m["content"][:500]})
+    messages.append({"role": "user", "content": prompt})
 
-    gen_config = types.GenerateContentConfig(
+    request = llm_client.LLMRequest(
+        messages=messages,
+        system=config.AGENT_SYSTEM_PROMPT,
         temperature=config.LLM_TEMPERATURE,
-        max_output_tokens=config.AGENT_MAX_TOKENS,
-        system_instruction=config.AGENT_SYSTEM_PROMPT,
-        safety_settings=config.SAFETY_SETTINGS,
+        max_tokens=config.AGENT_MAX_TOKENS,
+        safety=True,
         # Thinking off by default so the full budget goes to the answer (config knob).
-        thinking_config=llm_client.thinking_config_for("agent"),
+        thinking="agent",
     )
     # The user's model choice reaches every other node (planner, selector,
     # evaluator) via state — the node that actually writes the answer must
@@ -87,7 +89,7 @@ def answer_generator_node(state: AgentState) -> dict:
         if callable(sink):
             parts = []
             for piece in llm_client.generate_stream_with_failover(
-                    model, contents, gen_config, provider=provider, deadline=deadline):
+                    model, request, provider=provider, deadline=deadline):
                 parts.append(piece)
                 try:
                     sink(piece)
@@ -97,7 +99,7 @@ def answer_generator_node(state: AgentState) -> dict:
                     sink = None
             answer = "".join(parts)
         else:
-            resp = rag.generate_with_failover(model, contents, gen_config, provider=provider,
+            resp = rag.generate_with_failover(model, request, provider=provider,
                                               deadline=deadline)
             answer = rag.safe_extract_text(resp)
     except Exception as e:

@@ -389,7 +389,7 @@ def purge_database(authenticated: bool = Depends(verify_admin_key)):
         import vector_store
 
         collection = vector_store.get_or_create_collection()
-        previous_count = collection.count()
+        previous_count = vector_store.count(collection, timeout=None)
 
         vector_store.delete_collection(config.COLLECTION_NAME)
         vector_store.get_or_create_collection()

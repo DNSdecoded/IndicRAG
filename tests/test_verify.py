@@ -199,3 +199,51 @@ def test_not_found_marker_also_merges_as_citation_only_fragment():
     # Only the [1] sentence is scorable; [NOT FOUND] has no chunk index to check.
     assert len(results) == 1
     assert "Second sentence" in results[0]["claim"]
+
+
+# --- Numeric gate (ported from scirag verify.numbers) ---------------------------
+
+def test_numeric_gate_rejects_number_absent_from_cited_paper_without_nli():
+    """A number in the claim that no cited chunk contains is ungrounded, whatever NLI says."""
+    answer = "The antenna resonates at 31.5 GHz. [1]"
+    chunks = ["The optimized antenna resonates at 28.12 GHz."]
+    fake_model = _fake_model(entailment_logit=9.0)
+    with patch("verify._load", return_value=fake_model):
+        results = verify.check_claims(answer, chunks)
+    assert results[0]["grounded"] is False
+    assert results[0]["support"] == 0.0
+    assert "31.5" in results[0]["reason"]
+    fake_model.predict.assert_not_called()
+
+
+def test_numeric_gate_normalizes_trailing_zeros_commas_and_indic_digits():
+    assert verify.numbers("28.120 GHz, 1,200 samples, २८ cm") == {"28.12", "1200", "28"}
+    assert verify.numbers("28.12 GHz, 1200 samples, 28 cm") == {"28.12", "1200", "28"}
+
+
+def test_numeric_gate_passes_when_numbers_match_and_ignores_citation_markers():
+    answer = "The antenna resonates at 28.12 GHz. [1]"
+    chunks = ["Freq: 28.120 GHz"]
+    with patch("verify._load", return_value=_fake_model()):
+        results = verify.check_claims(answer, chunks)
+    assert results[0]["grounded"] is True
+    assert "reason" not in results[0]
+
+
+def test_numeric_gate_checks_all_chunks_of_cited_paper_not_just_nli_capped_ones():
+    answer = "Gain reached 9.4 dBi. [1]"
+    chunks = ["intro text", "more intro", "gain reached 9.4 dBi at peak"]
+    metas = [{"title": "P"}] * 3
+    with patch("verify._load", return_value=_fake_model()), \
+            patch.object(verify.config, "NLI_MAX_CHUNKS_PER_CITATION", 1):
+        results = verify.check_claims(answer, chunks, metas)
+    assert results[0]["grounded"] is True
+
+
+def test_numeric_gate_can_be_disabled():
+    answer = "The antenna resonates at 31.5 GHz. [1]"
+    chunks = ["The optimized antenna resonates at 28.12 GHz."]
+    with patch("verify._load", return_value=_fake_model()), \
+            patch.object(verify.config, "VERIFY_NUMERIC_GATE", False):
+        results = verify.check_claims(answer, chunks)
+    assert results[0]["grounded"] is True
