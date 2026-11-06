@@ -1,4 +1,5 @@
 import ast
+import math
 import re
 import logging
 import json
@@ -228,7 +229,20 @@ _DANGEROUS_NAMES = frozenset({
 })
 
 _DUNDER_IN_STRING = re.compile(r"__\w+__")
-_FORMAT_METHODS = frozenset({"format", "format_map"})
+# Format methods walk attributes from inside a string ("{0.gi_frame}"), which no
+# AST check can see, so they are blocked as attributes, called or not.
+_FORMAT_METHODS = frozenset({"format", "format_map", "vformat", "get_field"})
+# Frame, code and traceback links lead from any generator or exception back to
+# the wrapper's globals, which hold the real __import__.
+_INTROSPECTION_ATTRS = frozenset({
+    "gi_frame", "gi_code", "gi_yieldfrom", "cr_frame", "cr_code", "cr_await",
+    "ag_frame", "ag_code", "ag_await", "f_back", "f_globals", "f_locals",
+    "f_builtins", "f_code", "tb_frame", "tb_next",
+})
+_BLOCKED_ATTRS = _FORMAT_METHODS | _INTROSPECTION_ATTRS | _DANGEROUS_NAMES
+# namedtuple's public API is underscore-prefixed; nothing else private is allowed.
+_ALLOWED_PRIVATE_ATTRS = frozenset({"_asdict", "_replace", "_fields", "_make", "_field_defaults"})
+_MAX_SANDBOX_OUTPUT = 20_000  # chars of stdout; stderr is cut to 2,000
 
 
 def _validate_ast(code: str) -> str | None:
@@ -248,8 +262,16 @@ def _validate_ast(code: str) -> str | None:
                 if name not in _ALLOWED_MODULES:
                     return f"Import '{name}' is not allowed. Allowed: {', '.join(sorted(_ALLOWED_MODULES))}"
 
-        if isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
-            return f"Access to dunder attribute '{node.attr}' is not allowed"
+        if isinstance(node, ast.Attribute):
+            # Private attributes reach module internals (collections._sys).
+            if node.attr.startswith("_") and node.attr not in _ALLOWED_PRIVATE_ATTRS:
+                return f"Access to private attribute '{node.attr}' is not allowed"
+            # Checked on the attribute, not the call: `f = str.format` escapes a call check.
+            if node.attr in _BLOCKED_ATTRS:
+                return f"Access to '.{node.attr}' is not allowed in sandbox"
+
+        if isinstance(node, ast.Name) and node.id in _DANGEROUS_NAMES:
+            return f"Use of '{node.id}' is not allowed"
 
         # Block dunder names used as variables (e.g. __builtins__)
         if isinstance(node, ast.Name) and node.id.startswith("__") and node.id.endswith("__"):
@@ -265,24 +287,15 @@ def _validate_ast(code: str) -> str | None:
             if _DUNDER_IN_STRING.search(node.value):
                 return "String constants must not contain dunder patterns"
 
-        # Block .format() / .format_map() calls (format-string injection vector)
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr in _FORMAT_METHODS:
-                return f"Call to '.{func.attr}()' is not allowed in sandbox"
-            if isinstance(func, ast.Name) and func.id in _DANGEROUS_NAMES:
-                return f"Call to '{func.id}()' is not allowed"
-            if isinstance(func, ast.Attribute) and func.attr in _DANGEROUS_NAMES:
-                return f"Call to '.{func.attr}()' is not allowed"
-
         # Block %-formatting on strings (another format-string vector)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
             if isinstance(node.left, ast.Constant) and isinstance(node.left.value, str):
                 if _DUNDER_IN_STRING.search(node.left.value):
                     return "%-formatting with dunder patterns is not allowed"
 
-        # Block large literal integers/floats written directly
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        # Block large literal integers written directly. Ints only: a float cannot
+        # size an allocation, and science needs 3e8 m/s and 28e9 Hz.
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
             if abs(node.value) > 1e8:
                 return f"Numeric literal too large (max 1e8): {node.value}"
 
@@ -291,13 +304,12 @@ def _validate_ast(code: str) -> str | None:
         # prevents the string-multiplication variant without needing nested evaluation.
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
             if (isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant)
-                    and isinstance(node.left.value, (int, float))
-                    and isinstance(node.right.value, (int, float))):
-                try:
-                    if node.left.value ** node.right.value > 1e8:
-                        return f"Exponentiation result too large: {node.left.value}**{node.right.value}"
-                except (OverflowError, TypeError):
-                    return f"Exponentiation overflow: {node.left.value}**{node.right.value}"
+                    and isinstance(node.left.value, int)
+                    and isinstance(node.right.value, int)):
+                base, exp = abs(node.left.value), node.right.value
+                # Compare magnitudes by log: evaluating 9**99999999 here would stall the server.
+                if base > 1 and exp > 0 and exp * math.log10(base) > 8:
+                    return f"Exponentiation result too large: {node.left.value}**{node.right.value}"
 
         # Block string * large_int (memory exhaustion via "A" * 10**10)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
@@ -314,10 +326,16 @@ def _validate_ast(code: str) -> str | None:
 
 _SANDBOX_WRAPPER = '''\
 import sys as _sys
-# ponytail: RLIMIT_AS caps address space on Linux; silently skipped on Windows
+import types as _types
+import traceback as _tb
+# shortcut: rlimits exist only on POSIX; on Windows only the parent's wall-clock
+# timeout and the AST/import checks apply. Upgrade with a job object if Windows serves this tool.
 try:
     import resource as _r
     _r.setrlimit(_r.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+    _r.setrlimit(_r.RLIMIT_CPU, (%(cpu)d, %(cpu)d))
+    _r.setrlimit(_r.RLIMIT_FSIZE, (0, 0))   # no file writes; stdout/stderr are pipes
+    _r.setrlimit(_r.RLIMIT_NPROC, (0, 0))   # no fork/exec (ignored when running as root)
 except Exception:
     pass
 for mod in list(_sys.modules.keys()):
@@ -331,6 +349,9 @@ _SAFE_BUILTINS = {
     "list", "map", "max", "min", "next", "oct", "ord", "pow", "print",
     "range", "repr", "reversed", "round", "set", "slice", "sorted",
     "str", "sum", "tuple", "zip",
+    "Exception", "ArithmeticError", "ZeroDivisionError", "OverflowError",
+    "ValueError", "TypeError", "KeyError", "IndexError", "LookupError",
+    "StopIteration", "RuntimeError", "AssertionError", "NotImplementedError",
 }
 _ALLOWED_IMPORTS = {
     "math", "statistics", "decimal", "fractions",
@@ -341,17 +362,40 @@ import builtins as _b
 _safe = {k: getattr(_b, k) for k in _SAFE_BUILTINS if hasattr(_b, k)}
 _safe["__build_class__"] = _b.__build_class__
 _real_import = _b.__import__
-def _restricted_import(name, *args, **kwargs):
+_proxies = {}
+def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
     top = name.split(".")[0]
-    if top not in _ALLOWED_IMPORTS:
+    if level or top not in _ALLOWED_IMPORTS:
         raise ImportError(f"Import '{top}' is not allowed")
-    return _real_import(name, *args, **kwargs)
+    # A namespace of the module's public, non-module attributes: modules re-export
+    # sys/os under public names (fractions.sys, re.enum.sys), so the real module never reaches user code.
+    if top not in _proxies:
+        mod = _real_import(top)
+        _proxies[top] = _types.SimpleNamespace(**{
+            k: v for k, v in vars(mod).items()
+            if not k.startswith("_") and not isinstance(v, _types.ModuleType)
+        })
+    return _proxies[top]
 _safe["__import__"] = _restricted_import
-exec(
-    compile(open(_sys.argv[1]).read(), _sys.argv[1], "exec"),
-    {"__builtins__": _safe, "__name__": "__main__"},
-)
-'''
+_written = [0]
+def _print(*args, sep=" ", end="\\n"):
+    s = str(sep).join(map(str, args)) + str(end)
+    _written[0] += len(s)
+    if _written[0] > %(max_out)d:
+        raise RuntimeError("output limit of %(max_out)d characters exceeded")
+    _sys.stdout.write(s)
+_safe["print"] = _print
+try:
+    exec(
+        compile(open(_sys.argv[1]).read(), _sys.argv[1], "exec"),
+        {"__builtins__": _safe, "__name__": "__main__"},
+    )
+except BaseException:
+    # Bounded: an exception message can be as large as the memory limit.
+    _sys.stderr.write(_tb.format_exc(limit=5)[-2000:])
+    _sys.stdout.flush()
+    _sys.exit(1)
+''' % {"cpu": _SANDBOX_TIMEOUT, "max_out": _MAX_SANDBOX_OUTPUT}
 
 
 def execute_python(code: str) -> dict:
