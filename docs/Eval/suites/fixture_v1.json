@@ -1,0 +1,1424 @@
+{
+ "_instructions": "Fixture suite v1 (manifest v2, 41 papers) over docs/Eval/fixtures/manifest.json (same schema as relevance_judgments.json, plus lang/type/reviewed). Paper-level relevance: 3 = the query is answered by this paper, 2 = substantially relevant, 1 = related. Authored 2026-11-06 from the papers' text; reviewed=false everywhere: English needs an author re-read, Hindi needs a native-speaker review before G-MLG may gate on it (plan §16.3). H<n>n/r/m are the same question in Devanagari, romanized and code-mixed form; parallel_of names the English query it mirrors.",
+ "suite": "fixture_v1",
+ "corpus": [
+  "2608.23469v1",
+  "2603.03802v1",
+  "2603.03810v1",
+  "2011.12131v1",
+  "2010.05842v2",
+  "2105.08508v2",
+  "2405.17616v1",
+  "2410.02474v2",
+  "2407.09944v2",
+  "2503.00420v1",
+  "2511.15125v1",
+  "2202.04041v2",
+  "2601.18638v1",
+  "2407.15877v1",
+  "2101.10866v1",
+  "2205.06011v2",
+  "2209.03438v1",
+  "2301.02747v3",
+  "2302.01199v1",
+  "2302.12899v2",
+  "2402.06575v1",
+  "2404.14984v1",
+  "2405.02131v2",
+  "2405.04056v1",
+  "2406.04380v1",
+  "2406.14995v2",
+  "2407.20833v1",
+  "2408.03450v1",
+  "2412.17414v1",
+  "2506.20987v1",
+  "2507.04153v1",
+  "2508.10713v1",
+  "2511.04576v3",
+  "2602.09037v4",
+  "2602.19082v1",
+  "2603.15584v2",
+  "2603.18026v1",
+  "2605.01631v1",
+  "2606.00977v1",
+  "2606.13245v1",
+  "2607.27349v1"
+ ],
+ "queries": [
+  {
+   "id": "E01",
+   "lang": "en",
+   "type": "native",
+   "text": "How does an XGBoost classifier improve dataset efficiency when designing pixelated mmWave patch antennas?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [
+    "XGBoost",
+    "52%"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E02",
+   "lang": "en",
+   "type": "terminology",
+   "text": "19x23 binary pixel grid on Rogers RT/duroid 5880 substrate",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [
+    "RT/duroid 5880"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E03",
+   "lang": "en",
+   "type": "native",
+   "text": "Which surrogate architecture predicts the complex S11 spectrum at 801 frequency points?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [
+    "CNN-BiLSTM",
+    "801"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E04",
+   "lang": "en",
+   "type": "native",
+   "text": "How is the gradient-based inverse search kept on the manifold of feasible pixel antenna geometries?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [
+    "autoencoder"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E05",
+   "lang": "en",
+   "type": "native",
+   "text": "variable-fidelity framework for automatic synthesis of free-form antenna topologies for IoT radiators",
+   "relevant_papers": [
+    "2603.03802v1"
+   ],
+   "relevance_grades": {
+    "2603.03802v1": 3
+   },
+   "key_facts": [
+    "low-fidelity"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E06",
+   "lang": "en",
+   "type": "native",
+   "text": "Which frequency bands do the broadband free-form IoT radiators target?",
+   "relevant_papers": [
+    "2603.03802v1"
+   ],
+   "relevance_grades": {
+    "2603.03802v1": 3
+   },
+   "key_facts": [
+    "5 GHz",
+    "7 GHz"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E07",
+   "lang": "en",
+   "type": "terminology",
+   "text": "trust-region optimization of quasi-random topologies after surrogate-assisted classification",
+   "relevant_papers": [
+    "2603.03802v1"
+   ],
+   "relevance_grades": {
+    "2603.03802v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E08",
+   "lang": "en",
+   "type": "native",
+   "text": "At most how many EM simulations does the bi-stage pixel-based antenna design framework need?",
+   "relevant_papers": [
+    "2603.03810v1"
+   ],
+   "relevance_grades": {
+    "2603.03810v1": 3
+   },
+   "key_facts": [
+    "36"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E09",
+   "lang": "en",
+   "type": "native",
+   "text": "global optimization of interconnections between pixels followed by surrogate-assisted local search",
+   "relevant_papers": [
+    "2603.03810v1"
+   ],
+   "relevance_grades": {
+    "2603.03810v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E10",
+   "lang": "en",
+   "type": "terminology",
+   "text": "IMPM model global search for dual-band monopole with off-target resonances",
+   "relevant_papers": [
+    "2603.03810v1"
+   ],
+   "relevance_grades": {
+    "2603.03810v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E11",
+   "lang": "en",
+   "type": "native",
+   "text": "Designing antennas mounted on metal tubes such as traffic lights using deep reinforcement learning",
+   "relevant_papers": [
+    "2011.12131v1"
+   ],
+   "relevance_grades": {
+    "2011.12131v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E12",
+   "lang": "en",
+   "type": "native",
+   "text": "How does the curved-surface antenna framework cope with changes in radius of curvature or material properties?",
+   "relevant_papers": [
+    "2011.12131v1"
+   ],
+   "relevance_grades": {
+    "2011.12131v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E13",
+   "lang": "en",
+   "type": "native",
+   "text": "low-profile antennas that reduce the visual impact of wireless infrastructure",
+   "relevant_papers": [
+    "2011.12131v1"
+   ],
+   "relevance_grades": {
+    "2011.12131v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E14",
+   "lang": "en",
+   "type": "terminology",
+   "text": "SPIBB safe policy improvement through baseline bootstrapping for antenna downtilt",
+   "relevant_papers": [
+    "2010.05842v2"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3
+   },
+   "key_facts": [
+    "SPIBB"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E15",
+   "lang": "en",
+   "type": "native",
+   "text": "How can reinforcement learning tune base station vertical tilt without degrading network KPIs?",
+   "relevant_papers": [
+    "2010.05842v2",
+    "2302.12899v2",
+    "2302.01199v1"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3,
+    "2302.12899v2": 2,
+    "2302.01199v1": 1
+   },
+   "key_facts": [
+    "safe"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E16",
+   "lang": "en",
+   "type": "native",
+   "text": "offline batch reinforcement learning with a safe baseline policy for mobile network operators",
+   "relevant_papers": [
+    "2010.05842v2",
+    "2302.12899v2"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3,
+    "2302.12899v2": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E17",
+   "lang": "en",
+   "type": "native",
+   "text": "deep neural network inverse design of metasurface unit cells for TE and TM polarized waves",
+   "relevant_papers": [
+    "2105.08508v2",
+    "2101.10866v1"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3,
+    "2101.10866v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E18",
+   "lang": "en",
+   "type": "native",
+   "text": "What accuracy does the metasurface inverse-design network reach, and over which frequency range?",
+   "relevant_papers": [
+    "2105.08508v2"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3
+   },
+   "key_facts": [
+    "91%",
+    "45 GHz"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E19",
+   "lang": "en",
+   "type": "terminology",
+   "text": "restricted output structure with 8 ring-shaped patterns for notch generation",
+   "relevant_papers": [
+    "2105.08508v2"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E20",
+   "lang": "en",
+   "type": "terminology",
+   "text": "six-element microstrip patch array on RO3003 substrate at 18 GHz",
+   "relevant_papers": [
+    "2405.17616v1",
+    "2605.01631v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3,
+    "2605.01631v1": 1
+   },
+   "key_facts": [
+    "7.51"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E21",
+   "lang": "en",
+   "type": "native",
+   "text": "What gain and impedance bandwidth does the Ku-band rectangular patch antenna array achieve?",
+   "relevant_papers": [
+    "2405.17616v1",
+    "2605.01631v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3,
+    "2605.01631v1": 1
+   },
+   "key_facts": [
+    "7.51 dBi",
+    "700"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E22",
+   "lang": "en",
+   "type": "terminology",
+   "text": "RO3003 dielectric constant 3 loss tangent 0.0009 thickness 1.574 mm",
+   "relevant_papers": [
+    "2405.17616v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E23",
+   "lang": "en",
+   "type": "native",
+   "text": "Cross-Entropy Monte Carlo optimization of patch antenna geometry for a target S11 curve",
+   "relevant_papers": [
+    "2410.02474v2"
+   ],
+   "relevance_grades": {
+    "2410.02474v2": 3
+   },
+   "key_facts": [
+    "Cross-Entropy"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E24",
+   "lang": "en",
+   "type": "native",
+   "text": "How does uniform cross-entropy optimization compare with Gaussian processes, forest optimization and random search for antenna design?",
+   "relevant_papers": [
+    "2410.02474v2"
+   ],
+   "relevance_grades": {
+    "2410.02474v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E25",
+   "lang": "en",
+   "type": "native",
+   "text": "automating a double-band S11 resonance microstrip antenna without deep neural networks",
+   "relevant_papers": [
+    "2410.02474v2"
+   ],
+   "relevance_grades": {
+    "2410.02474v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E26",
+   "lang": "en",
+   "type": "terminology",
+   "text": "32-element planar array for the n257 band point-to-point mmWave links",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [
+    "18.4"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E27",
+   "lang": "en",
+   "type": "terminology",
+   "text": "over-the-air measurements with an R&S ATS800B compact antenna test range",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [
+    "CATR"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E28",
+   "lang": "en",
+   "type": "native",
+   "text": "series-fed 8-element linear array with a fan-shaped pattern for point-to-multipoint connectivity",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E29",
+   "lang": "en",
+   "type": "native",
+   "text": "What radiation efficiency and impedance bandwidth do the 28 GHz FR-2 arrays achieve?",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [
+    "83%",
+    "3 GHz"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E30",
+   "lang": "en",
+   "type": "native",
+   "text": "improving the slot filling factor of traction electrical machines with Bayesian optimization",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [
+    "slot filling factor"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E31",
+   "lang": "en",
+   "type": "terminology",
+   "text": "maximum entropy sampling algorithm MESA seeding physics-informed Bayesian optimization PIBO",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [
+    "MESA"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E32",
+   "lang": "en",
+   "type": "native",
+   "text": "winding design for magnet-free brushless electrically excited synchronous machines",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E33",
+   "lang": "en",
+   "type": "native",
+   "text": "Bayesian neural network with reconfigurable heads for RF passive component modeling",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E34",
+   "lang": "en",
+   "type": "native",
+   "text": "How much EM simulation time does uncertainty-aware sampling save when modeling RF passive components?",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [
+    "2.86%",
+    "35"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E35",
+   "lang": "en",
+   "type": "native",
+   "text": "adaptive sampling across geometric parameters and the frequency domain using uncertainty guidance",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E36",
+   "lang": "en",
+   "type": "terminology",
+   "text": "physics-informed neural network for parametric 2-D magnetostatics of an EI-core electromagnet",
+   "relevant_papers": [
+    "2202.04041v2",
+    "2406.04380v1"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3,
+    "2406.04380v1": 1
+   },
+   "key_facts": [
+    "EI-core"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E37",
+   "lang": "en",
+   "type": "native",
+   "text": "minimizing the coupling field coenergy functional with stochastic gradient descent",
+   "relevant_papers": [
+    "2202.04041v2"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3
+   },
+   "key_facts": [
+    "coenergy"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E38",
+   "lang": "en",
+   "type": "native",
+   "text": "magnetic vector potential represented by a deep network and compared with finite element analysis",
+   "relevant_papers": [
+    "2202.04041v2"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E39",
+   "lang": "en",
+   "type": "native",
+   "text": "using the violation of physical laws as a proxy for predictive uncertainty in inverse design",
+   "relevant_papers": [
+    "2601.18638v1"
+   ],
+   "relevance_grades": {
+    "2601.18638v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E40",
+   "lang": "en",
+   "type": "native",
+   "text": "frequency-selective surface design in the 20-30 GHz range with multi-fidelity uncertainty-aware optimization",
+   "relevant_papers": [
+    "2601.18638v1"
+   ],
+   "relevance_grades": {
+    "2601.18638v1": 3
+   },
+   "key_facts": [
+    "50%"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E41",
+   "lang": "en",
+   "type": "native",
+   "text": "deep ensembles versus physics-informed uncertainty for surrogate extrapolation errors",
+   "relevant_papers": [
+    "2601.18638v1",
+    "2209.03438v1"
+   ],
+   "relevance_grades": {
+    "2601.18638v1": 3,
+    "2209.03438v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E42",
+   "lang": "en",
+   "type": "terminology",
+   "text": "Gaussian process kernel with image Euclidean distance IMED for 3D printed antennas",
+   "relevant_papers": [
+    "2407.15877v1"
+   ],
+   "relevance_grades": {
+    "2407.15877v1": 3
+   },
+   "key_facts": [
+    "IMED"
+   ],
+   "reviewed": false
+  },
+  {
+   "id": "E43",
+   "lang": "en",
+   "type": "native",
+   "text": "incorporating pixel and voxel neighbour relations into Gaussian process surrogate models",
+   "relevant_papers": [
+    "2407.15877v1"
+   ],
+   "relevance_grades": {
+    "2407.15877v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E44",
+   "lang": "en",
+   "type": "terminology",
+   "text": "2D and 3D monopole regression with ARD-IMED versus convolutional kernels",
+   "relevant_papers": [
+    "2407.15877v1"
+   ],
+   "relevance_grades": {
+    "2407.15877v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E45",
+   "lang": "en",
+   "type": "broad",
+   "text": "machine learning surrogates that reduce full-wave EM simulations in antenna design",
+   "relevant_papers": [
+    "2608.23469v1",
+    "2603.03802v1",
+    "2603.03810v1",
+    "2407.15877v1",
+    "2511.15125v1",
+    "2601.18638v1",
+    "2508.10713v1",
+    "2301.02747v3",
+    "2602.19082v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3,
+    "2603.03802v1": 2,
+    "2603.03810v1": 2,
+    "2407.15877v1": 2,
+    "2511.15125v1": 1,
+    "2601.18638v1": 1,
+    "2508.10713v1": 2,
+    "2301.02747v3": 1,
+    "2602.19082v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E46",
+   "lang": "en",
+   "type": "broad",
+   "text": "reinforcement learning applied to antenna problems",
+   "relevant_papers": [
+    "2011.12131v1",
+    "2010.05842v2",
+    "2302.12899v2",
+    "2302.01199v1",
+    "2205.06011v2"
+   ],
+   "relevance_grades": {
+    "2011.12131v1": 3,
+    "2010.05842v2": 3,
+    "2302.12899v2": 3,
+    "2302.01199v1": 3,
+    "2205.06011v2": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E47",
+   "lang": "en",
+   "type": "broad",
+   "text": "uncertainty quantification in surrogate-assisted electromagnetic design",
+   "relevant_papers": [
+    "2601.18638v1",
+    "2511.15125v1",
+    "2407.15877v1",
+    "2408.03450v1",
+    "2506.20987v1",
+    "2209.03438v1"
+   ],
+   "relevance_grades": {
+    "2601.18638v1": 3,
+    "2511.15125v1": 3,
+    "2407.15877v1": 1,
+    "2408.03450v1": 1,
+    "2506.20987v1": 1,
+    "2209.03438v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E48",
+   "lang": "en",
+   "type": "broad",
+   "text": "pixel-based free-form antenna topology design",
+   "relevant_papers": [
+    "2608.23469v1",
+    "2603.03810v1",
+    "2603.03802v1",
+    "2407.15877v1",
+    "2402.06575v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3,
+    "2603.03810v1": 3,
+    "2603.03802v1": 2,
+    "2407.15877v1": 1,
+    "2402.06575v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E49",
+   "lang": "en",
+   "type": "broad",
+   "text": "millimetre-wave antenna arrays for 5G",
+   "relevant_papers": [
+    "2407.09944v2",
+    "2405.17616v1",
+    "2608.23469v1",
+    "2605.01631v1",
+    "2205.06011v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3,
+    "2405.17616v1": 2,
+    "2608.23469v1": 1,
+    "2605.01631v1": 3,
+    "2205.06011v2": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E50",
+   "lang": "en",
+   "type": "broad",
+   "text": "physics-informed machine learning for electromagnetic problems",
+   "relevant_papers": [
+    "2202.04041v2",
+    "2503.00420v1",
+    "2601.18638v1",
+    "2404.14984v1",
+    "2406.04380v1",
+    "2407.20833v1",
+    "2507.04153v1",
+    "2603.15584v2",
+    "2607.27349v1",
+    "2405.02131v2",
+    "2602.19082v1",
+    "2511.04576v3"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3,
+    "2503.00420v1": 2,
+    "2601.18638v1": 2,
+    "2404.14984v1": 3,
+    "2406.04380v1": 3,
+    "2407.20833v1": 3,
+    "2507.04153v1": 3,
+    "2603.15584v2": 3,
+    "2607.27349v1": 3,
+    "2405.02131v2": 2,
+    "2602.19082v1": 2,
+    "2511.04576v3": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E51",
+   "lang": "en",
+   "type": "native",
+   "text": "bidirectional adversarial autoencoder predicting plasmonic metasurface topology from photoluminescence spectra",
+   "relevant_papers": [
+    "2405.04056v1",
+    "2105.08508v2",
+    "2101.10866v1"
+   ],
+   "relevance_grades": {
+    "2405.04056v1": 3,
+    "2105.08508v2": 1,
+    "2101.10866v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E52",
+   "lang": "en",
+   "type": "terminology",
+   "text": "Wi-GATr geometric algebra transformer as a differentiable wireless ray tracing surrogate",
+   "relevant_papers": [
+    "2406.14995v2"
+   ],
+   "relevance_grades": {
+    "2406.14995v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E53",
+   "lang": "en",
+   "type": "native",
+   "text": "spatio-temporal electromagnetic kernel learning for channel prediction under high user mobility",
+   "relevant_papers": [
+    "2412.17414v1"
+   ],
+   "relevance_grades": {
+    "2412.17414v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E54",
+   "lang": "en",
+   "type": "native",
+   "text": "boundary-shape optimization of three-dimensional microwave cavity resonators for electromagnetic helicity",
+   "relevant_papers": [
+    "2602.09037v4"
+   ],
+   "relevance_grades": {
+    "2602.09037v4": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E55",
+   "lang": "en",
+   "type": "native",
+   "text": "differentiable inverse rendering of radio frequency propagation for digital twins",
+   "relevant_papers": [
+    "2603.18026v1",
+    "2606.00977v1"
+   ],
+   "relevance_grades": {
+    "2603.18026v1": 3,
+    "2606.00977v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E56",
+   "lang": "en",
+   "type": "native",
+   "text": "closed-loop beam management in integrated sensing and communication with an electromagnetic digital twin",
+   "relevant_papers": [
+    "2606.00977v1",
+    "2603.18026v1"
+   ],
+   "relevance_grades": {
+    "2606.00977v1": 3,
+    "2603.18026v1": 1
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E57",
+   "lang": "en",
+   "type": "terminology",
+   "text": "REMAL residual equilibrium manifold active learning for multidisciplinary design analysis",
+   "relevant_papers": [
+    "2606.13245v1"
+   ],
+   "relevance_grades": {
+    "2606.13245v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E58",
+   "lang": "en",
+   "type": "terminology",
+   "text": "WGNO waveguide neural operator for EUV lithography mask diffraction",
+   "relevant_papers": [
+    "2507.04153v1",
+    "2603.15584v2"
+   ],
+   "relevance_grades": {
+    "2507.04153v1": 3,
+    "2603.15584v2": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E59",
+   "lang": "en",
+   "type": "terminology",
+   "text": "gprMax GPU antenna simulation framework compared with commercial EM software",
+   "relevant_papers": [
+    "2508.10713v1"
+   ],
+   "relevance_grades": {
+    "2508.10713v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "E60",
+   "lang": "en",
+   "type": "terminology",
+   "text": "FDTD-3D genetic algorithm optimizing an amorphous inset-fed microstrip patch",
+   "relevant_papers": [
+    "2402.06575v1"
+   ],
+   "relevance_grades": {
+    "2402.06575v1": 3
+   },
+   "key_facts": [],
+   "reviewed": false
+  },
+  {
+   "id": "H01m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "pixelated mmWave patch antenna ke inverse design mein XGBoost classifier ka kya role hai?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E01",
+   "reviewed": false
+  },
+  {
+   "id": "H01n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "पिक्सेल आधारित मिलीमीटर-तरंग पैच एंटीना के व्युत्क्रम डिज़ाइन में XGBoost वर्गीकारक का क्या उपयोग है?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E01",
+   "reviewed": false
+  },
+  {
+   "id": "H01r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "pixel aadharit millimeter-tarang patch antenna ke vyutkram design mein XGBoost vargikarak ka kya upyog hai?",
+   "relevant_papers": [
+    "2608.23469v1"
+   ],
+   "relevance_grades": {
+    "2608.23469v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E01",
+   "reviewed": false
+  },
+  {
+   "id": "H02m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "base station antenna tilt ko safe reinforcement learning se kaise optimize karte hain?",
+   "relevant_papers": [
+    "2010.05842v2",
+    "2302.12899v2"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3,
+    "2302.12899v2": 2
+   },
+   "key_facts": [],
+   "parallel_of": "E15",
+   "reviewed": false
+  },
+  {
+   "id": "H02n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "बेस स्टेशन एंटीना के झुकाव को सुरक्षित रीइन्फोर्समेंट लर्निंग से कैसे अनुकूलित किया जाता है?",
+   "relevant_papers": [
+    "2010.05842v2",
+    "2302.12899v2"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3,
+    "2302.12899v2": 2
+   },
+   "key_facts": [],
+   "parallel_of": "E15",
+   "reviewed": false
+  },
+  {
+   "id": "H02r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "base station antenna ke jhukaav ko surakshit reinforcement learning se kaise anukoolit kiya jata hai?",
+   "relevant_papers": [
+    "2010.05842v2",
+    "2302.12899v2"
+   ],
+   "relevance_grades": {
+    "2010.05842v2": 3,
+    "2302.12899v2": 2
+   },
+   "key_facts": [],
+   "parallel_of": "E15",
+   "reviewed": false
+  },
+  {
+   "id": "H03m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "18 GHz six-patch microstrip array ka gain kitna hai?",
+   "relevant_papers": [
+    "2405.17616v1",
+    "2605.01631v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3,
+    "2605.01631v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E21",
+   "reviewed": false
+  },
+  {
+   "id": "H03n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "18 गीगाहर्ट्ज़ पर छह पैच वाले माइक्रोस्ट्रिप एंटीना ऐरे का लाभ कितना है?",
+   "relevant_papers": [
+    "2405.17616v1",
+    "2605.01631v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3,
+    "2605.01631v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E21",
+   "reviewed": false
+  },
+  {
+   "id": "H03r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "18 gigahertz par chhah patch wale microstrip antenna array ka laabh kitna hai?",
+   "relevant_papers": [
+    "2405.17616v1",
+    "2605.01631v1"
+   ],
+   "relevance_grades": {
+    "2405.17616v1": 3,
+    "2605.01631v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E21",
+   "reviewed": false
+  },
+  {
+   "id": "H04m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "28 GHz ke 32-element planar array ka OTA measurement kaise kiya gaya?",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E27",
+   "reviewed": false
+  },
+  {
+   "id": "H04n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "28 गीगाहर्ट्ज़ बैंड के लिए 32 तत्वों वाले समतलीय एंटीना ऐरे का मापन कैसे किया गया?",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E27",
+   "reviewed": false
+  },
+  {
+   "id": "H04r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "28 gigahertz band ke liye 32 tatvon wale samtaliya antenna array ka maapan kaise kiya gaya?",
+   "relevant_papers": [
+    "2407.09944v2"
+   ],
+   "relevance_grades": {
+    "2407.09944v2": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E27",
+   "reviewed": false
+  },
+  {
+   "id": "H05m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "TE aur TM polarization ke liye metasurface unit cell ko DNN se inverse design kaise karte hain?",
+   "relevant_papers": [
+    "2105.08508v2",
+    "2101.10866v1"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3,
+    "2101.10866v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E17",
+   "reviewed": false
+  },
+  {
+   "id": "H05n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "TE और TM ध्रुवित तरंगों के लिए मेटासतह की इकाई कोशिका डीप न्यूरल नेटवर्क से कैसे बनाई जाती है?",
+   "relevant_papers": [
+    "2105.08508v2",
+    "2101.10866v1"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3,
+    "2101.10866v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E17",
+   "reviewed": false
+  },
+  {
+   "id": "H05r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "TE aur TM dhruvit tarangon ke liye metasatah ki ikai koshika deep neural network se kaise banai jati hai?",
+   "relevant_papers": [
+    "2105.08508v2",
+    "2101.10866v1"
+   ],
+   "relevance_grades": {
+    "2105.08508v2": 3,
+    "2101.10866v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E17",
+   "reviewed": false
+  },
+  {
+   "id": "H06m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "magnetostatic problems solve karne ke liye physics-informed neural network kaise use hota hai?",
+   "relevant_papers": [
+    "2202.04041v2",
+    "2406.04380v1"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3,
+    "2406.04380v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E36",
+   "reviewed": false
+  },
+  {
+   "id": "H06n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "चुंबकस्थैतिक समस्याओं को हल करने के लिए भौतिकी-सूचित न्यूरल नेटवर्क का उपयोग कैसे होता है?",
+   "relevant_papers": [
+    "2202.04041v2",
+    "2406.04380v1"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3,
+    "2406.04380v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E36",
+   "reviewed": false
+  },
+  {
+   "id": "H06r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "chumbaksthaitik samasyaon ko hal karne ke liye bhautiki-soochit neural network ka upyog kaise hota hai?",
+   "relevant_papers": [
+    "2202.04041v2",
+    "2406.04380v1"
+   ],
+   "relevance_grades": {
+    "2202.04041v2": 3,
+    "2406.04380v1": 1
+   },
+   "key_facts": [],
+   "parallel_of": "E36",
+   "reviewed": false
+  },
+  {
+   "id": "H07m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "RF passive components ki modelling mein Bayesian online learning se EM simulation time kitna bachta hai?",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E34",
+   "reviewed": false
+  },
+  {
+   "id": "H07n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "RF निष्क्रिय घटकों के मॉडलिंग में बायेसियन ऑनलाइन लर्निंग से सिमुलेशन समय कितना बचता है?",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E34",
+   "reviewed": false
+  },
+  {
+   "id": "H07r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "RF nishkriya ghatakon ke modelling mein Bayesian online learning se simulation samay kitna bachta hai?",
+   "relevant_papers": [
+    "2511.15125v1"
+   ],
+   "relevance_grades": {
+    "2511.15125v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E34",
+   "reviewed": false
+  },
+  {
+   "id": "H08m",
+   "lang": "hi",
+   "type": "code_mixed",
+   "text": "electrical machines mein slot filling factor improve karne ke liye Bayesian optimization",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E30",
+   "reviewed": false
+  },
+  {
+   "id": "H08n",
+   "lang": "hi",
+   "type": "cross_lingual",
+   "text": "विद्युत मशीनों में स्लॉट भराव कारक बढ़ाने के लिए बायेसियन अनुकूलन का उपयोग",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E30",
+   "reviewed": false
+  },
+  {
+   "id": "H08r",
+   "lang": "hi",
+   "type": "transliterated",
+   "text": "vidyut machinon mein slot bharaav kaarak badhane ke liye Bayesian anukoolan ka upyog",
+   "relevant_papers": [
+    "2503.00420v1"
+   ],
+   "relevance_grades": {
+    "2503.00420v1": 3
+   },
+   "key_facts": [],
+   "parallel_of": "E30",
+   "reviewed": false
+  }
+ ]
+}

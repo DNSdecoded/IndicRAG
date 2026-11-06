@@ -1,0 +1,1624 @@
+{
+  "k": 5,
+  "num_queries": 84,
+  "mean_precision": 0.274,
+  "mean_recall": 0.912,
+  "mrr": 0.973,
+  "ndcg_10": 0.937,
+  "recall_20": 0.912,
+  "mean_grounding": 1.0,
+  "retrieval_composite": 0.72,
+  "generation_composite": 1.0,
+  "overall": 0.86,
+  "grounding_judge": "jaccard",
+  "grounding_threshold": 0.15,
+  "per_language": {
+    "en": {
+      "num_queries": 60,
+      "mean_overall": 0.817
+    },
+    "hi": {
+      "num_queries": 24,
+      "mean_overall": 0.824
+    }
+  },
+  "per_query": [
+    {
+      "id": "E01",
+      "query": "How does an XGBoost classifier improve dataset efficiency when designing pixelated mmWave patch antennas?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E02",
+      "query": "19x23 binary pixel grid on Rogers RT/duroid 5880 substrate",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E03",
+      "query": "Which surrogate architecture predicts the complex S11 spectrum at 801 frequency points?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E04",
+      "query": "How is the gradient-based inverse search kept on the manifold of feasible pixel antenna geometries?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E05",
+      "query": "variable-fidelity framework for automatic synthesis of free-form antenna topologies for IoT radiators",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E06",
+      "query": "Which frequency bands do the broadband free-form IoT radiators target?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E07",
+      "query": "trust-region optimization of quasi-random topologies after surrogate-assisted classification",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E08",
+      "query": "At most how many EM simulations does the bi-stage pixel-based antenna design framework need?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E09",
+      "query": "global optimization of interconnections between pixels followed by surrogate-assisted local search",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E10",
+      "query": "IMPM model global search for dual-band monopole with off-target resonances",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E11",
+      "query": "Designing antennas mounted on metal tubes such as traffic lights using deep reinforcement learning",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E12",
+      "query": "How does the curved-surface antenna framework cope with changes in radius of curvature or material properties?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E13",
+      "query": "low-profile antennas that reduce the visual impact of wireless infrastructure",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E14",
+      "query": "SPIBB safe policy improvement through baseline bootstrapping for antenna downtilt",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E15",
+      "query": "How can reinforcement learning tune base station vertical tilt without degrading network KPIs?",
+      "lang": "en",
+      "precision": 0.6,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.973,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.915
+    },
+    {
+      "id": "E16",
+      "query": "offline batch reinforcement learning with a safe baseline policy for mobile network operators",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "E17",
+      "query": "deep neural network inverse design of metasurface unit cells for TE and TM polarized waves",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "E18",
+      "query": "What accuracy does the metasurface inverse-design network reach, and over which frequency range?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 0.5,
+      "ndcg_10": 0.631,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.666
+    },
+    {
+      "id": "E19",
+      "query": "restricted output structure with 8 ring-shaped patterns for notch generation",
+      "lang": "en",
+      "precision": 0.0,
+      "recall": 0.0,
+      "mrr": 0.0,
+      "ndcg_10": 0.0,
+      "recall_10": 0.0,
+      "recall_20": 0.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.2
+    },
+    {
+      "id": "E20",
+      "query": "six-element microstrip patch array on RO3003 substrate at 18 GHz",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "E21",
+      "query": "What gain and impedance bandwidth does the Ku-band rectangular patch antenna array achieve?",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "E22",
+      "query": "RO3003 dielectric constant 3 loss tangent 0.0009 thickness 1.574 mm",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E23",
+      "query": "Cross-Entropy Monte Carlo optimization of patch antenna geometry for a target S11 curve",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E24",
+      "query": "How does uniform cross-entropy optimization compare with Gaussian processes, forest optimization and random search for antenna design?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E25",
+      "query": "automating a double-band S11 resonance microstrip antenna without deep neural networks",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E26",
+      "query": "32-element planar array for the n257 band point-to-point mmWave links",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E27",
+      "query": "over-the-air measurements with an R&S ATS800B compact antenna test range",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E28",
+      "query": "series-fed 8-element linear array with a fan-shaped pattern for point-to-multipoint connectivity",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E29",
+      "query": "What radiation efficiency and impedance bandwidth do the 28 GHz FR-2 arrays achieve?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E30",
+      "query": "improving the slot filling factor of traction electrical machines with Bayesian optimization",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E31",
+      "query": "maximum entropy sampling algorithm MESA seeding physics-informed Bayesian optimization PIBO",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E32",
+      "query": "winding design for magnet-free brushless electrically excited synchronous machines",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E33",
+      "query": "Bayesian neural network with reconfigurable heads for RF passive component modeling",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E34",
+      "query": "How much EM simulation time does uncertainty-aware sampling save when modeling RF passive components?",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E35",
+      "query": "adaptive sampling across geometric parameters and the frequency domain using uncertainty guidance",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E36",
+      "query": "physics-informed neural network for parametric 2-D magnetostatics of an EI-core electromagnet",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.826,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.705
+    },
+    {
+      "id": "E37",
+      "query": "minimizing the coupling field coenergy functional with stochastic gradient descent",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E38",
+      "query": "magnetic vector potential represented by a deep network and compared with finite element analysis",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E39",
+      "query": "using the violation of physical laws as a proxy for predictive uncertainty in inverse design",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E40",
+      "query": "frequency-selective surface design in the 20-30 GHz range with multi-fidelity uncertainty-aware optimization",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E41",
+      "query": "deep ensembles versus physics-informed uncertainty for surrogate extrapolation errors",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.826,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.705
+    },
+    {
+      "id": "E42",
+      "query": "Gaussian process kernel with image Euclidean distance IMED for 3D printed antennas",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E43",
+      "query": "incorporating pixel and voxel neighbour relations into Gaussian process surrogate models",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E44",
+      "query": "2D and 3D monopole regression with ARD-IMED versus convolutional kernels",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E45",
+      "query": "machine learning surrogates that reduce full-wave EM simulations in antenna design",
+      "lang": "en",
+      "precision": 0.8,
+      "recall": 0.444,
+      "mrr": 1.0,
+      "ndcg_10": 0.633,
+      "recall_10": 0.444,
+      "recall_20": 0.444,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.775
+    },
+    {
+      "id": "E46",
+      "query": "reinforcement learning applied to antenna problems",
+      "lang": "en",
+      "precision": 0.6,
+      "recall": 0.6,
+      "mrr": 1.0,
+      "ndcg_10": 0.766,
+      "recall_10": 0.6,
+      "recall_20": 0.6,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.793
+    },
+    {
+      "id": "E47",
+      "query": "uncertainty quantification in surrogate-assisted electromagnetic design",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 0.333,
+      "mrr": 1.0,
+      "ndcg_10": 0.553,
+      "recall_10": 0.333,
+      "recall_20": 0.333,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.657
+    },
+    {
+      "id": "E48",
+      "query": "pixel-based free-form antenna topology design",
+      "lang": "en",
+      "precision": 0.6,
+      "recall": 0.6,
+      "mrr": 1.0,
+      "ndcg_10": 0.878,
+      "recall_10": 0.6,
+      "recall_20": 0.6,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.816
+    },
+    {
+      "id": "E49",
+      "query": "millimetre-wave antenna arrays for 5G",
+      "lang": "en",
+      "precision": 0.8,
+      "recall": 0.8,
+      "mrr": 1.0,
+      "ndcg_10": 0.932,
+      "recall_10": 0.8,
+      "recall_20": 0.8,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.906
+    },
+    {
+      "id": "E50",
+      "query": "physics-informed machine learning for electromagnetic problems",
+      "lang": "en",
+      "precision": 0.8,
+      "recall": 0.333,
+      "mrr": 1.0,
+      "ndcg_10": 0.483,
+      "recall_10": 0.333,
+      "recall_20": 0.333,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.723
+    },
+    {
+      "id": "E51",
+      "query": "bidirectional adversarial autoencoder predicting plasmonic metasurface topology from photoluminescence spectra",
+      "lang": "en",
+      "precision": 0.6,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.92
+    },
+    {
+      "id": "E52",
+      "query": "Wi-GATr geometric algebra transformer as a differentiable wireless ray tracing surrogate",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E53",
+      "query": "spatio-temporal electromagnetic kernel learning for channel prediction under high user mobility",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E54",
+      "query": "boundary-shape optimization of three-dimensional microwave cavity resonators for electromagnetic helicity",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E55",
+      "query": "differentiable inverse rendering of radio frequency propagation for digital twins",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.826,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.705
+    },
+    {
+      "id": "E56",
+      "query": "closed-loop beam management in integrated sensing and communication with an electromagnetic digital twin",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.826,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.705
+    },
+    {
+      "id": "E57",
+      "query": "REMAL residual equilibrium manifold active learning for multidisciplinary design analysis",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E58",
+      "query": "WGNO waveguide neural operator for EUV lithography mask diffraction",
+      "lang": "en",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "E59",
+      "query": "gprMax GPU antenna simulation framework compared with commercial EM software",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "E60",
+      "query": "FDTD-3D genetic algorithm optimizing an amorphous inset-fed microstrip patch",
+      "lang": "en",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H01m",
+      "query": "pixelated mmWave patch antenna ke inverse design mein XGBoost classifier ka kya role hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H01n",
+      "query": "पिक्सेल आधारित मिलीमीटर-तरंग पैच एंटीना के व्युत्क्रम डिज़ाइन में XGBoost वर्गीकारक का क्या उपयोग है?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H01r",
+      "query": "pixel aadharit millimeter-tarang patch antenna ke vyutkram design mein XGBoost vargikarak ka kya upyog hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H02m",
+      "query": "base station antenna tilt ko safe reinforcement learning se kaise optimize karte hain?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.939,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.868
+    },
+    {
+      "id": "H02n",
+      "query": "बेस स्टेशन एंटीना के झुकाव को सुरक्षित रीइन्फोर्समेंट लर्निंग से कैसे अनुकूलित किया जाता है?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.704,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.681
+    },
+    {
+      "id": "H02r",
+      "query": "base station antenna ke jhukaav ko surakshit reinforcement learning se kaise anukoolit kiya jata hai?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.885,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.857
+    },
+    {
+      "id": "H03m",
+      "query": "18 GHz six-patch microstrip array ka gain kitna hai?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "H03n",
+      "query": "18 गीगाहर्ट्ज़ पर छह पैच वाले माइक्रोस्ट्रिप एंटीना ऐरे का लाभ कितना है?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.964,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.873
+    },
+    {
+      "id": "H03r",
+      "query": "18 gigahertz par chhah patch wale microstrip antenna array ka laabh kitna hai?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "H04m",
+      "query": "28 GHz ke 32-element planar array ka OTA measurement kaise kiya gaya?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H04n",
+      "query": "28 गीगाहर्ट्ज़ बैंड के लिए 32 तत्वों वाले समतलीय एंटीना ऐरे का मापन कैसे किया गया?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H04r",
+      "query": "28 gigahertz band ke liye 32 tatvon wale samtaliya antenna array ka maapan kaise kiya gaya?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H05m",
+      "query": "TE aur TM polarization ke liye metasurface unit cell ko DNN se inverse design kaise karte hain?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "H05n",
+      "query": "TE और TM ध्रुवित तरंगों के लिए मेटासतह की इकाई कोशिका डीप न्यूरल नेटवर्क से कैसे बनाई जाती है?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.964,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.873
+    },
+    {
+      "id": "H05r",
+      "query": "TE aur TM dhruvit tarangon ke liye metasatah ki ikai koshika deep neural network se kaise banai jati hai?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 0.933,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.867
+    },
+    {
+      "id": "H06m",
+      "query": "magnetostatic problems solve karne ke liye physics-informed neural network kaise use hota hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 1.0,
+      "ndcg_10": 0.826,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.705
+    },
+    {
+      "id": "H06n",
+      "query": "चुंबकस्थैतिक समस्याओं को हल करने के लिए भौतिकी-सूचित न्यूरल नेटवर्क का उपयोग कैसे होता है?",
+      "lang": "hi",
+      "precision": 0.4,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.88
+    },
+    {
+      "id": "H06r",
+      "query": "chumbaksthaitik samasyaon ko hal karne ke liye bhautiki-soochit neural network ka upyog kaise hota hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 0.5,
+      "mrr": 0.25,
+      "ndcg_10": 0.356,
+      "recall_10": 0.5,
+      "recall_20": 0.5,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.461
+    },
+    {
+      "id": "H07m",
+      "query": "RF passive components ki modelling mein Bayesian online learning se EM simulation time kitna bachta hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H07n",
+      "query": "RF निष्क्रिय घटकों के मॉडलिंग में बायेसियन ऑनलाइन लर्निंग से सिमुलेशन समय कितना बचता है?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H07r",
+      "query": "RF nishkriya ghatakon ke modelling mein Bayesian online learning se simulation samay kitna bachta hai?",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H08m",
+      "query": "electrical machines mein slot filling factor improve karne ke liye Bayesian optimization",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H08n",
+      "query": "विद्युत मशीनों में स्लॉट भराव कारक बढ़ाने के लिए बायेसियन अनुकूलन का उपयोग",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    },
+    {
+      "id": "H08r",
+      "query": "vidyut machinon mein slot bharaav kaarak badhane ke liye Bayesian anukoolan ka upyog",
+      "lang": "hi",
+      "precision": 0.2,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "ndcg_10": 1.0,
+      "recall_10": 1.0,
+      "recall_20": 1.0,
+      "grounding": {
+        "score": 1.0,
+        "grounded": 0,
+        "total": 0,
+        "skipped": 0,
+        "details": []
+      },
+      "overall": 0.84
+    }
+  ],
+  "timestamp": "2026-11-06T19:25:44"
+}

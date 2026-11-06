@@ -37,7 +37,8 @@ if TORCH_NUM_THREADS > 0:
 # ============================================================================
 PROJECT_ROOT = Path(__file__).parent
 PAPERS_DIR = PROJECT_ROOT / "papers"
-CHROMA_DB_DIR = PROJECT_ROOT / "chroma_db"
+# Overridable so the eval gate can build its fixture index without touching real data.
+CHROMA_DB_DIR = Path(os.getenv("CHROMA_DB_DIR", PROJECT_ROOT / "chroma_db"))
 MODELS_CACHE_DIR = PROJECT_ROOT / "models"
 FIGURES_DIR = PROJECT_ROOT / "figures"  # Phase 3: saved figure/table crops
 SESSIONS_DB_PATH = Path(os.getenv("SESSIONS_DB_PATH", PROJECT_ROOT / "sessions.db"))
@@ -181,7 +182,9 @@ FIGURE_CAPTION_WORKERS = int(os.getenv("FIGURE_CAPTION_WORKERS", "4"))
 # against the live document count on load and ignored when it disagrees, so a
 # stale file costs a rebuild rather than wrong results.
 BM25_PERSIST = os.getenv("BM25_PERSIST", "true").lower() == "true"
-BM25_CACHE_DIR = Path(os.getenv("BM25_CACHE_DIR", PROJECT_ROOT / "chroma_db"))
+# Defaults to CHROMA_DB_DIR, not a literal path: an index redirected elsewhere must
+# not leave its BM25 file overwriting the real collection's (same file name).
+BM25_CACHE_DIR = Path(os.getenv("BM25_CACHE_DIR", CHROMA_DB_DIR))
 
 # Phase 5 — contradiction/consensus detection. When on, the answer generator
 # runs pairwise NLI (the same faithfulness model) over the top retrieved passages

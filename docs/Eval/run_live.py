@@ -149,7 +149,15 @@ def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
         qid, text = q["id"], q["text"]
         print(f"[{qid}] {text[:70]}...", flush=True)
 
-        ctx = rag.retrieve_context(text, top_k=top_k)
+        try:
+            ctx = rag.retrieve_context(text, top_k=top_k)
+        except Exception as e:
+            # A failed retrieval scores as retrieving nothing: aborting the run would
+            # lose every other query's measurement. Marked degraded so gates fail on it.
+            print(f"    RETRIEVAL FAILED: {str(e)[:120]}", flush=True)
+            results.append({"query_id": qid, "retrieved_papers": [], "answer_claims": [],
+                            "degraded": "retrieval_error", "error": str(e)[:300]})
+            continue
         metas = ctx.get("metadatas", [])
         entry = {
             "query_id": qid,
@@ -169,6 +177,9 @@ def run(judgments_path: Path, out_path: Path, top_k: int, with_answers: bool,
                 results.append(entry)
                 continue
             answer = answer_data.get("answer", "")
+            # Kept whole: key facts often sit in short sentences or table rows that
+            # _split_claims drops, so a claims-only file under-counts them (keyfacts.py).
+            entry["answer"] = answer
             # The answer's OWN context, not the ctx retrieved above: strategy B
             # retrieves on the translated query, so the two differ and resolving
             # markers against the wrong one mislabels every claim.
@@ -234,6 +245,10 @@ def main() -> int:
                     help="also generate answers (needs an LLM key; costs tokens)")
     ap.add_argument("--skip-corpus-check", action="store_true",
                     help="run even when the judged papers are not indexed (scores will be 0)")
+    ap.add_argument("--plant", choices=["embedder_down"], default=None,
+                    help="inject a fault to prove the gate fails (live_gate.py --selftest): "
+                         "embedder_down makes the query embedder raise, so retrieval takes "
+                         "the real sparse-only degraded path")
     ap.add_argument("--model", default=None,
                     help="LLM for --with-answers, e.g. 'nvidia:meta/llama-3.3-70b-instruct'. "
                          "Default: the configured NVIDIA NIM model (LLM_NVIDIA_MODEL).")
@@ -277,6 +292,12 @@ def main() -> int:
     if args.with_answers:
         llm_model = _use_eval_model(args.model)
         print(f"Answer model: {llm_model} (no failover)")
+    if args.plant == "embedder_down":
+        import embeddings
+
+        def _down(*_a, **_k):
+            raise RuntimeError("planted fault: embedder down")
+        embeddings.embed_query = _down   # rag looks it up at call time
     run(Path(args.judgments), Path(args.out), args.top_k, args.with_answers, args.strategy,
         llm_model)
     return 0

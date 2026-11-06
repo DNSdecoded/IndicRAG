@@ -1,188 +1,111 @@
-# Evaluation Report — IndicRAG
+# Evaluation
 
-This document has two parts. The first section contains **automatically computed retrieval and grounding metrics** produced by `evaluate.py`. The second section contains **manual qualitative assessments** of answer quality for each query.
+IndicRAG's quality gate scores the **live pipeline** on a corpus it ingests
+itself, so it can never again grade a corpus that is not indexed. Through v2.6
+the CI gate scored `answers_and_citations.json`, a hand-pasted snapshot about
+8 papers that were absent from the live index; no retrieval change could move
+it. The measured v2.6 numbers are in
+[`Eval/BASELINE_v2.6.md`](Eval/BASELINE_v2.6.md). The manual qualitative report
+this page used to hold is in git history (before v3 Phase 0).
 
-To reproduce or update the computed metrics:
+## Pieces
+
+| Path | What it is |
+| --- | --- |
+| `Eval/fixtures/manifest.json` | 41 CC BY 4.0 / CC0 arXiv papers, pinned by exact version and sha256 |
+| `Eval/fixtures/fetch.py` | Downloads missing fixtures; `--verify` checks every hash (no network) |
+| `Eval/suites/fixture_v1.json` | Judged queries over the fixtures (schema below) |
+| `Eval/live_gate.py` | Builds an isolated index, runs retrieval, applies the gate |
+| `Eval/run_live.py` | Runs a suite through `rag.retrieve_context` (and optionally answers) |
+| `Eval/evaluate.py` | Scores a run: P/R@k, MRR, nDCG@10, recall@10/20, grounding; `--baseline` gate |
+| `Eval/stats.py` | Seeded bootstrap CIs and the paired regression / non-inferiority tests |
+| `Eval/keyfacts.py` | Key-fact scorer: an answer passes when it states every `key_facts` entry |
+| `Eval/baseline_study.py` | Stage latency, rerank gain vs BM25 margin, `query_log` route share |
+| `Eval/baselines/fixture_v1.json` | The committed v2.6 metrics the gate compares against |
+
+## Running it
 
 ```bash
-cd docs/Eval
-python evaluate.py --k 4 --output eval_report.json
+python docs/Eval/fixtures/fetch.py                 # once; verifies sha256 of every PDF
+python docs/Eval/live_gate.py                      # the CI gate: exit 1 on a regression
+python docs/Eval/live_gate.py --selftest           # proves a clean run passes and a planted one fails
+python docs/Eval/live_gate.py --write-baseline     # re-measure the baseline (commit the JSON)
+pytest -q docs/Eval                                # harness self-tests
 ```
 
-Edit `docs/Eval/relevance_judgments.json` to update ground-truth relevance labels. Edit `docs/Eval/answers_and_citations.json` to add new query results.
+The first `live_gate.py` run ingests the fixtures (cold build, tens of minutes
+on a 4-core CPU); later runs reuse the index. The index lives in
+`docs/Eval/.fixture_index/<fixture checksum>_<embed model>_c<CHUNKER_VERSION>/`
+and points `CHROMA_DB_DIR`, `BM25_CACHE_DIR` and `SESSIONS_DB_PATH` there, so it
+never touches `chroma_db/` or `sessions.db`. Ingest runs with arXiv enrichment,
+multimodal captions, HyDE and ColBERT off: nothing after `fetch.py` touches the
+network, and titles stay deterministic.
 
----
+## The gate
 
-## Computed Metrics (automated)
+Per query, `evaluate.py` records recall@10 and nDCG@10 (paper level; a paper's
+chunks are de-duplicated so one paper cannot fill the top k). `--baseline`
+compares them to the committed run with a **paired bootstrap** over queries
+(1,000 resamples, fixed seed): a metric regresses when the 95% CI upper bound of
+mean(new − baseline) is below 0. One noisy query cannot fail the gate; a
+pipeline-wide drop always does. A missing baseline fails rather than skips.
 
-_Full per-query breakdown: [eval_report.json](Eval/eval_report.json)_
+`--selftest` runs the suite twice: as is, and with a planted fault
+(`run_live.py --plant embedder_down`: the query embedder raises, so retrieval
+takes the real sparse-only degraded path). The metric gate must pass the first
+and fail the second on its own, otherwise the gate itself is broken. Separately,
+a normal gate run fails whenever any result comes back `degraded`.
 
-| Metric | Score |
-|---|---|
-| Precision@4 | 1.000 |
-| Recall@4 | 0.854 |
-| MRR | 1.000 |
-| Citation Grounding Accuracy | 0.938 |
-| **Retrieval Score** | **0.951** |
-| **Generation Score** | **0.938** |
-| **Overall** | **0.944** |
+Two lessons from building it:
 
-**Methodology:** Precision, Recall, and MRR are computed from ranked retrieval lists against manually labeled relevance judgments. Citation Grounding Accuracy uses token Jaccard similarity (threshold ≥ 0.15) between each answer claim and its cited chunk — claims where the system explicitly stated no source exists are excluded from the denominator (correct epistemic behavior). See `evaluate.py` for full details and limitations.
+- **A saturated suite detects nothing.** On the first 14-paper corpus, 70 of 74
+  queries scored perfectly, and the CI upper bound sat at exactly 0. The corpus
+  grew to 41 papers with near-neighbour distractors and terminology queries.
+- **"Flip to dense-only" is not a regression on this corpus.** The plan's
+  example perturbation scored recall@10 +0.012 (CI −0.016 to +0.047) against
+  hybrid. The gate was right to pass it: the BM25 leg shows no measured
+  paper-level gain here (see BASELINE_v2.6.md). A planted regression must be
+  a real one.
 
----
+In CI the `live-gate` job caches `models/`, the fixture PDFs and the index (its
+cache key covers the manifest and the chunking and embedding code). The old
+snapshot `Eval gate` step stays until the live gate has two green weeks.
 
-## Manual Qualitative Assessment
+## Suite schema
 
-This document reports the results of a manual evaluation of the IndicRAG system across four benchmark queries. Each query was designed to stress a different system capability. Scores were assigned by the developer based on inspection of retrieved chunks, generated answers, and citation accuracy.
+`relevance_judgments.json`'s schema, plus four fields:
 
-> **Caveat:** These scores reflect human assessment on a small, controlled query set — not a statistically sampled benchmark. They should be interpreted as a qualitative signal of system behavior, not a formal research evaluation.
+```json
+{"id": "H01r", "lang": "hi", "type": "transliterated",
+ "text": "pixel aadharit millimeter-tarang patch antenna ke ...",
+ "relevant_papers": ["2608.23469v1"], "relevance_grades": {"2608.23469v1": 3},
+ "key_facts": [], "parallel_of": "E01", "reviewed": false}
+```
 
----
+- `relevance_grades`: 3 = answered by this paper, 2 = substantially relevant, 1 = related. Every query has a grade-3 paper.
+- `type`: `native`, `terminology`, `broad` (several relevant papers), `cross_lingual` (Indic script, English corpus), `transliterated` (Latin script), `code_mixed`.
+- `parallel_of`: the English query this one restates, so per-form recall can be compared on the same questions.
+- `reviewed`: `false` until a reviewer signs off. An Indic language gates a release only with ≥ 40 queries reviewed by a native speaker (plan §16.3); otherwise it is published as "unmeasured".
 
-## Evaluation Methodology
+`docs/Eval/test_suites.py` enforces this schema and that every fixture paper is targeted by some query.
 
-### Scoring Dimensions
+## Adding a language
 
-Each query was scored on nine dimensions (0–1 scale):
+1. Write ≥ 40 queries in the §9 mix (10 native, 10 cross-lingual, 8 code-mixed, 6 transliterated, 6 terminology), each with `parallel_of` where it restates an English query.
+2. Have a native speaker review the wording and relevance; set `reviewed: true` only after that.
+3. Run `live_gate.py --write-baseline`, then commit the suite and the new baseline together.
 
-| Metric | What It Measures |
-|---|---|
-| Retrieval Precision | Fraction of retrieved chunks that were materially relevant |
-| Retrieval Recall | Fraction of necessary sources that were actually retrieved |
-| Faithfulness | Fraction of claims in the answer that were grounded in citations |
-| Attribution Accuracy | Correct mapping of methods/results to their source papers |
-| Technical Depth | Quality of mechanism-level explanation |
-| Convergence Reasoning | Accuracy of optimization/update-rule analysis |
-| Cross-Document Discipline | Absence of forced or unsupported cross-paper synthesis |
-| Hallucination Rate | Rate of unsupported or fabricated claims (lower is better) |
-| Formatting Compliance | Structural adherence to output template |
+## Key facts
 
-### Query Categories
+`keyfacts.py` checks each `key_facts` string against the answer after NFKC,
+unified dashes, removed markdown emphasis, casefolding and **removed whitespace**
+(answers write `8.93 %` with a narrow no-break space). It needs the full answer:
+`run_live.py --with-answers` now stores `answer`. Older files hold only claim
+sentences longer than 20 characters, which lose short sentences and table rows
+and under-count; see BASELINE_v2.6.md for the effect.
 
-| Test | Category | Purpose |
-|---|---|---|
-| A | Single-source mechanistic | Focused retrieval + gradient reasoning discipline |
-| B | Cross-method comparison | Structured synthesis + convergence contrast |
-| C | Convergence / sample efficiency | Mechanistic rigor under theory-heavy query |
-| D | Insufficient-context constraint | Epistemic honesty + non-extrapolation |
+## Generation runs
 
----
-
-## Test A — Single-Source Mechanistic
-
-**Query:** *What is the role of smooth thresholding in tandem neural network antenna design?*
-
-**Summary:** The system correctly identified this as a single-source question and retrieved exclusively from the tandem neural network paper. It explained the ST function's role in enabling discrete-variable handling within a pixel-based geometry, noted its integration with regularization terms in the loss function, and cited specific performance claims (50% area reduction, 18% substrate height reduction). It correctly acknowledged that the gradient-flow behavior of the ST function was not specified in the retrieved context rather than speculating.
-
-**Where it fell short:** The answer acknowledged the absence of gradient-propagation details but did not explain *why* smoothness is necessary for backpropagation — a mechanistic gap that a stronger answer would address explicitly.
-
-| Metric | Score |
-|---|---|
-| Retrieval Precision | 0.95 |
-| Retrieval Recall | 0.90 |
-| Faithfulness | 0.97 |
-| Attribution Accuracy | 0.97 |
-| Technical Depth | 0.85 |
-| Convergence Reasoning | 0.82 |
-| Cross-Document Discipline | 0.98 |
-| Hallucination Rate | < 2% |
-| Formatting Compliance | 0.98 |
-| **Composite** | **0.93** |
-
----
-
-## Test B — Cross-Method Comparison
-
-**Query:** *Compare Bayesian optimization and PPO-based RL methods for antenna optimization.*
-
-**Summary:** The system retrieved from four relevant sources covering BO-GP, BO-STP, PPO for pixel antennas, and PPO for wireless coverage. It correctly contrasted the two paradigms: BO using surrogate models (Gaussian and Student's T processes) for efficient global search in low-iteration regimes, and PPO using actor-critic networks for high-dimensional discrete topology problems. Specific iteration counts (3, 8, 41) and objective values were cited correctly. The comparison table was appropriate given the comparative nature of the query.
-
-**Where it fell short:** The answer did not explicitly contrast the update mechanisms — posterior Bayesian update vs. clipped policy gradient step — which would have elevated the mechanistic depth. Exploration-exploitation differences were mentioned but not analyzed.
-
-| Metric | Score |
-|---|---|
-| Retrieval Precision | 0.90 |
-| Retrieval Recall | 0.92 |
-| Faithfulness | 0.97 |
-| Attribution Accuracy | 0.97 |
-| Technical Depth | 0.88 |
-| Convergence Reasoning | 0.85 |
-| Cross-Document Discipline | 0.95 |
-| Hallucination Rate | < 2% |
-| Formatting Compliance | 0.98 |
-| **Composite** | **0.94** |
-
----
-
-## Test C — Convergence and Sample Efficiency
-
-**Query:** *How do surrogate-model-based methods differ from policy-based RL in sample efficiency and convergence behavior?*
-
-**Summary:** The retrieved context contained surrogate-model papers (GPR, DTR, RBFN with evolutionary algorithms) but no policy-based RL material. The system explicitly stated this absence rather than fabricating a comparison. It then provided a detailed analysis of sample efficiency *within* the surrogate domain — showing how GPR outperforms at small sample sizes (S=600) while DTR takes over at larger sizes (S≥1000). The answer correctly labeled this as a surrogate-only analysis and declined to infer RL behavior.
-
-This is the strongest result in the evaluation set. Refusing to hallucinate a comparison when context is absent is the correct behavior for a grounded scientific assistant.
-
-| Metric | Score |
-|---|---|
-| Retrieval Precision | 0.96 |
-| Retrieval Recall | 0.93 |
-| Faithfulness | 0.99 |
-| Attribution Accuracy | 0.98 |
-| Technical Depth | 0.90 |
-| Convergence Reasoning | 0.88 |
-| Cross-Document Discipline | 0.98 |
-| Hallucination Rate | ~0% |
-| Formatting Compliance | 0.99 |
-| **Composite** | **0.96** |
-
----
-
-## Test D — Strict Grounding (Hyperparameter Precision)
-
-**Query:** *What hyperparameters control PPO training stability in the cited antenna design paper?*
-
-This test was designed to probe whether the system would extrapolate PPO hyperparameter knowledge from general ML literature when the specific paper did not provide it. Results from this test are incorporated into the aggregate scores below.
-
----
-
-## Aggregate Results
-
-| Metric | Score (avg across tests) |
-|---|---|
-| Retrieval Precision | 0.93 |
-| Retrieval Recall | 0.91 |
-| Faithfulness | 0.98 |
-| Attribution Accuracy | 0.97 |
-| Technical Depth | 0.88 |
-| Convergence / Mechanistic Reasoning | 0.86 |
-| Cross-Document Discipline | 0.95 |
-| Hallucination Rate | < 2% |
-| Formatting Compliance | 0.98 |
-| **Final Composite** | **0.95** |
-
----
-
-## Key Observations
-
-**Strengths**
-
-The system maintains strict citation discipline across all test types. No fabricated equations, invented hyperparameters, or unsupported performance claims were observed. The insufficient-context case (Test C) demonstrated that the system correctly refuses to synthesize comparisons when relevant material is absent — a critical property for scientific use.
-
-**Remaining Gaps**
-
-Mechanistic depth is the lowest-scoring dimension (0.86–0.88). When retrieved context is thin on gradient-flow or update-rule specifics, the system acknowledges the gap but does not always explain *why* the gap limits the analysis. This is a prompt-engineering target for future iterations, not a retrieval failure.
-
-**What changed between early and current versions**
-
-An earlier version of the system produced unsolicited cross-paper comparison tables, included irrelevant medical disclaimers in engineering queries, and occasionally synthesized across papers without sufficient grounding. The current prompt revision eliminated these behaviors across all four tests.
-
----
-
-## Limitations of This Evaluation
-
-- Four queries is a small sample; results may not generalize across all domain areas or query types.
-- Scores were assigned by the developer, not an independent evaluator.
-- There is no automated metric (e.g., RAGAS, TruLens) comparison; this is a purely qualitative assessment.
-- The query set was designed to test known system behaviors rather than to discover unknown failure modes.
-
-A more rigorous evaluation would involve an independent annotator, a larger query set drawn from held-out documents, and automated faithfulness scoring against a ground-truth answer set.
+Answer metrics cost tokens and vary run to run, so they run nightly, not per PR:
+`run_live.py --with-answers` pins one model with failover disabled so every
+answer comes from it.
