@@ -528,13 +528,17 @@ def get_collection_stats(collection: chromadb.Collection = None) -> Dict[str, An
     
     return stats
 
-def _timeout_kw(timeout: float) -> dict:
-    # _chroma_call's own default is passed implicitly, as every caller did before
-    # this seam: the call shape (and anything that wraps _chroma_call) stays the same.
-    return {} if timeout == 5.0 else {"timeout": timeout}
+# "No timeout argument given": use _chroma_call's own default, passed implicitly as
+# every caller did before this seam, so the call shape (and anything wrapping
+# _chroma_call) stays the same. A sentinel, not a float compared with ==.
+DEFAULT_TIMEOUT: Any = object()
 
 
-def count(collection: chromadb.Collection = None, *, timeout: Optional[float] = 5.0) -> int:
+def _timeout_kw(timeout) -> dict:
+    return {} if timeout is DEFAULT_TIMEOUT else {"timeout": timeout}
+
+
+def count(collection: chromadb.Collection = None, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> int:
     """Number of chunks in the collection. timeout=None: a direct call (see get_chunks)."""
     if collection is None:
         collection = get_or_create_collection()
@@ -545,7 +549,7 @@ def count(collection: chromadb.Collection = None, *, timeout: Optional[float] = 
 
 def get_chunks(collection: chromadb.Collection = None, *, ids: List[str] = None,
                where: Dict[str, Any] = None, include=("documents", "metadatas"),
-               limit: int = None, timeout: Optional[float] = 5.0) -> Dict[str, Any]:
+               limit: int = None, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Dict[str, Any]:
     """Read chunks by id and/or metadata filter: the store's one read primitive
     besides search(). Returns {"ids", "documents"?, "metadatas"?} as Chroma does.
 
